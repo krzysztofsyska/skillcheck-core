@@ -27,11 +27,11 @@ export default async function CheckoutPage({params,searchParams}: {params: Promi
     <Link href={backToRecruitment ? `/dashboard/${companyId}/recruitments/${recruitmentId}` : `/dashboard/${companyId}`}>
       ← {backToRecruitment ? 'Wróć do rekrutacji' : 'Panel firmy'}
     </Link>
-    <h1>Pakiet PRESELEKCJA</h1>
-    {!enabled && returning ? <Checkout companyId={companyId} recruitmentId={backToRecruitment ? recruitmentId : undefined} statusOnly provider='stripe'/> : !enabled ? <p className="notice" role="status">Uruchomienie pakietów FREE i PRESELEKCJA jest przygotowywane. Zakup nie jest jeszcze dostępny.</p> : <>
+    <h1>{stripeConfig ? 'Zakup pakietu' : 'Pakiet PRESELEKCJA'}</h1>
+    {!enabled && returning ? <Checkout companyId={companyId} recruitmentId={backToRecruitment ? recruitmentId : undefined} statusOnly/> : !enabled ? <p className="notice" role="status">Uruchomienie pakietów FREE i PRESELEKCJA jest przygotowywane. Zakup nie jest jeszcze dostępny.</p> : <>
       <p>Jednorazowy zakup analiz CV. Wyniki wymagają oceny rekrutera.</p>
       {company.owner_id===user.id ? <Checkout companyId={companyId} recruitmentId={backToRecruitment ? recruitmentId : undefined}
-          provider='stripe' testMode={stripeConfig?.mode === 'test'}/> :
+          testMode={stripeConfig?.mode === 'test'}/> :
         <p role="status">Zamówienie może złożyć właściciel firmy.</p>}
     </>}
     {enabled && process.env.SC19_CATALOG_ORDERS_ENABLED==='true' && <CatalogOrders client={client} companyId={companyId}

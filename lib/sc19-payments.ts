@@ -4,12 +4,15 @@
  * Provider verification MUST authenticate the raw notification and retrieve payment truth.
  */
 import { randomUUID } from 'node:crypto';
-import { MAX_PACKAGES, STRIPE_CATALOG, isStripePackageCode } from './stripe-catalog.ts';
+import { MAX_PACKAGES, STRIPE_CATALOG, checkCvCount, isStripePackageCode, type StripePackageCode } from './stripe-catalog.ts';
 
 export type PaymentMode = 'test' | 'live';
 export type PaymentScope = Readonly<{ provider: string; account: string; mode: PaymentMode }>;
 export type PaymentOffer = Readonly<{
-  id: string; revision: string; plan: 'PRESELEKCJA'; active: boolean;
+  /** The package the offer sells. Database offers (private.sc19_payment_offers) are
+   * PRESELEKCJA only; WERYFIKACJA and ASSESSMENT_CENTER offers exist only in the
+   * Stripe runtime (lib/sc19-stripe-packages.ts). */
+  id: string; revision: string; plan: StripePackageCode; active: boolean;
   approved: boolean; amountMinor: number; currency: 'PLN'; credits: number;
   termsRevision: string; validUntilMs: number;
 }>;
@@ -19,7 +22,12 @@ export type PaymentOrder = Readonly<{
   amountMinor: number; currency: 'PLN'; credits: number; scope: PaymentScope;
   status: 'awaiting_payment' | 'paid'; sessionId: string | null;
   checkoutUrl: string | null; paymentId: string | null; checkoutDeadlineMs: number;
+  /** R7: set only for a package other than PRESELEKCJA (absent = PRESELEKCJA, the
+   * pre-R7 shape every existing order row has). */
+  packageCode?: Exclude<StripePackageCode, 'PRESELEKCJA'>;
 }>;
+/** The package an order holds; orders without the field are PRESELEKCJA. */
+export const orderPackage = (order: Pick<PaymentOrder, 'packageCode'>): StripePackageCode => order.packageCode ?? 'PRESELEKCJA';
 export type HostedCheckout = Readonly<{
   orderId: string; sessionId: string; url: string; scope: PaymentScope;
   /** Canonical provider-confirmed gross charge, inclusive of any tax/discount. */
@@ -36,7 +44,9 @@ export interface PaymentTransaction {
   /** Lock the offer and enforce immutable economic revisions in persistent storage. */
   offer(id: string): Promise<PaymentOffer | null>;
   orderByRequest(companyId: string, requestId: string): Promise<PaymentOrder | null>;
-  /** At most one unresolved purchase per company, across offers and scopes. */
+  /** At most one unresolved purchase per company, across offers and scopes. An
+   * unpaid order of a retired provider (Przelewy24, whose settlement was removed)
+   * can never be paid and is not returned; it stays stored and never grants. */
   unresolvedOrder(companyId: string): Promise<PaymentOrder | null>;
   /** Immutable request alias, committed atomically with selecting/creating the order. */
   bindRequest(companyId: string, requestId: string, orderId: string): Promise<void>;
@@ -101,10 +111,17 @@ export type PaymentDependencies = Readonly<{
    * delivery that actually applied it (never for a duplicate). It must never undo
    * the grant: a failure is logged by a fixed code and the grant stays. */
   onPaid?(order: PaymentOrder): Promise<void>;
+  /** R5 W2b: accept an optional `cvCount` (the CV pool slider) in a checkout
+   * request and validate it on the server. Off (the default) keeps the pre-W2b
+   * request shape: a `cvCount` field is refused like any other unknown field. */
+  cvPoolEnabled?: boolean;
 }>;
 export class Sc19PaymentError extends Error {
   readonly code: string;
-  constructor(code: string) { super(code); this.code = code; }
+  /** Optional Polish text for the buyer. Only fixed wording and numbers from the
+   * request or the catalog; never provider, account or personal data. */
+  readonly userMessage: string | null;
+  constructor(code: string, userMessage: string | null = null) { super(code); this.code = code; this.userMessage = userMessage; }
 }
 const deny = (code: string): never => { throw new Sc19PaymentError(code); };
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -127,7 +144,8 @@ function money(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) > 0 && Number(value) <= 100_000_000;
 }
 function offerValid(offer: PaymentOffer | null, id: string, terms: string): offer is PaymentOffer {
-  return !!offer && offer.id === id && offer.plan === 'PRESELEKCJA' && offer.approved === true &&
+  return !!offer && offer.id === id && isStripePackageCode(offer.plan) && STRIPE_CATALOG[offer.plan].available &&
+    offer.approved === true &&
     offer.active === true && offer.currency === 'PLN' && money(offer.amountMinor) &&
     Number.isSafeInteger(offer.credits) && offer.credits >= 1 && offer.credits <= 100_000 &&
     stringId(offer.revision) && offer.termsRevision === terms && stringId(offer.termsRevision) &&
@@ -138,27 +156,44 @@ function offerValid(offer: PaymentOffer | null, id: string, terms: string): offe
  * credits are not the same whole multiple of the offer (a changed price). */
 function packagesOf(offer: PaymentOffer, order: PaymentOrder): number | null {
   const n = order.credits / offer.credits;
-  return Number.isSafeInteger(n) && n >= 1 && n <= MAX_PACKAGES &&
+  return orderPackage(order) === offer.plan &&
+    Number.isSafeInteger(n) && n >= 1 && n <= Math.min(MAX_PACKAGES, STRIPE_CATALOG[offer.plan].maxPackages) &&
     order.credits === offer.credits * n && order.amountMinor === offer.amountMinor * n ? n : null;
 }
 /** Optional R7 purchase fields. `packages` = whole packages (default 1, the
- * pre-R7 behaviour); `packageCode` must name the offer's package. A catalog
- * package that is not on sale yet („wkrótce”) is refused with its own code. */
-function purchaseShape(req: Record<string, unknown>): { packages: number | null } {
+ * pre-R7 behaviour); `packageCode` must name the offer's package (checked against
+ * the offer below). A catalog package that is not on sale („wkrótce”) is refused
+ * with its own code; more packages than the package allows is invalid. */
+function purchaseShape(req: Record<string, unknown>, cvPoolEnabled: boolean): { packages: number | null; packageCode: StripePackageCode | null } {
+  let packageCode: StripePackageCode | null = null;
   if ('packageCode' in req) {
     if (!isStripePackageCode(req.packageCode)) return deny('SC19_PAYMENT_INVALID');
     if (!STRIPE_CATALOG[req.packageCode].available) return deny('SC19_PAYMENT_PACKAGE_UNAVAILABLE');
-    if (req.packageCode !== 'PRESELEKCJA') return deny('SC19_PAYMENT_INVALID');
+    packageCode = req.packageCode;
   }
-  if (!('packages' in req)) return { packages: null };
-  if (!Number.isSafeInteger(req.packages) || Number(req.packages) < 1 || Number(req.packages) > MAX_PACKAGES)
-    return deny('SC19_PAYMENT_INVALID');
-  return { packages: Number(req.packages) };
+  let packages: number | null = null;
+  if ('packages' in req) {
+    const limit = Math.min(MAX_PACKAGES, STRIPE_CATALOG[packageCode ?? 'PRESELEKCJA'].maxPackages);
+    if (!Number.isSafeInteger(req.packages) || Number(req.packages) < 1 || Number(req.packages) > limit)
+      return deny('SC19_PAYMENT_INVALID');
+    packages = Number(req.packages);
+  }
+  // R5 W2b: the CV pool from the slider. Never a price and never the credits: it
+  // must be a value the slider can produce for this package, and the server turns
+  // it into whole packages itself (checkCvCount). With the slider flag off the
+  // field does not exist (pre-W2b behaviour).
+  if ('cvCount' in req) {
+    if (!cvPoolEnabled) return deny('SC19_PAYMENT_INVALID');
+    const checked = checkCvCount(packageCode ?? 'PRESELEKCJA', req.cvCount, packages);
+    if (!checked.ok) throw new Sc19PaymentError('SC19_PAYMENT_CV_COUNT_INVALID', checked.message);
+    packages = checked.packages;
+  }
+  return { packages, packageCode };
 }
 const requiredKeys = ['companyId', 'offerId', 'requestId', 'termsRevision'] as const;
 function checkoutShape(input: unknown): input is Record<string, unknown> {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return false;
-  const optional = ['packages', 'packageCode'].filter(k => Object.prototype.hasOwnProperty.call(input, k));
+  const optional = ['packages', 'packageCode', 'cvCount'].filter(k => Object.prototype.hasOwnProperty.call(input, k));
   return exact(input, [...requiredKeys, ...optional]);
 }
 
@@ -168,6 +203,7 @@ export function createSc19Payments(deps: PaymentDependencies) {
   const origins = Object.freeze([...deps.checkoutOrigins]);
   const active = deps.enabled === true;
   const liveApproved = deps.liveApproved === true;
+  const cvPoolEnabled = deps.cvPoolEnabled === true;
   const checkoutEnabled = active && validScope(scope) && (scope.mode !== 'live' || liveApproved);
   const checkoutGate = () => {
     if (!checkoutEnabled) deny('SC19_PAYMENTS_DISABLED');
@@ -277,10 +313,12 @@ export function createSc19Payments(deps: PaymentDependencies) {
         !stringId(req.offerId) || !stringId(req.termsRevision)) return deny('SC19_PAYMENT_INVALID');
     const companyId = req.companyId, requestId = req.requestId;
     const offerId = req.offerId, terms = req.termsRevision;
-    const { packages } = purchaseShape(req);
+    const { packages, packageCode } = purchaseShape(req, cvPoolEnabled);
     // With explicit packages, an existing order counts as "the same purchase" only
     // when it holds exactly that many whole packages of its own offer revision.
+    // A named package must be the existing order's package.
     const samePackages = async (tx: PaymentTransaction, existing: PaymentOrder) => {
+      if (packageCode !== null && orderPackage(existing) !== packageCode) return false;
       if (packages === null) return true;
       const offer = await tx.offer(existing.offerId);
       return !!offer && offer.revision === existing.offerRevision && packagesOf(offer, existing) === packages;
@@ -313,13 +351,18 @@ export function createSc19Payments(deps: PaymentDependencies) {
       }
       const offer = clone(await tx.offer(offerId));
       if (!offerValid(offer, offerId, terms)) return deny('SC19_PAYMENT_OFFER_UNAVAILABLE');
+      // The named package must be the offer's; an unnamed purchase is PRESELEKCJA only
+      // (the pre-R7 request shape), so another package is never bought by accident.
+      if ((packageCode ?? 'PRESELEKCJA') !== offer.plan) return deny('SC19_PAYMENT_INVALID');
       const units = packages ?? 1;
+      if (units > STRIPE_CATALOG[offer.plan].maxPackages) return deny('SC19_PAYMENT_INVALID');
       const created: PaymentOrder = Object.freeze({
         id: randomUUID(), companyId, buyerId: userId, requestId, offerId,
         offerRevision: offer.revision, termsRevision: offer.termsRevision,
         amountMinor: offer.amountMinor * units, currency: 'PLN', credits: offer.credits * units,
         scope, status: 'awaiting_payment', sessionId: null, checkoutUrl: null, paymentId: null,
         checkoutDeadlineMs: Math.min(offer.validUntilMs, Date.now() + 30 * 60_000),
+        ...(offer.plan === 'PRESELEKCJA' ? {} : { packageCode: offer.plan }),
       });
       await tx.insertOrder(created);
       await tx.bindRequest(companyId, requestId, created.id);

@@ -1,3 +1,5 @@
+> **Nieaktualne (20.11.2026):** Przelewy24 usunięte z SkillCheck (decyzja właściciela 19.11.2026, `docs/DECYZJE.md`; PR #562). Płatności: Stripe (R7 w `docs/ROADMAP.md`). Dokument zostaje jako archiwum.
+
 # SC-019 — obsługa pakietów przez operatora (FREE i PRESELEKCJA)
 
 TASK: SC-019-MVP A2 (#93), krok 3–4 · LEVEL: L3 · SCOPE: FULLSTACK · PRODUCTION_APPROVAL: NO

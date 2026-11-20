@@ -2,7 +2,7 @@ import type { CheckoutOffer } from './sc19-payment-postgres.ts';
 import type { OfferCatalog } from './sc19-offer-catalog.ts';
 import { SC19_VAT_BASIS_POINTS, sc19OfferAmounts } from './sc19-offer-amounts.ts';
 import type { PaymentOrder, createSc19Payments } from './sc19-payments.ts';
-import { Sc19PaymentError } from './sc19-payments.ts';
+import { Sc19PaymentError, orderPackage } from './sc19-payments.ts';
 export type PaymentHttpRuntime = Readonly<{
   service: ReturnType<typeof createSc19Payments>;
   authenticate(): Promise<{userId: string} | null>;
@@ -41,11 +41,14 @@ function errorResponse(error: unknown, webhook=false) {
     SC19_PAYMENTS_DISABLED:503, SC19_PAYMENT_RETRY:503, SC19_PAYMENT_FORBIDDEN:403, SC19_PAYMENT_INVALID:400,
     SC19_PAYMENT_BODY_TOO_LARGE:413, SC19_PAYMENT_ORIGIN:403, SC19_PAYMENT_CONTENT_TYPE:415,
     SC19_PAYMENT_OFFER_UNAVAILABLE:409, SC19_PAYMENT_REQUEST_CONFLICT:409,
-    SC19_PAYMENT_PACKAGE_UNAVAILABLE:409,
+    SC19_PAYMENT_PACKAGE_UNAVAILABLE:409, SC19_PAYMENT_CV_COUNT_INVALID:400,
     SC19_PAYMENT_NOTIFICATION_INVALID:400, SC19_PAYMENT_ORDER_MISSING:404,
   };
   // No successful acknowledgment until verification AND transaction commit.
-  return json({error:code},map[code] ?? (webhook ? 503 : 409));
+  // A buyer-facing Polish message only for a refused CV count (R5 W2b); every
+  // other answer keeps the bare code.
+  const message=!webhook && code==='SC19_PAYMENT_CV_COUNT_INVALID' && error instanceof Sc19PaymentError ? error.userMessage : null;
+  return json(message ? {error:code,message} : {error:code},map[code] ?? (webhook ? 503 : 409));
 }
 /** Serialized offer. `checkoutAvailable` says whether a payment can actually be
  * taken right now; the gross `amountMinor` stays authoritative and net/VAT are
@@ -53,7 +56,7 @@ function errorResponse(error: unknown, webhook=false) {
  * session or merchant data is ever included. */
 const serializeOffer = (o: CheckoutOffer) => {
   const amounts=sc19OfferAmounts(o.amountMinor,SC19_VAT_BASIS_POINTS);
-  return {id:o.id,revision:o.revision,amountMinor:o.amountMinor,currency:o.currency,
+  return {id:o.id,revision:o.revision,packageCode:o.plan,amountMinor:o.amountMinor,currency:o.currency,
     credits:o.credits,termsRevision:o.termsRevision,termsText:o.termsText,validUntilMs:o.validUntilMs,
     netMinor:amounts?.netMinor ?? null,vatMinor:amounts?.vatMinor ?? null,
     vatBasisPoints:amounts?.vatBasisPoints ?? null};
@@ -126,7 +129,7 @@ export function createSc19PaymentHttp(runtime: PaymentHttpRuntime | null, catalo
         }
         // No payment IDs, merchant, buyer, NIP, or hosted-session URL in status reads.
         return json({orderId:o.id,status:o.status,amountMinor:o.amountMinor,currency:o.currency,
-          credits:o.credits,offerId:o.offerId,termsRevision:o.termsRevision});
+          credits:o.credits,offerId:o.offerId,termsRevision:o.termsRevision,packageCode:orderPackage(o)});
       } catch(e) { return errorResponse(e); }
     },
     async webhook(request: Request) {

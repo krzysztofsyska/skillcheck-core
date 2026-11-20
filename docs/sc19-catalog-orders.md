@@ -1,3 +1,5 @@
+> **Nieaktualne (20.11.2026):** Przelewy24 usunięte z SkillCheck (decyzja właściciela 19.11.2026, `docs/DECYZJE.md`; PR #562). Płatności: Stripe (R7 w `docs/ROADMAP.md`). Dokument zostaje jako archiwum.
+
 # Zamówienia katalogowe (#283)
 
 Zakup jest dostępny w istniejącej kasie firmy, z zachowaniem linku powrotnego do rekrutacji. Operator potwierdza wpłatę w istniejącym panelu rozliczeń. Nie dodano dostawcy płatności ani automatycznej faktury; istniejący P24 pozostaje osobnym transportem PRESELEKCJI. Obie drogi blokują nowe zamówienie, gdy firma ma już nieopłacone zamówienie w drugiej drodze.

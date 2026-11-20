@@ -1,8 +1,8 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { sc19OfferAmounts } from '../../../../../lib/sc19-offer-amounts';
-import { CV_POOL_STEP, MAX_PACKAGES, STRIPE_CATALOG, packagesForPool } from '../../../../../lib/stripe-catalog';
-type Offer={id:string;revision:string;amountMinor:number;currency:string;credits:number;
+import { CV_POOL_STEP, MAX_PACKAGES, STRIPE_CATALOG, isStripePackageCode, packagesForPool, type StripePackageCode } from '../../../../../lib/stripe-catalog';
+type Offer={id:string;revision:string;packageCode?:string;amountMinor:number;currency:string;credits:number;
   termsRevision:string;termsText:string;validUntilMs:number;
   netMinor?:number|null;vatMinor?:number|null;vatBasisPoints?:number|null};
 const pln=(v:number)=>new Intl.NumberFormat('pl-PL',{style:'currency',currency:'PLN'}).format(v/100);
@@ -14,32 +14,30 @@ const breakdown=(offer: Offer)=>typeof offer.netMinor==='number'&&typeof offer.v
   :sc19OfferAmounts(offer.amountMinor);
 const verificationPending='Twoja firma czeka na weryfikację — do tego czasu zakupu nie można złożyć. Odświeżenie strony tego nie zmieni. Napisz do nas przez formularz kontaktowy (/rozmowa) albo na pomoc@skillcheck.pl, a potwierdzimy firmę i odblokujemy zamówienie.';
 const paymentsPending='Płatność online jest w trakcie uruchamiania. Zamówienia nie można jeszcze złożyć — cena i warunki poniżej są wiążące i nie zmienią się po włączeniu płatności.';
-// The sandbox runs on the production domain too, so that a Przelewy24 verifier can
-// pay with test money (owner decision 2026-11-11). Nothing is charged, but the
-// analyses ARE granted on this account, which is exactly what makes the walk
-// meaningful — so the screen says both, and promises no payment method of its own
-// beyond what the operator's sandbox offers.
-const sandboxNotice='Płatność testowa w Sandboxie Przelewy24: żadne pieniądze nie zostaną pobrane. Analizy CV zostaną jednak przyznane na tym koncie tak samo jak po zwykłym zakupie.';
 /** A failure we have no dedicated sentence for. The code is shown on purpose: it
  * is the only thing that tells support whether to retry or to look at the payment
  * operator, and it contains no private data. */
 const checkoutFailed=(code:string)=>
   `Nie udało się otworzyć płatności. Ponów próbę — serwer sprawdzi istniejące zamówienie. Jeśli to się powtarza, napisz na pomoc@skillcheck.pl i podaj kod: ${code}.`;
-/** Optional Przelewy24 failure code from the server, e.g. P24_UNAUTHORIZED. Only a
- * fixed-format code is ever rendered, never anything else the response carries. */
-const p24Detail=(value:unknown)=>typeof value==='string'&&/^P24_[A-Z_]{3,40}$/.test(value)?value:null;
 const reconciliationRequired='Tego zamówienia nie można już otworzyć ani potwierdzić automatycznie. Ponawianie nie pomoże. Napisz na pomoc@skillcheck.pl, podaj nazwę firmy — odblokujemy zamówienie i będziesz mógł złożyć nowe.';
-const sessionExists='Płatność dla tego zamówienia została już rozpoczęta u operatora, ale nie możemy bezpiecznie pokazać jej ponownie. Ponawianie nie pomoże. Napisz na pomoc@skillcheck.pl, podaj nazwę firmy i kod: P24_SESSION_EXISTS.';
 // R7: the Stripe hosted page. Methods offered there depend on the Stripe account;
 // the list names what the account is set up for, not a promise of each one.
 const stripeText='Płatność online obsługuje Stripe (karta, BLIK, Przelewy24, Apple Pay, Google Pay). Na stronie płatności podasz dane firmy do faktury, w tym NIP. Pakiet przyznajemy automatycznie po potwierdzeniu płatności przez Stripe, zwykle w ciągu kilku minut. Zasady reklamacji i odstąpienia opisuje Regulamin (§ 10–11).';
-const stripeTestNotice='Płatność testowa Stripe: żadne pieniądze nie zostaną pobrane. Analizy CV zostaną jednak przyznane na tym koncie tak samo jak po zwykłym zakupie.';
-const soonPackages=[STRIPE_CATALOG.WERYFIKACJA,STRIPE_CATALOG.ASSESSMENT_CENTER];
+const stripeTestNotice='Płatność testowa Stripe: żadne pieniądze nie zostaną pobrane. Pakiet i analizy CV zostaną jednak przyznane na tym koncie tak samo jak po zwykłym zakupie.';
+// R7: what each package adds over the CV analyses (docs/cennik-2026-11-02.md). No voicebot.
+const packageExtras:Record<StripePackageCode,string>={PRESELEKCJA:'',
+  WERYFIKACJA:'testy kompetencji dla kandydatów z shortlisty i rozszerzony raport',
+  ASSESSMENT_CENTER:'testy kompetencji, zadania praktyczne i sesja Assessment Center dla finalistów (5–6 osób)'};
+/** Packages not offered right now (not on sale, or no migration yet): shown as „wkrótce”. */
+const soonPackages=(offers:Offer[])=>[STRIPE_CATALOG.WERYFIKACJA,STRIPE_CATALOG.ASSESSMENT_CENTER]
+  .filter(p=>!offers.some(o=>offerPackage(o)===p.code));
+const offerPackage=(o:{packageCode?:unknown}|undefined):StripePackageCode=>o&&isStripePackageCode(o.packageCode)?o.packageCode:'PRESELEKCJA';
 const uuid = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
 const contextKey = (companyId: string, orderId: string) => `sc19:recruitment:${companyId.toLowerCase()}:${orderId.toLowerCase()}`;
-export default function Checkout({companyId,recruitmentId,sandbox=false,statusOnly=false,provider='p24',testMode=false}: {companyId:string;recruitmentId?:string;sandbox?:boolean;statusOnly?:boolean;provider?:'p24'|'stripe';testMode?:boolean}) {
-  const stripe=provider==='stripe';
-  const returnParam=stripe?'stripe':'p24';
+// R7: Stripe is the only payment provider (owner decision 19.11.2026); the return
+// from the Stripe hosted page carries the order id in `?stripe=<uuid>`.
+const returnParam='stripe';
+export default function Checkout({companyId,recruitmentId,statusOnly=false,testMode=false}: {companyId:string;recruitmentId?:string;statusOnly?:boolean;testMode?:boolean}) {
   // PRESELEKCJA is sold in whole packages of 60 CV; the slider picks a pool (co 5)
   // and the server recomputes the amount from the package count.
   const [pool,setPool]=useState(STRIPE_CATALOG.PRESELEKCJA.cvCredits);
@@ -51,8 +49,10 @@ export default function Checkout({companyId,recruitmentId,sandbox=false,statusOn
   const [requestIds]=useState(()=>new Map<string,string>());
   const [returnedRecruitment,setReturnedRecruitment]=useState<string|null>(null);
   const selectedOffer=offers.find(o=>o.id===selected);
-  const packages=stripe?packagesForPool(pool):1;
-  const offer=stripe&&selectedOffer&&packages?{...selectedOffer,amountMinor:selectedOffer.amountMinor*packages,credits:selectedOffer.credits*packages,
+  const code=offerPackage(selectedOffer);
+  // PRESELEKCJA: whole packages from the pool; WERYFIKACJA and ASSESSMENT CENTER: one package.
+  const packages=code==='PRESELEKCJA'?packagesForPool(pool):1;
+  const offer=selectedOffer&&packages?{...selectedOffer,amountMinor:selectedOffer.amountMinor*packages,credits:selectedOffer.credits*packages,
     netMinor:null,vatMinor:null}:selectedOffer;
   const amounts=offer&&breakdown(offer);
   async function loadOffers(signal?: AbortSignal) {
@@ -94,7 +94,7 @@ export default function Checkout({companyId,recruitmentId,sandbox=false,statusOn
     const abort=new AbortController();
     setReturnedRecruitment(null);
     if (!statusOnly) void loadOffers(abort.signal);
-    const returned = (sandbox || stripe) && new URLSearchParams(window.location.search).get(returnParam);
+    const returned = new URLSearchParams(window.location.search).get(returnParam);
     if (returned && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(returned)) {
       // Optional same-tab navigation hint, never payment evidence or an access grant.
       // The destination checks membership; storage can only supply a UUID, never a URL.
@@ -107,55 +107,54 @@ export default function Checkout({companyId,recruitmentId,sandbox=false,statusOn
       void status(returned);
     } else try { setOrderId(sessionStorage.getItem(`sc19:order:${companyId}`) ?? ''); } catch { /* unavailable storage: status can be retried in this session */ }
     return ()=>abort.abort();
-  },[companyId,sandbox,statusOnly,stripe,returnParam]);
+  },[companyId,statusOnly]);
   async function status(id=orderId) {
     if(!id)return;
     setBusy(true);
     try {
-      const r=await fetch(`/api/billing/orders/${encodeURIComponent(id)}?companyId=${encodeURIComponent(companyId)}`,{cache:'no-store',method:sandbox&&!stripe?'POST':'GET'});
+      const r=await fetch(`/api/billing/orders/${encodeURIComponent(id)}?companyId=${encodeURIComponent(companyId)}`,{cache:'no-store'});
       if(!r.ok)throw Error(); const data=await r.json();
       // The paid order's own package count (its CV pool / 60), not the form's current
       // value: the request key of THAT purchase is the one to clear.
-      const paidPackages=stripe&&Number.isSafeInteger(data.credits/STRIPE_CATALOG.PRESELEKCJA.cvCredits)
-        ?data.credits/STRIPE_CATALOG.PRESELEKCJA.cvCredits:null;
+      const paidCode=offerPackage(data);
+      const paidPackages=Number.isSafeInteger(data.credits/STRIPE_CATALOG[paidCode].cvCredits)
+        ?data.credits/STRIPE_CATALOG[paidCode].cvCredits:null;
       setPaidOrder(data.status==='paid'?{offerId:data.offerId,termsRevision:data.termsRevision,packages:paidPackages}:null);
-      setMessage(data.status==='paid' ? `Płatność potwierdzona. Przyznano ${data.credits} analiz CV.` :
+      setMessage(data.status==='paid' ? (paidCode==='PRESELEKCJA' ? `Płatność potwierdzona. Przyznano ${data.credits} analiz CV.`
+        : `Płatność potwierdzona. Przyznano pakiet ${STRIPE_CATALOG[paidCode].name} i ${data.credits} analiz CV.`) :
         'Czekamy na potwierdzenie płatności. Kredyty zostaną przyznane po jej weryfikacji.');
     } catch {setMessage('Nie udało się sprawdzić statusu. Spróbuj ponownie.');}
     finally {setBusy(false);}
   }
   function nextPurchase() {
     if(!paidOrder)return;
-    const key=`sc19:request:${companyId}:${paidOrder.offerId}:${paidOrder.termsRevision}${stripe?`:${paidOrder.packages}`:''}`;
+    const key=`sc19:request:${companyId}:${paidOrder.offerId}:${paidOrder.termsRevision}:${paidOrder.packages}`;
     requestIds.delete(key);
     try {
       sessionStorage.removeItem(key);
       sessionStorage.removeItem(`sc19:order:${companyId}`);
     } catch { /* Server-side order invariant does not depend on browser storage. */ }
-    if (sandbox || stripe) {
-      const url = new URL(window.location.href);
-      url.searchParams.delete(returnParam);
-      url.searchParams.delete('cancelled');
-      window.history.replaceState(window.history.state,'',url);
-    }
+    const url = new URL(window.location.href);
+    url.searchParams.delete(returnParam);
+    url.searchParams.delete('cancelled');
+    window.history.replaceState(window.history.state,'',url);
     setOrderId('');setPaidOrder(null);setAccepted(false);setMessage('Możesz złożyć kolejne zamówienie.');
   }
   async function buy() {
     // Never post while checkout is unavailable: the server refuses it anyway
     // (SC19_PAYMENTS_DISABLED), and the button is rendered disabled.
-    if(!offer||!accepted||busy||loading||paidOrder||!checkoutAvailable||(stripe&&!packages))return;
+    if(!offer||!accepted||busy||loading||paidOrder||!checkoutAvailable||!packages)return;
     setBusy(true);setMessage('');
     try {
       // Best-effort retry hint. The durable server invariant also protects new
       // tabs/devices and browsers where sessionStorage is missing or evicted.
-      const key=`sc19:request:${companyId}:${offer.id}:${offer.termsRevision}${stripe?`:${packages}`:''}`;
+      const key=`sc19:request:${companyId}:${offer.id}:${offer.termsRevision}:${packages}`;
       let requestId=requestIds.get(key);
       try {requestId ??= sessionStorage.getItem(key) ?? undefined;} catch { /* optional */ }
       requestId ??= crypto.randomUUID();requestIds.set(key,requestId);
       try {sessionStorage.setItem(key,requestId);} catch { /* optional */ }
       const response=await fetch('/api/billing/checkout',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify(stripe?{companyId,offerId:offer.id,termsRevision:offer.termsRevision,requestId,packages,packageCode:'PRESELEKCJA'}
-          :{companyId,offerId:offer.id,termsRevision:offer.termsRevision,requestId})});
+        body:JSON.stringify({companyId,offerId:offer.id,termsRevision:offer.termsRevision,requestId,packages,packageCode:code})});
       // A killed invocation or a platform error answers with HTML, not JSON. Bare
       // `response.json()` threw here and every failure — including our own error
       // codes — fell into the generic catch below, which is why a broken checkout
@@ -182,11 +181,7 @@ export default function Checkout({companyId,recruitmentId,sandbox=false,statusOn
         // codes (SC19_PAYMENT_RETRY, HTTP 503) with nothing private in them, and they
         // are the difference between "retry" and "the payment operator is refusing us".
         const code=typeof data.error==='string'?data.error:`HTTP ${response.status}`;
-        const detail=p24Detail(data.detail);
-        // The operator already has a session for this order and its link was lost:
-        // a retry would hit the same answer, so do not offer one.
-        if(detail==='P24_SESSION_EXISTS'){setMessage(sessionExists);return;}
-        setMessage(checkoutFailed(detail?`${code} / ${detail}`:code));return;
+        setMessage(checkoutFailed(code));return;
       }
       setOrderId(data.orderId);
       if (uuid(companyId) && uuid(data.orderId) && uuid(recruitmentId)) try {
@@ -203,26 +198,26 @@ export default function Checkout({companyId,recruitmentId,sandbox=false,statusOn
   if (statusOnly) return <section aria-busy={busy}>
     {returnLink}
     <h2>Status zamówienia testowego</h2>
-    <p role="status">{message || (stripe ? 'Sprawdzamy potwierdzenie płatności…' : 'Sprawdzamy potwierdzenie w Przelewy24…')}</p>
+    <p role="status">{message || 'Sprawdzamy potwierdzenie płatności…'}</p>
     <button type="button" disabled={!orderId || busy} onClick={()=>status()}>Sprawdź status zamówienia</button>
   </section>;
   return <section aria-busy={loading||busy}>
     {returnLink}
-    {sandbox&&!stripe&&<p role="note">{sandboxNotice}</p>}
-    {stripe&&testMode&&<p role="note">{stripeTestNotice}</p>}
+    {testMode&&<p role="note">{stripeTestNotice}</p>}
     <p>Pakiet FREE nie wymaga płatności i nie korzysta z tego formularza.</p>
     {loading ? <p role="status">Wczytuję ofertę…</p> : offers.length>0 ? <>
       <label>Wariant <select value={selected} disabled={busy} onChange={e=>{setSelected(e.target.value);setAccepted(false);}}>
-        {offers.map(o=><option key={o.id} value={o.id}>{o.credits} analiz CV — {pln(o.amountMinor)} brutto</option>)}
+        {offers.map(o=><option key={o.id} value={o.id}>{`${STRIPE_CATALOG[offerPackage(o)].name}: `}{o.credits} analiz CV — {pln(o.amountMinor)} brutto</option>)}
       </select></label>
-      {stripe&&selectedOffer&&<label>Pula CV (co {CV_POOL_STEP}) <input type="number" min={CV_POOL_STEP} step={CV_POOL_STEP}
+      {selectedOffer&&code==='PRESELEKCJA'&&<label>Pula CV (co {CV_POOL_STEP}) <input type="number" min={CV_POOL_STEP} step={CV_POOL_STEP}
         max={MAX_PACKAGES*STRIPE_CATALOG.PRESELEKCJA.cvCredits} value={pool} disabled={busy}
         onChange={e=>{setPool(Number(e.target.value));setAccepted(false);}}/>
         <small>{packages ? `PRESELEKCJA sprzedajemy w całych pakietach po ${STRIPE_CATALOG.PRESELEKCJA.cvCredits} CV: ${packages} ${packages===1?'pakiet':'pakiety'} = ${packages*STRIPE_CATALOG.PRESELEKCJA.cvCredits} analiz CV.`
           : `Podaj wielokrotność ${CV_POOL_STEP}, od ${CV_POOL_STEP} do ${MAX_PACKAGES*STRIPE_CATALOG.PRESELEKCJA.cvCredits} CV.`}</small></label>}
-      {offer&&<><h2>{pln(offer.amountMinor)} brutto</h2><p>{offer.credits} analiz CV • jednorazowo • analizy ważne 3 miesiące od przyznania</p>
+      {offer&&<><h2>{pln(offer.amountMinor)} brutto</h2><p>{offer.credits} analiz CV{packageExtras[code]?` • ${packageExtras[code]}`:''} • jednorazowo • analizy ważne 3 miesiące od przyznania</p>
         <table><caption>Podsumowanie zamówienia</caption><tbody>
-          <tr><th scope="row">Pakiet</th><td>PRESELEKCJA</td></tr>
+          <tr><th scope="row">Pakiet</th><td>{STRIPE_CATALOG[code].name}</td></tr>
+          {packageExtras[code]&&<tr><th scope="row">W pakiecie</th><td>{packageExtras[code]}</td></tr>}
           <tr><th scope="row">Liczba analiz CV</th><td>{offer.credits}</td></tr>
           {amounts&&<tr><th scope="row">Cena netto</th><td>{pln(amounts.netMinor)}</td></tr>}
           {amounts&&<tr><th scope="row">VAT{typeof amounts.vatBasisPoints==='number'?` ${amounts.vatBasisPoints/100}%`:''}</th><td>{pln(amounts.vatMinor)}</td></tr>}
@@ -231,12 +226,12 @@ export default function Checkout({companyId,recruitmentId,sandbox=false,statusOn
         <details open><summary>Warunki oferty · {offer.termsRevision}</summary><p style={{whiteSpace:'pre-wrap'}}>{offer.termsText}</p></details>
         <label style={{display:'block',margin:'20px 0'}}><input type="checkbox" checked={accepted} disabled={busy}
           onChange={e=>setAccepted(e.target.checked)}/> Akceptuję powyższe warunki oferty oraz <a href="/regulamin" target="_blank" rel="noopener">Regulamin</a> i potwierdzam zapoznanie się z <a href="/polityka-prywatnosci" target="_blank" rel="noopener">Polityką prywatności</a>.</label>
-        {stripe?<p>{stripeText}</p>:<p>Płatność online obsługuje Przelewy24 (PayPro S.A., ul. Pastelowa 8, 60-198 Poznań): szybki przelew, BLIK lub karta, w zakresie metod udostępnionych przez operatora. Analizy przyznajemy niezwłocznie po potwierdzeniu płatności: po zaksięgowaniu wpłaty na naszym rachunku, a przy płatności online — po jej potwierdzeniu przez operatora, zwykle w ciągu kilku minut. Zasady reklamacji i odstąpienia opisuje <a href="/regulamin" target="_blank" rel="noopener">Regulamin</a> (§ 10–11).</p>}
+        <p>{stripeText}</p>
         {!checkoutAvailable&&<p role="status" aria-live="polite">{paymentsPending}</p>}
-        <button type="button" disabled={!checkoutAvailable||!accepted||busy||!!paidOrder||(stripe&&!packages)} onClick={buy}>
+        <button type="button" disabled={!checkoutAvailable||!accepted||busy||!!paidOrder||!packages} onClick={buy}>
           {busy?'Przetwarzam…':checkoutAvailable?`Zamawiam i płacę ${pln(offer.amountMinor)}`:`Zamawiam i płacę ${pln(offer.amountMinor)} — wkrótce`}</button></>}
     </> : !message&&<p>Brak zatwierdzonej oferty. Zakup jest obecnie niedostępny.</p>}
-    {stripe&&<><h2>Wkrótce</h2><ul>{soonPackages.map(p=><li key={p.code}>{p.name} — {pln(p.grossMinor)} brutto za {p.cvCredits} CV — wkrótce</li>)}</ul></>}
+    {soonPackages(offers).length>0&&<><h2>Wkrótce</h2><ul>{soonPackages(offers).map(p=><li key={p.code}>{p.name} — {pln(p.grossMinor)} brutto za {p.cvCredits} CV — wkrótce</li>)}</ul></>}
     {message&&<p role="status" aria-live="polite">{message}</p>}
     <button type="button" disabled={busy||loading} onClick={()=>{setMessage('');return loadOffers();}}>Odśwież oferty</button>
     {paidOrder&&<button type="button" disabled={busy} onClick={nextPurchase}>Kup kolejny pakiet</button>}

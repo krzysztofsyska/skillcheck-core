@@ -8,8 +8,9 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createSc19Payments, Sc19PaymentError } from '../lib/sc19-payments.ts';
 import { createSc19PaymentHttp } from '../lib/sc19-payment-http.ts';
 import { createStripeProvider, stripeModeOf, verifyStripeSignature, stripeForm, STRIPE_CHECKOUT_ORIGIN } from '../lib/sc19-stripe-provider.ts';
-import { STRIPE_APP, STRIPE_CATALOG, packagesForPool, stripeQuote } from '../lib/stripe-catalog.ts';
+import { STRIPE_APP, STRIPE_CATALOG, checkCvCount, packagesForPool, stripeQuote } from '../lib/stripe-catalog.ts';
 import { sc19StripeGate } from '../lib/sc19-stripe-config.ts';
+import { STRIPE_PACKAGE_OFFERS } from '../lib/sc19-stripe-packages.ts';
 
 const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const SECRET = 'sk_test_' + 'a'.repeat(24);
@@ -76,14 +77,14 @@ function fakeStripe() {
 function harness(opts = {}) {
   const stripe = fakeStripe();
   const st = { offer: offer(), orders: new Map(), requests: new Map(), grants: new Map(), credits: new Map(),
-    customers: new Map(), paidHook: [], nip: '7394002294' };
+    entitlements: new Map(), customers: new Map(), paidHook: [], nip: '7394002294' };
   let tail = Promise.resolve();
   const store = { async transaction(fn) {
     let release; const wait = tail; tail = new Promise(r => { release = r; }); await wait;
-    const before = structuredClone({ orders: st.orders, requests: st.requests, grants: st.grants, credits: st.credits });
+    const before = structuredClone({ orders: st.orders, requests: st.requests, grants: st.grants, credits: st.credits, entitlements: st.entitlements });
     const tx = {
       async companyAccess(c, u) { return c === id(1) && u === id(2) ? { owner: true, verified: true } : { owner: false, verified: false }; },
-      async offer(k) { return k === st.offer.id ? structuredClone(st.offer) : null; },
+      async offer(k) { return k === st.offer.id ? structuredClone(st.offer) : structuredClone(STRIPE_PACKAGE_OFFERS.find(o => o.id === k) ?? null); },
       async orderByRequest(c, r) { return structuredClone(st.orders.get(st.requests.get(`${c}:${r}`)) ?? null); },
       async unresolvedOrder(c) { return structuredClone([...st.orders.values()].find(o => o.companyId === c && o.status === 'awaiting_payment') ?? null); },
       async bindRequest(c, r, o) { const k = `${c}:${r}`; if (st.requests.has(k)) throw Error('unique'); st.requests.set(k, o); },
@@ -92,7 +93,10 @@ function harness(opts = {}) {
       async saveOrder(o) { st.orders.set(o.id, structuredClone(o)); },
       async grantOnce(key, o) {
         if (st.grants.has(key)) return st.grants.get(key);
-        st.grants.set(key, o.id); st.credits.set(o.companyId, (st.credits.get(o.companyId) ?? 0) + o.credits); return null;
+        st.grants.set(key, o.id); st.credits.set(o.companyId, (st.credits.get(o.companyId) ?? 0) + o.credits);
+        // Mirrors sc19_stripe.grant_package(): a non-PRESELEKCJA package also adds its entitlement.
+        if (o.packageCode) { const e = `${o.companyId}:package:${o.packageCode}`; st.entitlements.set(e, (st.entitlements.get(e) ?? 0) + 1); }
+        return null;
       },
     };
     try { return await fn(tx); } catch (e) { Object.assign(st, before); throw e; } finally { release(); }
@@ -105,7 +109,7 @@ function harness(opts = {}) {
   const provider = createStripeProvider({ secretKey: SECRET, webhookSecret: WHSEC, mode: 'test', appOrigin: ORIGIN, scope,
     customers, fetch: stripe.fetch, nowMs: () => opts.now ?? Date.now(),
     async buyer(order) { assert.equal(order.buyerId, id(2)); return { email: 'buyer@example.test', companyName: 'Firma Testowa', nip: st.nip }; } });
-  const service = createSc19Payments({ store, provider, scope, checkoutOrigins: [STRIPE_CHECKOUT_ORIGIN], enabled: true, liveApproved: false,
+  const service = createSc19Payments({ store, provider, scope, checkoutOrigins: [STRIPE_CHECKOUT_ORIGIN], enabled: true, liveApproved: false, cvPoolEnabled: opts.cvPoolEnabled === true,
     authenticate: async () => ({ userId: id(2) }), onPaid: async order => { st.paidHook.push(order.id); } });
   return { st, stripe, service, provider };
 }
@@ -118,15 +122,27 @@ function signed(event, secret = WHSEC, t = Math.floor(Date.now() / 1000)) {
 const completed = (session, extra = {}) => ({ id: 'evt_fake' + Math.random().toString(36).slice(2, 10), type: 'checkout.session.completed',
   livemode: false, data: { object: { id: session.id, metadata: { ...session.metadata } } }, ...extra });
 
-test('catalog equals docs/cennik-2026-11-02.md; WERYFIKACJA and ASSESSMENT CENTER are „wkrótce”', () => {
+test('catalog equals docs/cennik-2026-11-02.md; WERYFIKACJA and ASSESSMENT CENTER on sale as one whole package', () => {
   const doc = readFileSync(new URL('../docs/cennik-2026-11-02.md', import.meta.url), 'utf8');
   const row = name => { const m = new RegExp(`^\\| ${name} \\| ([0-9 ]+) zł \\| ([0-9]+) \\|`, 'm').exec(doc); return [Number(m[1].replace(/ /g, '')) * 100, Number(m[2])]; };
   assert.deepEqual(row('PRESELEKCJA'), [STRIPE_CATALOG.PRESELEKCJA.grossMinor, STRIPE_CATALOG.PRESELEKCJA.cvCredits]);
   assert.deepEqual(row('WERYFIKACJA'), [STRIPE_CATALOG.WERYFIKACJA.grossMinor, STRIPE_CATALOG.WERYFIKACJA.cvCredits]);
   assert.deepEqual(row('ASSESSMENT CENTER'), [STRIPE_CATALOG.ASSESSMENT_CENTER.grossMinor, STRIPE_CATALOG.ASSESSMENT_CENTER.cvCredits]);
   assert.equal(STRIPE_CATALOG.PRESELEKCJA.available, true);
-  assert.equal(STRIPE_CATALOG.WERYFIKACJA.available, false);
-  assert.equal(STRIPE_CATALOG.ASSESSMENT_CENTER.available, false);
+  assert.equal(STRIPE_CATALOG.WERYFIKACJA.available, true);
+  assert.equal(STRIPE_CATALOG.ASSESSMENT_CENTER.available, true);
+  assert.equal(STRIPE_CATALOG.WERYFIKACJA.maxPackages, 1);
+  assert.equal(STRIPE_CATALOG.ASSESSMENT_CENTER.maxPackages, 1);
+  // The package offers carry the catalog price, and the migration pins the same amounts.
+  for (const o of STRIPE_PACKAGE_OFFERS) {
+    assert.equal(o.amountMinor, STRIPE_CATALOG[o.plan].grossMinor, o.id);
+    assert.equal(o.credits, STRIPE_CATALOG[o.plan].cvCredits, o.id);
+    assert.doesNotMatch(o.termsText, /voicebot|\bbot|rozmow/i, 'no voicebot in package copy');
+  }
+  assert.deepEqual(STRIPE_PACKAGE_OFFERS.map(o => o.plan), ['WERYFIKACJA', 'ASSESSMENT_CENTER']);
+  const pinned = readFileSync(new URL('../supabase/migrations/20261121150000_r7_stripe_packages.sql', import.meta.url), 'utf8');
+  assert.match(pinned, new RegExp(`package_code='WERYFIKACJA' and amount_minor=${STRIPE_CATALOG.WERYFIKACJA.grossMinor} and credits=${STRIPE_CATALOG.WERYFIKACJA.cvCredits}`));
+  assert.match(pinned, new RegExp(`package_code='ASSESSMENT_CENTER' and amount_minor=${STRIPE_CATALOG.ASSESSMENT_CENTER.grossMinor} and credits=${STRIPE_CATALOG.ASSESSMENT_CENTER.cvCredits}`));
   assert.equal(STRIPE_APP, 'skillcheck-core');
 });
 
@@ -136,6 +152,8 @@ test('pool slider (co 5) becomes whole PRESELEKCJA packages of 60 CV', () => {
   for (const bad of [0, 3, 62, 1205, -60, 60.5, '60', null]) assert.equal(packagesForPool(bad), null, String(bad));
   assert.deepEqual(stripeQuote('PRESELEKCJA', 2), { code: 'PRESELEKCJA', packages: 2, grossMinor: 60000, cvCredits: 120 });
   assert.equal(stripeQuote('PRESELEKCJA', 0), null); assert.equal(stripeQuote('FREE', 1), null);
+  assert.deepEqual(stripeQuote('ASSESSMENT_CENTER', 1), { code: 'ASSESSMENT_CENTER', packages: 1, grossMinor: 149900, cvCredits: 50 });
+  assert.equal(stripeQuote('WERYFIKACJA', 2), null, 'no multiplied WERYFIKACJA: the overage rule prices a larger pool');
 });
 
 test('mode comes from the key prefix only', () => {
@@ -247,22 +265,160 @@ test('a stored customer that Stripe confirms deleted is replaced (new idempotenc
   assert.equal(st.customers.get(`${id(1)}:test`), fresh);
 });
 
-test('„wkrótce” packages are refused by the server with 409; invalid pools are refused', async () => {
+const packageBuy = (code, extra = {}) => {
+  const o = STRIPE_PACKAGE_OFFERS.find(x => x.plan === code);
+  return buy({ offerId: o.id, termsRevision: o.termsRevision, packageCode: code, ...extra });
+};
+
+test('invalid pools, more than one WERYFIKACJA / AC package and package mismatches are refused before Stripe', async () => {
   const { service, stripe } = harness();
-  for (const code of ['WERYFIKACJA', 'ASSESSMENT_CENTER'])
-    await assert.rejects(service.checkout(buy({ packageCode: code })), e => e instanceof Sc19PaymentError && e.code === 'SC19_PAYMENT_PACKAGE_UNAVAILABLE');
   for (const packages of [0, 21, 1.5, '2']) await assert.rejects(service.checkout(buy({ packages })), e => e.code === 'SC19_PAYMENT_INVALID');
   await assert.rejects(service.checkout(buy({ packageCode: 'FREE' })), e => e.code === 'SC19_PAYMENT_INVALID');
   await assert.rejects(service.checkout(buy({ amountMinor: 1 })), e => e.code === 'SC19_PAYMENT_INVALID');
+  // One whole package only for WERYFIKACJA and ASSESSMENT CENTER.
+  for (const code of ['WERYFIKACJA', 'ASSESSMENT_CENTER'])
+    await assert.rejects(service.checkout(packageBuy(code, { packages: 2 })), e => e.code === 'SC19_PAYMENT_INVALID', code);
+  // The named package must be the offer's package, both ways; an unnamed request buys PRESELEKCJA only.
+  await assert.rejects(service.checkout(buy({ packageCode: 'WERYFIKACJA' })), e => e.code === 'SC19_PAYMENT_INVALID');
+  await assert.rejects(service.checkout(packageBuy('ASSESSMENT_CENTER', { packageCode: 'PRESELEKCJA' })), e => e.code === 'SC19_PAYMENT_INVALID');
+  const { packageCode, ...unnamed } = packageBuy('WERYFIKACJA'); void packageCode;
+  await assert.rejects(service.checkout(unnamed), e => e.code === 'SC19_PAYMENT_INVALID');
   assert.equal(stripe.calls.length, 0);
-  // Over HTTP the refusal is 409.
+  // Over HTTP an invalid package is 400.
   const runtime = { service, authenticate: async () => ({ userId: id(2) }), readOrder: async () => null, listOffers: async () => [],
     appOrigin: ORIGIN, signatureHeader: 'stripe-signature' };
   const response = await createSc19PaymentHttp(runtime).checkout(new Request(`${ORIGIN}/api/billing/checkout`, { method: 'POST',
     headers: { origin: ORIGIN, 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' },
-    body: JSON.stringify(buy({ packageCode: 'WERYFIKACJA' })) }));
-  assert.equal(response.status, 409);
-  assert.equal((await response.json()).error, 'SC19_PAYMENT_PACKAGE_UNAVAILABLE');
+    body: JSON.stringify(packageBuy('WERYFIKACJA', { packages: 2 })) }));
+  assert.equal(response.status, 400);
+});
+
+test('R5 W2b: checkCvCount allows only slider values (co 5, catalog bounds) and turns them into whole packages', () => {
+  const ok = (code, cv, packages = null) => checkCvCount(code, cv, packages);
+  assert.deepEqual(ok('PRESELEKCJA', 5), { ok: true, packages: 1 });
+  assert.deepEqual(ok('PRESELEKCJA', 60), { ok: true, packages: 1 });
+  assert.deepEqual(ok('PRESELEKCJA', 65), { ok: true, packages: 2 });
+  assert.deepEqual(ok('PRESELEKCJA', 120, 2), { ok: true, packages: 2 });
+  assert.deepEqual(ok('PRESELEKCJA', 1200), { ok: true, packages: 20 });
+  assert.deepEqual(ok('WERYFIKACJA', 60), { ok: true, packages: 1 });
+  assert.deepEqual(ok('ASSESSMENT_CENTER', 50, 1), { ok: true, packages: 1 });
+  const refused = [
+    ['PRESELEKCJA', 0, /Najmniejsza pula CV to 5/], ['PRESELEKCJA', 62, /co 5\. 62 nie jest dozwoloną wartością/],
+    ['PRESELEKCJA', 1205, /Największa pula CV w jednym zakupie to 1200/], ['PRESELEKCJA', 60.5, /liczbą całkowitą/],
+    ['PRESELEKCJA', '60', /liczbą całkowitą/], ['PRESELEKCJA', -5, /liczbą całkowitą/], ['PRESELEKCJA', null, /liczbą całkowitą/],
+    ['PRESELEKCJA', Number.MAX_SAFE_INTEGER + 1, /liczbą całkowitą/],
+    ['WERYFIKACJA', 65, /WERYFIKACJA ma pulę 60 CV/], ['WERYFIKACJA', 55, /WERYFIKACJA ma pulę 60 CV/],
+    ['ASSESSMENT_CENTER', 60, /ASSESSMENT CENTER ma pulę 50 CV/],
+  ];
+  for (const [code, cv, message] of refused) {
+    const r = ok(code, cv);
+    assert.equal(r.ok, false, `${code} ${cv}`);
+    assert.match(r.message, message, `${code} ${cv}`);
+  }
+  assert.match(ok('PRESELEKCJA', 120, 3).message, /Liczba CV \(120\) nie zgadza się z liczbą pakietów \(3\)/);
+  assert.equal(ok('WERYFIKACJA', 60, 2).ok, false);
+});
+
+test('R5 W2b: checkout with cvCount — server derives packages, refuses non-slider values with a Polish message, flag off keeps the old shape', async () => {
+  // Flag off (default): the field does not exist, exactly as before W2b.
+  {
+    const { service, stripe } = harness();
+    await assert.rejects(service.checkout(buy({ cvCount: 120 })), e => e.code === 'SC19_PAYMENT_INVALID');
+    assert.equal(stripe.calls.length, 0);
+  }
+  const { service, stripe, st } = harness({ cvPoolEnabled: true });
+  for (const [extra, message] of [
+    [{ cvCount: 62 }, /co 5/], [{ cvCount: 1205 }, /1200/], [{ cvCount: '120' }, /całkowitą/],
+    [{ cvCount: 120, packages: 3 }, /nie zgadza się/],
+  ]) await assert.rejects(service.checkout(buy(extra)), e => e.code === 'SC19_PAYMENT_CV_COUNT_INVALID' && message.test(e.userMessage),
+    JSON.stringify(extra));
+  for (const [code, cvCount] of [['WERYFIKACJA', 65], ['ASSESSMENT_CENTER', 60]])
+    await assert.rejects(service.checkout(packageBuy(code, { cvCount })), e => e.code === 'SC19_PAYMENT_CV_COUNT_INVALID', code);
+  // A client price is never a field; adding one is still invalid.
+  await assert.rejects(service.checkout(buy({ cvCount: 120, amountMinor: 1 })), e => e.code === 'SC19_PAYMENT_INVALID');
+  assert.equal(stripe.calls.length, 0);
+  assert.equal(st.orders.size, 0);
+  // Over HTTP: 400 with the code and the Polish message, nothing else.
+  const runtime = { service, authenticate: async () => ({ userId: id(2) }), readOrder: async () => null, listOffers: async () => [],
+    appOrigin: ORIGIN, signatureHeader: 'stripe-signature' };
+  const response = await createSc19PaymentHttp(runtime).checkout(new Request(`${ORIGIN}/api/billing/checkout`, { method: 'POST',
+    headers: { origin: ORIGIN, 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' },
+    body: JSON.stringify(buy({ cvCount: 62 })) }));
+  assert.equal(response.status, 400);
+  const body = await response.json();
+  assert.deepEqual(Object.keys(body).sort(), ['error', 'message']);
+  assert.equal(body.error, 'SC19_PAYMENT_CV_COUNT_INVALID');
+  assert.match(body.message, /^Liczbę CV wybiera się co 5\./);
+  // A valid pool: 65 CV = 2 whole packages at the server price, never more.
+  const r = await service.checkout(buy({ cvCount: 65 }));
+  const order = st.orders.get(r.orderId);
+  assert.equal(order.credits, 120);
+  assert.equal(order.amountMinor, 60000);
+  // The same request with the same pool, or with the equal package count, is the same purchase.
+  const again = await service.checkout(buy({ cvCount: 120 }));
+  assert.equal(again.orderId, r.orderId);
+  const same = await service.checkout(buy({ packages: 2 }));
+  assert.equal(same.orderId, r.orderId);
+  await assert.rejects(service.checkout(buy({ cvCount: 180 })), e => e.code === 'SC19_PAYMENT_REQUEST_CONFLICT');
+});
+
+test('R5 W2b: the Stripe runtime reads the slider flag from env only, default off', () => {
+  const runtime = readFileSync(new URL('../lib/sc19-stripe-runtime.ts', import.meta.url), 'utf8');
+  assert.match(runtime, /cvPoolEnabled: process\.env\.PRICING_CV_SLIDER_ENABLED === 'true'/);
+});
+
+test('WERYFIKACJA: one package at the catalog price, its own metadata and line item', async () => {
+  const { st, stripe, service } = harness();
+  const result = await service.checkout(packageBuy('WERYFIKACJA'));
+  assert.equal(result.amountMinor, 61500);
+  const order = st.orders.get(result.orderId);
+  assert.equal(order.packageCode, 'WERYFIKACJA'); assert.equal(order.credits, 60); assert.equal(order.amountMinor, 61500);
+  const p = stripe.calls.find(c => c.method === 'POST' && c.path === '/v1/checkout/sessions').body;
+  for (const prefix of ['metadata', 'payment_intent_data[metadata]']) {
+    assert.equal(p[`${prefix}[package_code]`], 'WERYFIKACJA');
+    assert.equal(p[`${prefix}[packages]`], '1');
+    assert.equal(p[`${prefix}[pool_cv]`], '60');
+  }
+  assert.equal(p['line_items[0][quantity]'], '1');
+  assert.equal(p['line_items[0][price_data][unit_amount]'], '61500');
+  assert.equal(p['line_items[0][price_data][product_data][metadata][package_code]'], 'WERYFIKACJA');
+  assert.equal(p['payment_intent_data[description]'], 'SkillCheck WERYFIKACJA — 1 × 60 analiz CV');
+  assert.equal(stripe.calls.find(c => c.path === '/v1/prices').query['lookup_keys[0]'], 'skillcheck-core:WERYFIKACJA');
+  // The same request again returns the same order; a WERYFIKACJA request id reused for AC is a conflict.
+  assert.equal((await service.checkout(packageBuy('WERYFIKACJA'))).orderId, result.orderId);
+  await assert.rejects(service.checkout(packageBuy('ASSESSMENT_CENTER')), e => e.code === 'SC19_PAYMENT_REQUEST_CONFLICT');
+  // A Stripe price under the lookup key must match the catalog for THIS package.
+  const other = harness();
+  other.stripe.prices.push({ id: 'price_fakew', unit_amount: 30000, currency: 'pln', type: 'one_time', livemode: false,
+    metadata: { app: STRIPE_APP, package_code: 'WERYFIKACJA' } });
+  await assert.rejects(other.service.checkout(packageBuy('WERYFIKACJA')), e => e.code === 'SC19_PAYMENT_CHECKOUT_INVALID');
+});
+
+test('ASSESSMENT CENTER: granted only after checkout.session.completed — 50 CV and the package entitlement the R3 gate reads, once', async () => {
+  const { st, stripe, service } = harness();
+  const r = await service.checkout(packageBuy('ASSESSMENT_CENTER'));
+  assert.equal(r.amountMinor, 149900);
+  const sid = st.orders.get(r.orderId).sessionId;
+  assert.equal(st.entitlements.get(`${id(1)}:package:ASSESSMENT_CENTER`), undefined);
+  // An unpaid package blocks any other purchase until it is settled.
+  await assert.rejects(service.checkout(buy({ requestId: id(30) })), e => e.code === 'SC19_PAYMENT_PURCHASE_PENDING');
+  stripe.pay(sid);
+  const ev = signed(completed(stripe.sessions.get(sid)));
+  assert.equal((await service.notification(ev.raw, ev.header)).state, 'applied');
+  assert.equal(st.entitlements.get(`${id(1)}:package:ASSESSMENT_CENTER`), 1);
+  assert.equal(st.credits.get(id(1)), 50);
+  assert.equal((await service.notification(ev.raw, ev.header)).state, 'already_applied');
+  assert.equal(st.entitlements.get(`${id(1)}:package:ASSESSMENT_CENTER`), 1);
+  assert.deepEqual(st.paidHook, [r.orderId]);
+  // Status and offer reads name the package.
+  const order = st.orders.get(r.orderId);
+  const runtime = { service, authenticate: async () => ({ userId: id(2) }), readOrder: async () => order,
+    listOffers: async () => [...STRIPE_PACKAGE_OFFERS], appOrigin: ORIGIN, signatureHeader: 'stripe-signature' };
+  const http = createSc19PaymentHttp(runtime);
+  const status = await (await http.order(new Request(`${ORIGIN}/api/billing/orders/${r.orderId}?companyId=${id(1)}`), r.orderId)).json();
+  assert.equal(status.packageCode, 'ASSESSMENT_CENTER'); assert.equal(status.status, 'paid'); assert.equal(status.credits, 50);
+  const offers = await (await http.offers(new Request(`${ORIGIN}/api/billing/offers?companyId=${id(1)}`))).json();
+  assert.deepEqual(offers.offers.map(o => [o.packageCode, o.amountMinor]), [['WERYFIKACJA', 61500], ['ASSESSMENT_CENTER', 149900]]);
 });
 
 test('same request id with a different package count is a conflict, never a silently different purchase', async () => {
@@ -440,6 +596,7 @@ test('a live key never opens a checkout (live payments stay closed)', async () =
 test('form encoding and source hygiene: no key in code, no Stripe invoices, P24 adapter untouched', () => {
   assert.equal(stripeForm({ a: { b: [{ c: 1 }] }, d: 'x y' }), 'a%5Bb%5D%5B0%5D%5Bc%5D=1&d=x+y');
   for (const file of ['lib/sc19-stripe-provider.ts', 'lib/sc19-stripe-config.ts', 'lib/sc19-stripe-runtime.ts', 'lib/stripe-catalog.ts',
+    'lib/sc19-stripe-packages.ts',
     'app/api/billing/stripe/webhook/route.ts']) {
     const src = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
     assert.doesNotMatch(src, /(sk|rk)_(live|test)_[A-Za-z0-9]{10,}|whsec_[A-Za-z0-9]{10,}/, file);
@@ -450,4 +607,13 @@ test('form encoding and source hygiene: no key in code, no Stripe invoices, P24 
     .replace(/--[^\n]*/g, '').replace(/\$\$[\s\S]*?\$\$/g, '');
   assert.doesNotMatch(sql, /\b(drop|truncate|delete\s+from|update\s+\w|rename|alter\s+column)\b/i);
   assert.match(sql, /mode = 'test' and provider = 'stripe'/);
+  const packages = readFileSync(new URL('../supabase/migrations/20261121150000_r7_stripe_packages.sql', import.meta.url), 'utf8')
+    .replace(/--[^\n]*/g, '').replace(/\$\$[\s\S]*?\$\$/g, '');
+  // The ONE drop allowed: the one-unresolved-order index, rebuilt at once under the
+  // same name without the retired Przelewy24 provider (Codex P2, PR #566). No data changes.
+  const rebuild = /drop index if exists private\.sc19_payment_one_unresolved;\s*create unique index sc19_payment_one_unresolved on private\.sc19_payment_orders\(company_id\)\s*where status='awaiting_payment' and provider<>'przelewy24';/;
+  assert.match(packages, rebuild);
+  assert.doesNotMatch(packages.replace(rebuild, ''), /\b(drop|truncate|delete\s+from|update\s+\w|rename|alter\s+column)\b/i);
+  assert.match(packages, /mode = 'test' and provider = 'stripe'/);
+  assert.doesNotMatch(packages, /\bto\s+(anon|authenticated)\b/i);
 });
