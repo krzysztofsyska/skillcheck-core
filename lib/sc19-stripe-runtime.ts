@@ -89,6 +89,9 @@ export async function stripeRuntime(config: Sc19StripeConfig) {
   // Live payments stay closed (AGENTS.md, payment path): a live key never opens a checkout.
   liveApproved: false,
   enabled: process.env.SC19_PACKAGES_ENABLED === 'true',
+  // R5 W2b: the CV pool from the slider is accepted (and validated) only with the
+  // slider flag on; default off keeps the request shape unchanged.
+  cvPoolEnabled: process.env.PRICING_CV_SLIDER_ENABLED === 'true',
   onPaid: afterStripePayment,
   authenticate: async () => {
     const buyer = await user();
