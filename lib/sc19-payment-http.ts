@@ -41,11 +41,14 @@ function errorResponse(error: unknown, webhook=false) {
     SC19_PAYMENTS_DISABLED:503, SC19_PAYMENT_RETRY:503, SC19_PAYMENT_FORBIDDEN:403, SC19_PAYMENT_INVALID:400,
     SC19_PAYMENT_BODY_TOO_LARGE:413, SC19_PAYMENT_ORIGIN:403, SC19_PAYMENT_CONTENT_TYPE:415,
     SC19_PAYMENT_OFFER_UNAVAILABLE:409, SC19_PAYMENT_REQUEST_CONFLICT:409,
-    SC19_PAYMENT_PACKAGE_UNAVAILABLE:409,
+    SC19_PAYMENT_PACKAGE_UNAVAILABLE:409, SC19_PAYMENT_CV_COUNT_INVALID:400,
     SC19_PAYMENT_NOTIFICATION_INVALID:400, SC19_PAYMENT_ORDER_MISSING:404,
   };
   // No successful acknowledgment until verification AND transaction commit.
-  return json({error:code},map[code] ?? (webhook ? 503 : 409));
+  // A buyer-facing Polish message only for a refused CV count (R5 W2b); every
+  // other answer keeps the bare code.
+  const message=!webhook && code==='SC19_PAYMENT_CV_COUNT_INVALID' && error instanceof Sc19PaymentError ? error.userMessage : null;
+  return json(message ? {error:code,message} : {error:code},map[code] ?? (webhook ? 503 : 409));
 }
 /** Serialized offer. `checkoutAvailable` says whether a payment can actually be
  * taken right now; the gross `amountMinor` stays authoritative and net/VAT are

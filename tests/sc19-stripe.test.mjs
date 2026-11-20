@@ -8,7 +8,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createSc19Payments, Sc19PaymentError } from '../lib/sc19-payments.ts';
 import { createSc19PaymentHttp } from '../lib/sc19-payment-http.ts';
 import { createStripeProvider, stripeModeOf, verifyStripeSignature, stripeForm, STRIPE_CHECKOUT_ORIGIN } from '../lib/sc19-stripe-provider.ts';
-import { STRIPE_APP, STRIPE_CATALOG, packagesForPool, stripeQuote } from '../lib/stripe-catalog.ts';
+import { STRIPE_APP, STRIPE_CATALOG, checkCvCount, packagesForPool, stripeQuote } from '../lib/stripe-catalog.ts';
 import { sc19StripeGate } from '../lib/sc19-stripe-config.ts';
 import { STRIPE_PACKAGE_OFFERS } from '../lib/sc19-stripe-packages.ts';
 
@@ -109,7 +109,7 @@ function harness(opts = {}) {
   const provider = createStripeProvider({ secretKey: SECRET, webhookSecret: WHSEC, mode: 'test', appOrigin: ORIGIN, scope,
     customers, fetch: stripe.fetch, nowMs: () => opts.now ?? Date.now(),
     async buyer(order) { assert.equal(order.buyerId, id(2)); return { email: 'buyer@example.test', companyName: 'Firma Testowa', nip: st.nip }; } });
-  const service = createSc19Payments({ store, provider, scope, checkoutOrigins: [STRIPE_CHECKOUT_ORIGIN], enabled: true, liveApproved: false,
+  const service = createSc19Payments({ store, provider, scope, checkoutOrigins: [STRIPE_CHECKOUT_ORIGIN], enabled: true, liveApproved: false, cvPoolEnabled: opts.cvPoolEnabled === true,
     authenticate: async () => ({ userId: id(2) }), onPaid: async order => { st.paidHook.push(order.id); } });
   return { st, stripe, service, provider };
 }
@@ -291,6 +291,80 @@ test('invalid pools, more than one WERYFIKACJA / AC package and package mismatch
     headers: { origin: ORIGIN, 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' },
     body: JSON.stringify(packageBuy('WERYFIKACJA', { packages: 2 })) }));
   assert.equal(response.status, 400);
+});
+
+test('R5 W2b: checkCvCount allows only slider values (co 5, catalog bounds) and turns them into whole packages', () => {
+  const ok = (code, cv, packages = null) => checkCvCount(code, cv, packages);
+  assert.deepEqual(ok('PRESELEKCJA', 5), { ok: true, packages: 1 });
+  assert.deepEqual(ok('PRESELEKCJA', 60), { ok: true, packages: 1 });
+  assert.deepEqual(ok('PRESELEKCJA', 65), { ok: true, packages: 2 });
+  assert.deepEqual(ok('PRESELEKCJA', 120, 2), { ok: true, packages: 2 });
+  assert.deepEqual(ok('PRESELEKCJA', 1200), { ok: true, packages: 20 });
+  assert.deepEqual(ok('WERYFIKACJA', 60), { ok: true, packages: 1 });
+  assert.deepEqual(ok('ASSESSMENT_CENTER', 50, 1), { ok: true, packages: 1 });
+  const refused = [
+    ['PRESELEKCJA', 0, /Najmniejsza pula CV to 5/], ['PRESELEKCJA', 62, /co 5\. 62 nie jest dozwoloną wartością/],
+    ['PRESELEKCJA', 1205, /Największa pula CV w jednym zakupie to 1200/], ['PRESELEKCJA', 60.5, /liczbą całkowitą/],
+    ['PRESELEKCJA', '60', /liczbą całkowitą/], ['PRESELEKCJA', -5, /liczbą całkowitą/], ['PRESELEKCJA', null, /liczbą całkowitą/],
+    ['PRESELEKCJA', Number.MAX_SAFE_INTEGER + 1, /liczbą całkowitą/],
+    ['WERYFIKACJA', 65, /WERYFIKACJA ma pulę 60 CV/], ['WERYFIKACJA', 55, /WERYFIKACJA ma pulę 60 CV/],
+    ['ASSESSMENT_CENTER', 60, /ASSESSMENT CENTER ma pulę 50 CV/],
+  ];
+  for (const [code, cv, message] of refused) {
+    const r = ok(code, cv);
+    assert.equal(r.ok, false, `${code} ${cv}`);
+    assert.match(r.message, message, `${code} ${cv}`);
+  }
+  assert.match(ok('PRESELEKCJA', 120, 3).message, /Liczba CV \(120\) nie zgadza się z liczbą pakietów \(3\)/);
+  assert.equal(ok('WERYFIKACJA', 60, 2).ok, false);
+});
+
+test('R5 W2b: checkout with cvCount — server derives packages, refuses non-slider values with a Polish message, flag off keeps the old shape', async () => {
+  // Flag off (default): the field does not exist, exactly as before W2b.
+  {
+    const { service, stripe } = harness();
+    await assert.rejects(service.checkout(buy({ cvCount: 120 })), e => e.code === 'SC19_PAYMENT_INVALID');
+    assert.equal(stripe.calls.length, 0);
+  }
+  const { service, stripe, st } = harness({ cvPoolEnabled: true });
+  for (const [extra, message] of [
+    [{ cvCount: 62 }, /co 5/], [{ cvCount: 1205 }, /1200/], [{ cvCount: '120' }, /całkowitą/],
+    [{ cvCount: 120, packages: 3 }, /nie zgadza się/],
+  ]) await assert.rejects(service.checkout(buy(extra)), e => e.code === 'SC19_PAYMENT_CV_COUNT_INVALID' && message.test(e.userMessage),
+    JSON.stringify(extra));
+  for (const [code, cvCount] of [['WERYFIKACJA', 65], ['ASSESSMENT_CENTER', 60]])
+    await assert.rejects(service.checkout(packageBuy(code, { cvCount })), e => e.code === 'SC19_PAYMENT_CV_COUNT_INVALID', code);
+  // A client price is never a field; adding one is still invalid.
+  await assert.rejects(service.checkout(buy({ cvCount: 120, amountMinor: 1 })), e => e.code === 'SC19_PAYMENT_INVALID');
+  assert.equal(stripe.calls.length, 0);
+  assert.equal(st.orders.size, 0);
+  // Over HTTP: 400 with the code and the Polish message, nothing else.
+  const runtime = { service, authenticate: async () => ({ userId: id(2) }), readOrder: async () => null, listOffers: async () => [],
+    appOrigin: ORIGIN, signatureHeader: 'stripe-signature' };
+  const response = await createSc19PaymentHttp(runtime).checkout(new Request(`${ORIGIN}/api/billing/checkout`, { method: 'POST',
+    headers: { origin: ORIGIN, 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' },
+    body: JSON.stringify(buy({ cvCount: 62 })) }));
+  assert.equal(response.status, 400);
+  const body = await response.json();
+  assert.deepEqual(Object.keys(body).sort(), ['error', 'message']);
+  assert.equal(body.error, 'SC19_PAYMENT_CV_COUNT_INVALID');
+  assert.match(body.message, /^Liczbę CV wybiera się co 5\./);
+  // A valid pool: 65 CV = 2 whole packages at the server price, never more.
+  const r = await service.checkout(buy({ cvCount: 65 }));
+  const order = st.orders.get(r.orderId);
+  assert.equal(order.credits, 120);
+  assert.equal(order.amountMinor, 60000);
+  // The same request with the same pool, or with the equal package count, is the same purchase.
+  const again = await service.checkout(buy({ cvCount: 120 }));
+  assert.equal(again.orderId, r.orderId);
+  const same = await service.checkout(buy({ packages: 2 }));
+  assert.equal(same.orderId, r.orderId);
+  await assert.rejects(service.checkout(buy({ cvCount: 180 })), e => e.code === 'SC19_PAYMENT_REQUEST_CONFLICT');
+});
+
+test('R5 W2b: the Stripe runtime reads the slider flag from env only, default off', () => {
+  const runtime = readFileSync(new URL('../lib/sc19-stripe-runtime.ts', import.meta.url), 'utf8');
+  assert.match(runtime, /cvPoolEnabled: process\.env\.PRICING_CV_SLIDER_ENABLED === 'true'/);
 });
 
 test('WERYFIKACJA: one package at the catalog price, its own metadata and line item', async () => {
