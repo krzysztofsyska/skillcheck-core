@@ -20,6 +20,7 @@ const paymentsPending='Płatność online jest w trakcie uruchamiania. Zamówien
 const checkoutFailed=(code:string)=>
   `Nie udało się otworzyć płatności. Ponów próbę — serwer sprawdzi istniejące zamówienie. Jeśli to się powtarza, napisz na pomoc@skillcheck.pl i podaj kod: ${code}.`;
 const reconciliationRequired='Tego zamówienia nie można już otworzyć ani potwierdzić automatycznie. Ponawianie nie pomoże. Napisz na pomoc@skillcheck.pl, podaj nazwę firmy — odblokujemy zamówienie i będziesz mógł złożyć nowe.';
+const sessionExpired='Sesja płatności wygasła. Zamówienie zamknęliśmy bez żadnej opłaty i bez przyznania pakietu. Kliknij ponownie, aby rozpocząć nowy zakup.';
 // R7: the Stripe hosted page. Methods offered there depend on the Stripe account;
 // the list names what the account is set up for, not a promise of each one.
 const stripeText='Płatność online obsługuje Stripe (karta, BLIK, Przelewy24, Apple Pay, Google Pay). Na stronie płatności podasz dane firmy do faktury, w tym NIP. Pakiet przyznajemy automatycznie po potwierdzeniu płatności przez Stripe, zwykle w ciągu kilku minut. Zasady reklamacji i odstąpienia opisuje Regulamin (§ 10–11).';
@@ -127,7 +128,7 @@ export default function Checkout({companyId,recruitmentId,statusOnly=false,testM
       const paidPackages=Number.isSafeInteger(data.credits/STRIPE_CATALOG[paidCode].cvCredits)
         ?data.credits/STRIPE_CATALOG[paidCode].cvCredits:null;
       setPaidOrder(data.status==='paid'?{offerId:data.offerId,termsRevision:data.termsRevision,packages:paidPackages}:null);
-      setMessage(data.status==='paid' ? (paidCode==='PRESELEKCJA' ? `Płatność potwierdzona. Przyznano ${data.credits} analiz CV.`
+      setMessage(data.status==='expired' ? sessionExpired : data.status==='paid' ? (paidCode==='PRESELEKCJA' ? `Płatność potwierdzona. Przyznano ${data.credits} analiz CV.`
         : `Płatność potwierdzona. Przyznano pakiet ${STRIPE_CATALOG[paidCode].name} i ${data.credits} analiz CV.`) :
         'Czekamy na potwierdzenie płatności. Kredyty zostaną przyznane po jej weryfikacji.');
     } catch {setMessage('Nie udało się sprawdzić statusu. Spróbuj ponownie.');}
@@ -190,6 +191,14 @@ export default function Checkout({companyId,recruitmentId,statusOnly=false,testM
         // blocked until we clear this one, so say that instead of "try again".
         if(data.error==='SC19_PAYMENT_RECONCILIATION_REQUIRED'){
           setMessage(reconciliationRequired);return;
+        }
+        // R7: the payment session expired unpaid and the order was closed without any
+        // charge or grant. Its request id is spent; the next click is a new purchase.
+        if(data.error==='SC19_PAYMENT_SESSION_EXPIRED'){
+          requestIds.delete(key);
+          try {sessionStorage.removeItem(key);sessionStorage.removeItem(`sc19:order:${companyId}`);} catch { /* optional */ }
+          setOrderId('');
+          setMessage(sessionExpired);return;
         }
         // Anything else: name the code instead of hiding it. These are short machine
         // codes (SC19_PAYMENT_RETRY, HTTP 503) with nothing private in them, and they

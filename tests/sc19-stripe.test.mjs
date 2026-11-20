@@ -77,7 +77,7 @@ function fakeStripe() {
 function harness(opts = {}) {
   const stripe = fakeStripe();
   const st = { offer: offer(), orders: new Map(), requests: new Map(), grants: new Map(), credits: new Map(),
-    entitlements: new Map(), customers: new Map(), paidHook: [], nip: '7394002294' };
+    entitlements: new Map(), customers: new Map(), paidHook: [], nip: '7394002294', closures: [] };
   let tail = Promise.resolve();
   const store = { async transaction(fn) {
     let release; const wait = tail; tail = new Promise(r => { release = r; }); await wait;
@@ -98,6 +98,15 @@ function harness(opts = {}) {
         if (o.packageCode) { const e = `${o.companyId}:package:${o.packageCode}`; st.entitlements.set(e, (st.entitlements.get(e) ?? 0) + 1); }
         return null;
       },
+      // Mirrors sc19_stripe.close_expired_order() (migration 20261121180000); absent = pre-migration database.
+      ...(opts.noClose ? {} : { async closeExpired(o, sid) {
+        const cur = st.orders.get(o.id);
+        if (cur.status === 'expired' && cur.sessionId === sid) return 'already_closed';
+        if (cur.status !== 'awaiting_payment' || cur.sessionId !== sid || [...st.grants.values()].includes(o.id))
+          throw new Sc19PaymentError('SC19_PAYMENT_RECONCILIATION_REQUIRED');
+        st.orders.set(o.id, { ...cur, status: 'expired' }); st.closures.push(o.id);
+        return 'closed';
+      } }),
     };
     try { return await fn(tx); } catch (e) { Object.assign(st, before); throw e; } finally { release(); }
   } };
@@ -496,7 +505,7 @@ test('webhook: the other application on the same account and other event types g
   const other = await send({ id: 'evt_fakeother1', type: 'checkout.session.completed', livemode: true,
     data: { object: { id: 'cs_live_fakeother', metadata: { app: 'skillcheck-preselekcja', payment_id: id(99) } } } });
   assert.equal(other.status, 200); assert.deepEqual(await other.json(), { state: 'ignored' });
-  for (const type of ['checkout.session.expired', 'checkout.session.async_payment_succeeded', 'payment_intent.succeeded', 'charge.refunded']) {
+  for (const type of ['checkout.session.async_payment_succeeded', 'payment_intent.succeeded', 'charge.refunded']) {
     const res = await send({ id: 'evt_fake' + type.replace(/[^A-Za-z0-9]/g, ''), type, livemode: false,
       data: { object: { id: 'cs_test_fakeany', metadata: { app: STRIPE_APP, order_id: id(50) } } } });
     assert.equal(res.status, 200, type);
@@ -522,8 +531,8 @@ test('a forged amount in the delivered body is ignored: payment truth is read fr
   assert.equal(st.credits.get(id(1)) ?? 0, 0);
 });
 
-test('an expired Stripe session is never re-bound (order row is immutable): fail closed, no new session; a live one is reused', async () => {
-  const { st, stripe, service } = harness();
+test('pre-migration database: an expired Stripe session is never re-bound: fail closed, no new session; a live one is reused', async () => {
+  const { st, stripe, service } = harness({ noClose: true });
   const first = await service.checkout(buy());
   const again = await service.checkout(buy());
   assert.equal(again.sessionId, first.sessionId);
@@ -616,4 +625,118 @@ test('form encoding and source hygiene: no key in code, no Stripe invoices, P24 
   assert.doesNotMatch(packages.replace(rebuild, ''), /\b(drop|truncate|delete\s+from|update\s+\w|rename|alter\s+column)\b/i);
   assert.match(packages, /mode = 'test' and provider = 'stripe'/);
   assert.doesNotMatch(packages, /\bto\s+(anon|authenticated)\b/i);
+});
+
+// R7 (issue #367, R7-STRIPE-EXPIRED-SESSION): an expired, unpaid session closes the
+// order without any grant, so the company can buy again.
+const expire = (stripe, sid) => Object.assign(stripe.sessions.get(sid), { status: 'expired', url: null });
+const expiredEvent = (session, extra = {}) => ({ id: 'evt_fakeexp' + Math.random().toString(36).slice(2, 10), type: 'checkout.session.expired',
+  livemode: false, data: { object: { id: session.id, metadata: { ...session.metadata } } }, ...extra });
+const sessionPosts = stripe => stripe.calls.filter(c => c.method === 'POST' && c.path === '/v1/checkout/sessions').length;
+
+test('PRESELEKCJA: an expired unpaid session closes the order without credits; a new purchase works and grants once', async () => {
+  const { st, stripe, service } = harness();
+  const first = await service.checkout(buy());
+  expire(stripe, first.sessionId);
+  await assert.rejects(service.checkout(buy()), e => e.code === 'SC19_PAYMENT_SESSION_EXPIRED' && /wygasła/.test(e.userMessage));
+  assert.equal(st.orders.get(first.orderId).status, 'expired');
+  assert.equal(st.orders.get(first.orderId).sessionId, first.sessionId, 'the expired session stays recorded');
+  assert.deepEqual(st.closures, [first.orderId]);
+  assert.equal(st.credits.get(id(1)) ?? 0, 0); assert.equal(st.grants.size, 0);
+  // The old request id never reopens the closed order.
+  await assert.rejects(service.checkout(buy()), e => e.code === 'SC19_PAYMENT_SESSION_EXPIRED');
+  assert.equal(sessionPosts(stripe), 1);
+  // A new request id is a new purchase with its own session.
+  const second = await service.checkout(buy({ requestId: id(11) }));
+  assert.notEqual(second.orderId, first.orderId); assert.notEqual(second.sessionId, first.sessionId);
+  stripe.pay(second.sessionId);
+  const ev = signed(completed(stripe.sessions.get(second.sessionId)));
+  assert.equal((await service.notification(ev.raw, ev.header)).state, 'applied');
+  assert.equal((await service.notification(ev.raw, ev.header)).state, 'already_applied');
+  assert.equal(st.credits.get(id(1)), 60);
+  assert.equal(st.orders.get(first.orderId).status, 'expired');
+});
+
+test('WERYFIKACJA and ASSESSMENT CENTER: an expired session closes the package order; nothing granted; buying again works', async () => {
+  for (const code of ['WERYFIKACJA', 'ASSESSMENT_CENTER']) {
+    const { st, stripe, service } = harness();
+    const o = STRIPE_PACKAGE_OFFERS.find(x => x.plan === code);
+    const req = n => ({ companyId: id(1), offerId: o.id, termsRevision: o.termsRevision, requestId: id(n), packageCode: code });
+    const first = await service.checkout(req(20));
+    expire(stripe, first.sessionId);
+    await assert.rejects(service.checkout(req(20)), e => e.code === 'SC19_PAYMENT_SESSION_EXPIRED', code);
+    assert.equal(st.orders.get(first.orderId).status, 'expired', code);
+    assert.equal(st.entitlements.size, 0, code); assert.equal(st.credits.get(id(1)) ?? 0, 0, code);
+    const second = await service.checkout(req(21));
+    stripe.pay(second.sessionId);
+    const ev = signed(completed(stripe.sessions.get(second.sessionId)));
+    assert.equal((await service.notification(ev.raw, ev.header)).state, 'applied', code);
+    assert.equal(st.entitlements.get(`${id(1)}:package:${code}`), 1, code);
+    assert.equal(st.credits.get(id(1)), STRIPE_CATALOG[code].cvCredits, code);
+  }
+});
+
+test('a live (open) or paid session is never closed', async () => {
+  const { st, stripe, service } = harness();
+  const first = await service.checkout(buy());
+  // Open: the same link comes back, nothing closed.
+  assert.equal((await service.checkout(buy())).url, first.url);
+  assert.equal(st.orders.get(first.orderId).status, 'awaiting_payment');
+  // Stripe says "expired" for a session that is in fact paid: never closed.
+  Object.assign(stripe.sessions.get(first.sessionId), { status: 'expired', payment_status: 'paid' });
+  assert.equal((await service.checkout(buy())).sessionId, first.sessionId);
+  // An expired event for an open session (API re-read says open): no action.
+  Object.assign(stripe.sessions.get(first.sessionId), { status: 'open', payment_status: 'unpaid' });
+  const ev = signed(expiredEvent(stripe.sessions.get(first.sessionId)));
+  assert.equal((await service.notification(ev.raw, ev.header)).state, 'ignored');
+  assert.equal(st.orders.get(first.orderId).status, 'awaiting_payment');
+  // Paid order: an expired event (even if the API said so) does not touch it.
+  stripe.pay(first.sessionId);
+  const paid = signed(completed(stripe.sessions.get(first.sessionId)));
+  assert.equal((await service.notification(paid.raw, paid.header)).state, 'applied');
+  Object.assign(stripe.sessions.get(first.sessionId), { status: 'expired', payment_status: 'unpaid' });
+  const late = signed(expiredEvent(stripe.sessions.get(first.sessionId)));
+  assert.equal((await service.notification(late.raw, late.header)).state, 'ignored');
+  assert.equal(st.orders.get(first.orderId).status, 'paid'); assert.equal(st.credits.get(id(1)), 60);
+  assert.deepEqual(st.closures, []);
+});
+
+test('webhook checkout.session.expired closes the order once; a late completed event for it grants nothing', async () => {
+  const { st, stripe, service } = harness();
+  const runtime = { service, authenticate: async () => null, readOrder: async () => null, listOffers: async () => [],
+    appOrigin: ORIGIN, signatureHeader: 'stripe-signature' };
+  const http = createSc19PaymentHttp(runtime);
+  const send = async event => { const ev = signed(event); return http.webhook(new Request(`${ORIGIN}/api/billing/stripe/webhook`,
+    { method: 'POST', headers: { 'stripe-signature': ev.header }, body: ev.raw })); };
+  const first = await service.checkout(buy());
+  expire(stripe, first.sessionId);
+  const res = await send(expiredEvent(stripe.sessions.get(first.sessionId)));
+  assert.equal(res.status, 200); assert.deepEqual(await res.json(), { state: 'closed' });
+  assert.deepEqual(await (await send(expiredEvent(stripe.sessions.get(first.sessionId)))).json(), { state: 'already_closed' });
+  assert.equal(st.orders.get(first.orderId).status, 'expired');
+  // Forged/late "completed" for the closed order: the API read is what counts; even
+  // if Stripe claimed it paid, the closed order never grants (refund / review).
+  Object.assign(stripe.sessions.get(first.sessionId), { status: 'complete', payment_status: 'paid', payment_intent: 'pi_fakelate1' });
+  const late = await send(completed(stripe.sessions.get(first.sessionId)));
+  assert.notEqual(late.status, 200);
+  assert.equal((await late.json()).error, 'SC19_PAYMENT_ORDER_CLOSED_REVIEW');
+  assert.equal(st.credits.get(id(1)) ?? 0, 0); assert.equal(st.grants.size, 0); assert.deepEqual(st.paidHook, []);
+  // The buyer's next click with the old request id: told to start again; a new one buys.
+  await assert.rejects(service.checkout(buy()), e => e.code === 'SC19_PAYMENT_SESSION_EXPIRED');
+  assert.notEqual((await service.checkout(buy({ requestId: id(12) }))).orderId, first.orderId);
+});
+
+test('an expired event for an unknown order or another bound session is acknowledged with no action', async () => {
+  const { st, stripe, service } = harness();
+  const first = await service.checkout(buy());
+  const other = { ...stripe.sessions.get(first.sessionId), id: 'cs_test_fakeothersession', status: 'expired', url: null };
+  stripe.sessions.set(other.id, other);
+  const ev = signed(expiredEvent(other));
+  assert.equal((await service.notification(ev.raw, ev.header)).state, 'ignored');
+  assert.equal(st.orders.get(first.orderId).status, 'awaiting_payment');
+  const unknown = { ...other, id: 'cs_test_fakeunknownorder', metadata: { ...other.metadata, order_id: id(77) }, client_reference_id: id(77) };
+  stripe.sessions.set(unknown.id, unknown);
+  const ev2 = signed(expiredEvent(unknown));
+  assert.equal((await service.notification(ev2.raw, ev2.header)).state, 'ignored');
+  assert.deepEqual(st.closures, []);
 });

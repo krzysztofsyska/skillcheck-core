@@ -2,7 +2,9 @@
  *
  * Hosted Stripe Checkout page, mode=payment, PLN. The package is granted ONLY by
  * the orchestration after a signed `checkout.session.completed` whose session,
- * re-read from the Stripe API, is paid and matches the stored order. Every other
+ * re-read from the Stripe API, is paid and matches the stored order. A signed
+ * `checkout.session.expired` whose session the API confirms expired unpaid closes
+ * the order bound to that session without any grant (R7). Every other
  * event type, and every event of another application on the same Stripe account
  * (metadata.app != "skillcheck-core"), is acknowledged with no action.
  *
@@ -308,8 +310,11 @@ export function createStripeProvider(options: StripeProviderOptions): PaymentPro
     if (!obj(event) || typeof event.id !== 'string' || !/^evt_[A-Za-z0-9]{6,200}$/.test(event.id) ||
         typeof event.type !== 'string' || !obj(event.data) || !obj(event.data.object))
       return fail('SC19_PAYMENT_NOTIFICATION_INVALID');
-    // Only checkout.session.completed grants a package; every other type is acknowledged.
-    if (event.type !== 'checkout.session.completed') return null;
+    // Only checkout.session.completed grants a package. checkout.session.expired (R7)
+    // only closes the unpaid order bound to that session, never grants. Every other
+    // type is acknowledged with no action.
+    const expiredEvent = event.type === 'checkout.session.expired';
+    if (event.type !== 'checkout.session.completed' && !expiredEvent) return null;
     const candidate = event.data.object;
     // The other application on the same Stripe account: 200, no action.
     if (meta(candidate).app !== STRIPE_APP) return null;
@@ -322,6 +327,13 @@ export function createStripeProvider(options: StripeProviderOptions): PaymentPro
         session.currency !== 'pln' || meta(session).app !== STRIPE_APP || typeof orderId !== 'string' ||
         !uuid.test(orderId) || session.client_reference_id !== orderId || !Number.isSafeInteger(session.amount_total))
       return fail('SC19_PAYMENT_NOTIFICATION_INVALID');
+    if (expiredEvent) {
+      // Closing needs Stripe's own word that the session expired unpaid; anything else
+      // (still open, complete, paid) is acknowledged with no action.
+      if (session.status !== 'expired' || session.payment_status === 'paid') return null;
+      return { eventId: event.id, orderId, sessionId: session.id, paymentId: session.id, scope,
+        amountMinor: Number(session.amount_total), currency: 'PLN', status: 'expired' };
+    }
     const intent = typeof session.payment_intent === 'string' ? session.payment_intent
       : obj(session.payment_intent) && typeof session.payment_intent.id === 'string' ? session.payment_intent.id : null;
     const paid = session.payment_status === 'paid' && session.status === 'complete';

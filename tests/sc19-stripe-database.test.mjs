@@ -545,3 +545,157 @@ test('R7: an unpaid package order blocks a new catalog order; a stale Przelewy24
   assert.equal((await db.query(`select prosrc from pg_proc where oid=$1::regprocedure`, [fn])).rows[0].prosrc,
     catalogOrderFn.slice(catalogOrderFn.indexOf('$$') + 2, catalogOrderFn.lastIndexOf('$$')));
 });
+
+// R7 (issue #367, R7-STRIPE-EXPIRED-SESSION): an expired, unpaid Stripe session
+// closes its order without any grant, through the REAL orchestration, Postgres store,
+// package extension, the real order guards (sc19_order_immutable from the SC-019
+// migration, package_order_immutable) and the payment adapter's restricted role.
+const expiredMigration = readFileSync(new URL('../supabase/migrations/20261121180000_r7_stripe_expired_session.sql', import.meta.url), 'utf8');
+const expiredRollback = readFileSync(new URL('../supabase/rollbacks/20261121180000_r7_stripe_expired_session_down.sql', import.meta.url), 'utf8');
+test('R7: an expired unpaid session closes PRESELEKCJA and package orders without granting; buying again works; late payment never grants; rollback',
+  { skip: !url && 'SC19_TEST_DATABASE_URL required' }, async t => {
+  const { createSc19Payments } = await import('../lib/sc19-payments.ts');
+  const { createPostgresPaymentStore } = await import('../lib/sc19-payment-postgres.ts');
+  const { stripePackageExtension, STRIPE_PACKAGE_OFFERS } = await import('../lib/sc19-stripe-packages.ts');
+  const { readStripeBuyerCompany } = await import('../lib/sc19-stripe-provider.ts');
+  const u = new URL(url);
+  if (!['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname)) throw Error('Disposable loopback database required');
+  const root = new pg.Client({ connectionString: u.href }); await root.connect();
+  const name = 'r7expired_' + randomBytes(6).toString('hex');
+  await root.query(`create database "${name}"`); u.pathname = '/' + name;
+  const db = new pg.Client({ connectionString: u.href }); await db.connect();
+  const pool = new pg.Pool({ connectionString: u.href, max: 3 });
+  t.after(async () => { await pool.end(); await db.end(); await root.query(`drop database "${name}"`); await root.end(); });
+  await db.query(fullFixture);
+  await db.query(guardFn); await db.query(guardTrigger);
+  await db.query(gateFn);
+  await db.query(migration);
+  await db.query(packagesMigration);
+  const A = '00000000-0000-4000-8000-000000000001', OWNER = '00000000-0000-4000-8000-000000000002';
+  const rolePool = { async connect() { const c = await pool.connect(); await c.query('set role sc19_p24_checkout'); return c; } };
+  const roleQuery = async (sql, values) => { const c = await rolePool.connect(); try { return (await c.query(sql, values)).rows; } finally { c.release(); } };
+  const scope = { provider: 'stripe', account: 'ktig-consulting', mode: 'test' };
+  const expired = new Set(); let paymentId = 'pi_fixtureexp1';
+  const provider = {
+    async createCheckout(order) {
+      const sid = `cs_test_${order.id.replace(/-/g, '')}`;
+      return { orderId: order.id, sessionId: sid, url: `https://checkout.stripe.com/c/pay/${sid}`, scope,
+        amountMinor: order.amountMinor, currency: 'PLN', paymentKind: 'one_time' };
+    },
+    async lookupCheckout() { return null; },
+    async expiredSession(order) { return expired.has(order.sessionId); },
+    async verifyAndRetrieve(raw) {
+      const e = JSON.parse(new TextDecoder().decode(raw));
+      return { eventId: 'evt_exp' + e.n, orderId: e.id, sessionId: e.sessionId, paymentId: e.status === 'expired' ? e.sessionId : paymentId,
+        scope, amountMinor: e.amountMinor, currency: 'PLN', status: e.status ?? 'paid' };
+    },
+  };
+  const store = createPostgresPaymentStore(rolePool, stripePackageExtension);
+  const service = createSc19Payments({ store, provider, scope, checkoutOrigins: ['https://checkout.stripe.com'],
+    enabled: true, liveApproved: false, authenticate: async () => ({ userId: OWNER }) });
+  const req = n => `00000000-0000-4000-8000-0000000003${String(n).padStart(2, '0')}`;
+  const deliver = (o, n, status) => service.notification(new TextEncoder().encode(JSON.stringify({ ...o, n, status })), 'sig');
+  const preselekcja = n => service.checkout({ companyId: A, offerId: 'preselekcja-60-2026-11-r3',
+    termsRevision: 'preselekcja-terms-2026-11-v3', requestId: req(n), packageCode: 'PRESELEKCJA' });
+  const ac = STRIPE_PACKAGE_OFFERS.find(o => o.plan === 'ASSESSMENT_CENTER');
+  const wer = STRIPE_PACKAGE_OFFERS.find(o => o.plan === 'WERYFIKACJA');
+  const pkg = (o, n) => service.checkout({ companyId: A, offerId: o.id, termsRevision: o.termsRevision, requestId: req(n), packageCode: o.plan });
+  const count = async sql => (await db.query(sql)).rows[0].n;
+
+  // Pre-migration schema: an expired session keeps the old answer.
+  const p0 = await preselekcja(1);
+  expired.add(p0.sessionId);
+  await assert.rejects(preselekcja(1), e => e.code === 'SC19_PAYMENT_RECONCILIATION_REQUIRED');
+
+  // Migration: erasure signature unchanged, not re-runnable; rollback before any closure restores the old state.
+  const signature = (await db.query('select private.erasure_schema_signature() s')).rows[0].s;
+  await db.query(expiredMigration);
+  assert.equal((await db.query('select private.erasure_schema_signature() s')).rows[0].s, signature, 'erasure signature unchanged');
+  await assert.rejects(db.query(expiredMigration), /already_installed/);
+  await db.query('rollback');
+  await db.query(expiredRollback);
+  assert.equal((await db.query(`select to_regclass('sc19_stripe.order_closures') r`)).rows[0].r, null);
+  assert.doesNotMatch((await db.query(`select pg_get_functiondef('private.sc19_payment_immutable()'::regprocedure) d`)).rows[0].d, /order_closures/);
+  assert.doesNotMatch((await db.query(`select pg_get_functiondef('sc19_stripe.buyer(uuid)'::regprocedure) d`)).rows[0].d, /sc19:expired/);
+  assert.equal((await db.query('select private.erasure_schema_signature() s')).rows[0].s, signature);
+  await db.query(expiredMigration);
+
+  // Grants: only the adapter role may close; nobody reads the closures directly.
+  assert.equal((await db.query(`select has_function_privilege('sc19_p24_checkout','sc19_stripe.close_expired_order(uuid,text)','execute') r`)).rows[0].r, true);
+  for (const role of ['anon', 'authenticated', 'sc19_p24_checkout'])
+    assert.equal((await db.query(`select has_table_privilege($1,'sc19_stripe.order_closures','select') r`, [role])).rows[0].r, false, role);
+  for (const role of ['anon', 'authenticated'])
+    assert.equal((await db.query(`select has_function_privilege($1,'sc19_stripe.close_expired_order(uuid,text)','execute') r`, [role])).rows[0].r, false, role);
+  const fn = (await db.query(`select prosecdef, proconfig from pg_proc where oid='sc19_stripe.close_expired_order(uuid,text)'::regprocedure`)).rows[0];
+  assert.equal(fn.prosecdef, true); assert.deepEqual(fn.proconfig, ['search_path=""']);
+
+  // PRESELEKCJA: the expired order closes without credits; same request id is told to start again.
+  await assert.rejects(preselekcja(1), e => e.code === 'SC19_PAYMENT_SESSION_EXPIRED');
+  assert.deepEqual((await db.query('select status, session_id, checkout_url, payment_id from private.sc19_payment_orders where id=$1', [p0.orderId])).rows,
+    [{ status: 'awaiting_payment', session_id: p0.sessionId, checkout_url: 'sc19:expired', payment_id: null }]);
+  assert.deepEqual((await db.query('select order_source, session_id, reason from sc19_stripe.order_closures')).rows,
+    [{ order_source: 'preselekcja', session_id: p0.sessionId, reason: 'session_expired' }]);
+  assert.equal((await store.readOrder(A, OWNER, p0.orderId)).status, 'expired');
+  await assert.rejects(preselekcja(1), e => e.code === 'SC19_PAYMENT_SESSION_EXPIRED');
+  assert.equal(await count('select count(*)::int n from private.sc19_credit_journal'), 0);
+  assert.equal(await count('select count(*)::int n from private.sc19_payment_grants'), 0);
+  // A closed order holds no buyer data and blocks no catalog order.
+  await assert.rejects(readStripeBuyerCompany(roleQuery, A), e => e.code === 'SC19_PAYMENT_FORBIDDEN');
+  const catalogId = (await db.query(`select public.sc19_create_catalog_order($1,gen_random_uuid(),$2::jsonb,true) id`,
+    [A, JSON.stringify(CATALOG_QUOTE)])).rows[0].id;
+  await db.query(`update sc19_commerce.orders set status='paid' where id=$1`, [catalogId]);
+  // A late "paid" for the closed order never grants: refused, and the database refuses too.
+  await assert.rejects(deliver({ id: p0.orderId, sessionId: p0.sessionId, amountMinor: 30000 }, 1), e => e.code === 'SC19_PAYMENT_ORDER_CLOSED_REVIEW');
+  await assert.rejects(db.query(`update private.sc19_payment_orders set status='paid', payment_id='pi_x', checkout_url='https://checkout.stripe.com/c/pay/x' where id=$1`, [p0.orderId]), /sc19_order_immutable/);
+  await assert.rejects(db.query(`update private.sc19_payment_orders set status='paid', payment_id='pi_x' where id=$1`, [p0.orderId]), /sc19_order_immutable/);
+  // The webhook "expired" for it again: already closed, nothing else happens.
+  assert.equal((await deliver({ id: p0.orderId, sessionId: p0.sessionId, amountMinor: 30000 }, 2, 'expired')).state, 'already_closed');
+
+  // A new purchase opens (the slot is free) and is granted exactly once.
+  const p1 = await preselekcja(2);
+  assert.notEqual(p1.orderId, p0.orderId);
+  assert.deepEqual(await readStripeBuyerCompany(roleQuery, A), { companyName: 'Firma A', nip: '7394002294' });
+  // An open session is never closed, by the checkout path or the database function.
+  assert.equal((await preselekcja(2)).sessionId, p1.sessionId);
+  await assert.rejects(roleQuery('select sc19_stripe.close_expired_order($1,$2)', [p1.orderId, 'cs_test_other']), /stripe_order_close_invalid/);
+  // A direct closing update without the closure row is refused (the role cannot even read the closures).
+  await assert.rejects(roleQuery(`update private.sc19_payment_orders set checkout_url='sc19:expired' where id=$1`, [p1.orderId]), /permission denied|sc19_order_immutable/);
+  await assert.rejects(db.query(`update private.sc19_payment_orders set checkout_url='sc19:expired' where id=$1`, [p1.orderId]), /sc19_order_immutable/);
+  assert.equal((await deliver({ id: p1.orderId, sessionId: p1.sessionId, amountMinor: 30000 }, 3)).state, 'applied');
+  assert.equal((await db.query('select available from private.sc19_balances where company_id=$1', [A])).rows[0].available, 60);
+  // A paid order is never closed.
+  await assert.rejects(roleQuery('select sc19_stripe.close_expired_order($1,$2)', [p1.orderId, p1.sessionId]), /stripe_order_close_invalid/);
+  expired.add(p1.sessionId);
+  assert.deepEqual(await preselekcja(2), { orderId: p1.orderId, paid: true });
+
+  // ASSESSMENT CENTER: closed by the signed expired event; nothing granted; WERYFIKACJA then opens.
+  paymentId = 'pi_fixtureexp2';
+  const a0 = await pkg(ac, 10);
+  assert.equal((await deliver({ id: a0.orderId, sessionId: a0.sessionId, amountMinor: 149900 }, 4, 'expired')).state, 'closed');
+  assert.equal((await db.query('select status from sc19_stripe.package_orders where id=$1', [a0.orderId])).rows[0].status, 'expired');
+  assert.equal(await count('select count(*)::int n from sc19_commerce.entitlements'), 0);
+  await assert.rejects(roleQuery(`select sc19_stripe.grant_package($1,'k')`, [a0.orderId]), /stripe_package_grant_invalid/);
+  await assert.rejects(deliver({ id: a0.orderId, sessionId: a0.sessionId, amountMinor: 149900 }, 5), e => e.code === 'SC19_PAYMENT_ORDER_CLOSED_REVIEW');
+  await assert.rejects(db.query(`update sc19_stripe.package_orders set status='awaiting_payment' where id=$1`, [a0.orderId]), /sc19_stripe_package_immutable/);
+  await assert.rejects(pkg(ac, 10), e => e.code === 'SC19_PAYMENT_SESSION_EXPIRED');
+  const w0 = await pkg(wer, 11);
+  expired.add(w0.sessionId);
+  await assert.rejects(pkg(wer, 11), e => e.code === 'SC19_PAYMENT_SESSION_EXPIRED');
+  assert.equal((await db.query('select status from sc19_stripe.package_orders where id=$1', [w0.orderId])).rows[0].status, 'expired');
+  // A direct expired update without a closure row is refused.
+  const w1 = await pkg(wer, 12);
+  await assert.rejects(db.query(`update sc19_stripe.package_orders set status='expired' where id=$1`, [w1.orderId]), /sc19_stripe_package_immutable/);
+  paymentId = 'pi_fixtureexp3';
+  assert.equal((await deliver({ id: w1.orderId, sessionId: w1.sessionId, amountMinor: 61500 }, 6)).state, 'applied');
+  assert.deepEqual((await db.query(`select code, available from sc19_commerce.entitlements where company_id=$1`, [A])).rows,
+    [{ code: 'package:WERYFIKACJA', available: 1 }]);
+  assert.equal((await db.query('select available from private.sc19_balances where company_id=$1', [A])).rows[0].available, 120);
+  assert.equal(await count('select count(*)::int n from sc19_stripe.order_closures'), 3);
+  await assert.rejects(db.query('delete from sc19_stripe.order_closures'), /sc19_stripe_package_immutable/);
+  await assert.rejects(db.query(`update sc19_stripe.order_closures set reason='session_expired'`), /sc19_stripe_package_immutable/);
+
+  // Rollback refuses once an order has been closed.
+  await assert.rejects(db.query(expiredRollback), /rollback_refused/);
+  await db.query('rollback').catch(() => {});
+  assert.equal((await db.query('select private.erasure_schema_signature() s')).rows[0].s, signature);
+});

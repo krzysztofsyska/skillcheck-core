@@ -21,7 +21,7 @@
 import type { PaymentOrder, PaymentTransaction } from './sc19-payments.ts';
 import { Sc19PaymentError, orderPackage } from './sc19-payments.ts';
 import type { CheckoutOffer, PaymentSqlClient, PaymentStoreExtension } from './sc19-payment-postgres.ts';
-import { RETIRED_PAYMENT_PROVIDERS } from './sc19-payment-postgres.ts';
+import { EXPIRED_CHECKOUT_MARKER, RETIRED_PAYMENT_PROVIDERS, closeExpiredInDatabase } from './sc19-payment-postgres.ts';
 import { STRIPE_CATALOG } from './stripe-catalog.ts';
 
 const fail = (code: string): never => { throw new Sc19PaymentError(code); };
@@ -139,8 +139,9 @@ export const stripePackageExtension: PaymentStoreExtension = Object.freeze({
           if (pending.rows[0]?.pending === true) return fail('SC19_PAYMENT_REQUEST_CONFLICT');
         }
         // A retired provider's unpaid order (Przelewy24) can never be paid and does not count.
+        // A closed PRESELEKCJA order (expired Stripe session, R7) does not count either.
         const open = await c.query(`select 1 from private.sc19_payment_orders where company_id=$1 and status='awaiting_payment'
-          and provider<>all($2::text[])`, [o.companyId, RETIRED_PAYMENT_PROVIDERS]);
+          and provider<>all($2::text[]) and checkout_url is distinct from $3`, [o.companyId, RETIRED_PAYMENT_PROVIDERS, EXPIRED_CHECKOUT_MARKER]);
         if (open.rows.length) return fail('SC19_PAYMENT_REQUEST_CONFLICT');
         await c.query(`insert into sc19_stripe.package_orders
           (id,company_id,buyer_id,request_id,package_code,offer_id,offer_revision,terms_revision,amount_minor,currency,credits,
@@ -156,6 +157,8 @@ export const stripePackageExtension: PaymentStoreExtension = Object.freeze({
           where id=$1 and company_id=$6`, [o.id, o.status, o.sessionId, o.checkoutUrl, o.paymentId, o.companyId]);
         if (r.rowCount !== 1) fail('SC19_PAYMENT_ORDER_MISSING');
       },
+      // One database function closes an expired order in either table (R7).
+      closeExpired: (o, sessionId) => closeExpiredInDatabase(c, o.id, sessionId),
       async grantOnce(key, o) {
         if (!isPackage(o)) return base.grantOnce(key, o);
         // The database grants CV analyses AND the package entitlement, once per key.
