@@ -15,6 +15,10 @@
 
 ## 20.11.2026
 
+**Usunięcie zamrożenia płatności w całości.** Właściciel, w sesji Claude Code
+https://claude.ai/code/session_01TVLzgdQ8WLLRFdJrQLxBYg, ok. 14:4x–14:5x:
+„Usunąć zamrożenie płatności całkowicie.”
+
 **Potwierdzenie decyzji z 19.11.2026 (Stripe zamiast Przelewy24, voicebot do 50 zł/mies., PR #546).**
 Pytanie czatu: „PR #546 zapisuje Twoje decyzje z 19.11 (Stripe zamiast P24, voicebot do 50 zł/mies.)
 … Odpisz TAK, jeśli tak zdecydowałeś” Właściciel, ok. 08:4x:

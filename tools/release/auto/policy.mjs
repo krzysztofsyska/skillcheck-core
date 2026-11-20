@@ -7,25 +7,21 @@ export const SHA = /^[0-9a-f]{40}$/;
 
 // Release scope that never ships automatically. Path based; a denylist on top of the
 // evidence checks, never proof of safety by itself.
-// PAYMENT_PATH_FREEZE: owner decision 2026-11-15 (#369), confirmed 2026-11-16: no automatic
-// release may change the payment path (integration, purchase flow, prices, package catalog,
-// order states) until Stripe works in test mode and the owner lifts the freeze. Always on.
+// The payment-path freeze (PAYMENT_PATH_FREEZE / PAYMENT_CONTENT_FREEZE, owner 2026-11-15) was
+// removed entirely by the owner on 2026-11-20 (docs/DECYZJE.md). Purchase flow, prices, package
+// catalog, order states and Stripe now release like other reviewed work. PAYMENTS below is the
+// older, separate rule for code that moves money or issues invoices (billing, P24, Fakturownia).
 export const OWNER_CONSENT_PATHS = [
   // Tokens match a whole path segment or any -/_/. delimited part of one (lib/sc19-payment-http.ts).
-  ['PAYMENTS', /(^|[/._-])(p24|przelewy24|billing|payments?|pricing|fakturownia|invoices?|platnosci)([/._-]|$)/i],
+  ['PAYMENTS', /(^|[/._-])(p24|przelewy24|billing|payments?|fakturownia|invoices?|platnosci)([/._-]|$)/i],
   ['OUTBOUND_SENDS', /(^|[/._-])(mail|email|sms|voice|retell|voip|notifications?|leads?|digest|resend)([/._-]|$)/i],
   // Senders whose names say nothing about sending (bulk CV upload notifies by e-mail).
   ['OUTBOUND_SENDS', /^lib\/cv-bulk(-runner)?\.ts$/],
-  // Files whose names say nothing about money but hold customer-facing prices / package copy.
-  ['PAYMENT_PATH_FREEZE', /^(app\/components\/marketing\/(content\.ts|package-comparison\.tsx)|app\/preselekcja\/|lib\/public-future-offers\.ts$)/],
-  ['PAYMENT_PATH_FREEZE', /(^|[/._-])(kup|buy|checkout|orders?|catalogs?|offers?|packages?|cennik|prices?|purchases?|stripe|zakupy?|zamowieni[ae])([/._-]|$)/i],
   // The publisher never ships changes to itself, workflows, env files or Supabase config:
   // those change who can do what, so they need a human merge. `tools/db-migrate/` is the executor
   // that runs with the production database credential (db-migrate-production and #491 auto-migrate).
   ['SECRETS_OR_PIPELINE', /^(\.github\/|\.env|vercel\.json$|tools\/agent-pipeline\/|tools\/release\/|tools\/db-migrate\/|supabase\/config)/i],
 ];
-
-const NPM_MANIFEST = /^(package|package-lock)\.json$/;
 
 // Single-pass SQL lexer (#491 review fix). Comments, string literals and quoted identifiers are
 // recognised TOGETHER, left to right, as PostgreSQL reads them, so a `--` or `/*` inside a literal
@@ -233,8 +229,6 @@ export function classifyRelease(files, migrations = []) {
   const reasons = [];
   for (const file of files) {
     for (const [code, re] of OWNER_CONSENT_PATHS) {
-      // npm manifests are not the package catalog ("pakiety"); only the freeze token "package" hits them.
-      if (code === 'PAYMENT_PATH_FREEZE' && NPM_MANIFEST.test(file)) continue;
       if (re.test(file)) reasons.push(`${code}:${file}`);
     }
   }
@@ -249,10 +243,10 @@ export function classifyRelease(files, migrations = []) {
   return { reasons, migrations: migrationFiles };
 }
 
-// Changed LINES (added or removed) that touch payments or prices, whatever the file is called:
-// a payment change hidden in an innocently named file is still caught. Fail-closed by design.
-// `zł` without \b: ł is not a word character for the regex engine, so \bzł\b would miss "300 zł".
-const PAYMENT_CONTENT = /przelewy24|\bp24[_A-Za-z]|P24_|sc19[-_]payment|fakturownia|stripe|checkout|zł|\bPLN\b|grosz|price|cennik|\bcen[ay]\b|amount_(gross|net)|orders?_status/iu;
+// Changed LINES (added or removed) that call the money-moving or invoicing code covered by
+// PAYMENTS, whatever the file is called. Prices, Stripe, checkout and order states are no longer
+// frozen (owner 2026-11-20).
+const PAYMENT_CONTENT = /przelewy24|\bp24[_A-Za-z]|P24_|sc19[-_]payment|fakturownia/iu;
 // Changed lines that touch real outbound sending (e-mail provider, voice provider).
 const OUTBOUND_CONTENT = /api\.resend\.com|RESEND_API_KEY|\bretell|sendBulkEmail|sendMail|twilio/i;
 export function paymentContentFindings(patches) {
@@ -261,7 +255,7 @@ export function paymentContentFindings(patches) {
   for (const p of patches) {
     if (!p || typeof p.path !== 'string' || typeof p.patch !== 'string') { out.push('PAYMENT_CONTENT_UNREADABLE'); continue; }
     const changed = p.patch.split('\n').filter(l => /^[+-]/.test(l) && !/^(\+\+\+|---) /.test(l));
-    if (changed.some(l => PAYMENT_CONTENT.test(l))) out.push(`PAYMENT_CONTENT_FREEZE:${p.path}`);
+    if (changed.some(l => PAYMENT_CONTENT.test(l))) out.push(`PAYMENTS_CONTENT:${p.path}`);
     if (changed.some(l => OUTBOUND_CONTENT.test(l))) out.push(`OUTBOUND_CONTENT:${p.path}`);
   }
   return out;

@@ -60,11 +60,9 @@ test('every migration needs a fresh completed backup and an unattended executor'
   assert.deepEqual(fresh, ['MIGRATION_EXECUTOR_UNAVAILABLE']);
 });
 
-test('payment-path freeze and other owner-consent areas stay refused', () => {
+test('owner-consent areas stay refused; the payment-path freeze is gone (owner 2026-11-20)', () => {
   for (const [file, code] of [
-    ['app/kup/page.tsx', 'PAYMENT_PATH_FREEZE'], ['lib/sc19-catalog-orders.ts', 'PAYMENT_PATH_FREEZE'],
-    ['lib/sc19-package-sizes.ts', 'PAYMENT_PATH_FREEZE'], ['app/cennik/page.tsx', 'PAYMENT_PATH_FREEZE'],
-    ['lib/stripe/client.ts', 'PAYMENT_PATH_FREEZE'], ['lib/p24/sign.ts', 'PAYMENTS'], ['app/operator/billing/page.tsx', 'PAYMENTS'],
+    ['lib/p24/sign.ts', 'PAYMENTS'], ['app/operator/billing/page.tsx', 'PAYMENTS'],
     ['lib/sales-leads.ts', 'OUTBOUND_SENDS'], ['lib/email/send.ts', 'OUTBOUND_SENDS'],
     ['.github/workflows/x.yml', 'SECRETS_OR_PIPELINE'], ['tools/release/auto/policy.mjs', 'SECRETS_OR_PIPELINE'],
     ['tools/agent-pipeline/x.mjs', 'SECRETS_OR_PIPELINE'], ['vercel.json', 'SECRETS_OR_PIPELINE'],
@@ -73,10 +71,12 @@ test('payment-path freeze and other owner-consent areas stay refused', () => {
   ]) {
     assert.ok(classifyRelease([file]).reasons.includes(`${code}:${file}`), file);
   }
-  assert.ok(classifyRelease(['tests/buy-preselekcja.test.mjs']).reasons.includes('PAYMENT_PATH_FREEZE:tests/buy-preselekcja.test.mjs'));
-  // npm manifests are not the package catalog; a nested package.json still is refused (not an npm root manifest).
-  assert.deepEqual(classifyRelease(['package.json', 'package-lock.json']).reasons, []);
-  assert.ok(classifyRelease(['app/packages/package.json']).reasons.some(r => r.startsWith('PAYMENT_PATH_FREEZE')));
+  // Purchase flow, prices, package catalog, order states and Stripe release like other work.
+  for (const file of ['app/kup/page.tsx', 'lib/sc19-catalog-orders.ts', 'lib/sc19-package-sizes.ts', 'app/cennik/page.tsx',
+    'lib/stripe/client.ts', 'lib/sc19-stripe-config.ts', 'lib/pricing/internal-calculator.ts', 'tests/buy-preselekcja.test.mjs',
+    'app/components/marketing/content.ts', 'app/preselekcja/page.tsx', 'package.json', 'package-lock.json']) {
+    assert.deepEqual(classifyRelease([file]).reasons, [], file);
+  }
   assert.deepEqual(classifyRelease([]).reasons, ['INVALID_OR_EMPTY_FILE_LIST']);
   assert.deepEqual(classifyRelease(['app/regulamin/page.tsx', 'docs/x.md']).reasons, []);
 });
@@ -185,7 +185,7 @@ test('scope gate: main accepts integration and release/auto-* promotions only', 
   assert.equal(classify({ files: ['app/x.tsx'], body: body.replace('PROMOTION: YES', 'PROMOTION: NO'), base: 'main', headRef: 'release/auto-pr-1' }).ok, false);
 });
 
-test('F1: every known payment/price file is frozen by path (repository-wide, cannot regress)', async () => {
+test('F1: every money-moving or invoicing file is refused by path (repository-wide, cannot regress)', async () => {
   const { execSync } = await import('node:child_process');
   const files = execSync("git ls-files app lib components scripts", { encoding: 'utf8' }).split('\n').filter(Boolean);
   const { readFileSync } = await import('node:fs');
@@ -194,29 +194,42 @@ test('F1: every known payment/price file is frozen by path (repository-wide, can
     'lib/ai-ledger-writer.ts': 'only imports the shared TLS helper previewPoolTls from sc19-payment-preview-tls.ts',
     'lib/competency-broker-tls.ts': 'only imports the shared TLS helper previewPoolTls from sc19-payment-preview-tls.ts',
     'lib/tenant-domain-network.ts': 'only imports the shared TLS helper previewPoolTls from sc19-payment-preview-tls.ts',
+    // Payment-path freeze removed by the owner on 2026-11-20: purchase flow, offers and the Stripe
+    // adapter release like other reviewed work. Their changed lines that touch the P24/Fakturownia
+    // or sc19-payments core are still refused by PAYMENTS_CONTENT.
+    'app/components/marketing/content.ts': 'marketing copy names Przelewy24',
+    'lib/buy-preselekcja.ts': 'purchase page copy names Przelewy24',
+    'lib/public-future-offers.ts': 'offer copy names Przelewy24',
+    'lib/sc19-offer-catalog-runtime.ts': 'offer catalog; imports the payments store',
+    'lib/sc19-offer-catalog.ts': 'offer catalog; imports the payments store',
+    'lib/sc19-stripe-config.ts': 'Stripe adapter (test mode until the owner enters live keys)',
+    'lib/sc19-stripe-provider.ts': 'Stripe adapter (test mode until the owner enters live keys)',
+    'lib/sc19-stripe-runtime.ts': 'Stripe adapter (test mode until the owner enters live keys)',
   };
   const missed = [];
   for (const f of files) {
     let text = ''; try { text = readFileSync(f, 'utf8'); } catch { continue; }
     if (!/przelewy24|sc19-payment|P24_|fakturownia/i.test(text) || NOT_PAYMENT[f]) continue;
-    if (!classifyRelease([f]).reasons.some(r => /^(PAYMENTS|PAYMENT_PATH_FREEZE):/.test(r))) missed.push(f);
+    if (!classifyRelease([f]).reasons.some(r => /^PAYMENTS:/.test(r))) missed.push(f);
   }
   assert.deepEqual(missed, []);
   for (const f of ['lib/sc19-payments.ts', 'lib/sc19-przelewy24-provider.ts', 'lib/sc19-fakturownia-provider.ts', 'lib/sc19-payment-http.ts',
-    'lib/sc19-p24-diagnostic.ts', 'app/components/marketing/content.ts', 'app/components/marketing/package-comparison.tsx', 'app/preselekcja/page.tsx']) {
+    'lib/sc19-p24-diagnostic.ts']) {
     assert.ok(classifyRelease([f]).reasons.length, f);
   }
 });
 
-test('payment content in changed lines is frozen whatever the file is called', () => {
+test('money-moving content in changed lines is refused whatever the file is called; prices are not', () => {
   const r = p => evaluateCandidate({ ...base(), patches: [{ path: 'app/regulamin/page.tsx', patch: p }] }).reasons;
-  assert.ok(r('+const x = createPrzelewy24Order()').includes('PAYMENT_CONTENT_FREEZE:app/regulamin/page.tsx'));
-  assert.ok(r('-  cena: "300 zł brutto"').includes('PAYMENT_CONTENT_FREEZE:app/regulamin/page.tsx'));
-  for (const line of ['+PRESELEKCJA za 300 zł brutto', '-<b>615 zł</b>', '+  label: "1 499 zł",', '+cena 300 zł', '-300 zł']) {
-    assert.ok(r(line).includes('PAYMENT_CONTENT_FREEZE:app/regulamin/page.tsx'), line);
+  assert.ok(r('+const x = createPrzelewy24Order()').includes('PAYMENTS_CONTENT:app/regulamin/page.tsx'));
+  assert.ok(r('+import { x } from "@/lib/sc19-payment-http"').includes('PAYMENTS_CONTENT:app/regulamin/page.tsx'));
+  assert.ok(r('+await fakturowniaInvoice()').includes('PAYMENTS_CONTENT:app/regulamin/page.tsx'));
+  // Payment-path freeze removed by the owner on 2026-11-20: prices, Stripe, checkout and order states ship.
+  for (const line of ['-  cena: "300 zł brutto"', '+PRESELEKCJA za 300 zł brutto', '-<b>615 zł</b>', '+  label: "1 499 zł",',
+    '+ status = orders_status', '+const s = new Stripe(key)', '+redirect("/checkout")']) {
+    assert.deepEqual(r(line), [], line);
   }
-  assert.ok(r('+ status = orders_status').includes('PAYMENT_CONTENT_FREEZE:app/regulamin/page.tsx'));
-  assert.deepEqual(r(' context line with 300 zł only\n+nowy akapit regulaminu'), []);
+  assert.deepEqual(r(' context line with createPrzelewy24Order only\n+nowy akapit regulaminu'), []);
   assert.ok(evaluateCandidate({ ...base(), patches: null }).reasons.includes('PAYMENT_CONTENT_UNREADABLE'));
 });
 
@@ -225,15 +238,6 @@ test('N1: product code waits while integration has migrations not yet on product
   assert.ok(evaluateCandidate({ ...base(), unreleasedMigrations: pending }).reasons.includes('UNRELEASED_MIGRATIONS_PRECEDE'));
   assert.deepEqual(evaluateCandidate({ ...base(), files: ['README.md'], patches: [{ path: 'README.md', patch: '+x' }], unreleasedMigrations: pending }).reasons, []);
   assert.ok(evaluateCandidate({ ...base(), unreleasedMigrations: null }).reasons.includes('UNRELEASED_MIGRATIONS_UNKNOWN'));
-});
-
-test('F1b: every price line in the product (repository-wide) trips the content freeze when changed', async () => {
-  const { execSync } = await import('node:child_process');
-  const { paymentContentFindings } = await import('../tools/release/auto/policy.mjs');
-  const lines = execSync("git grep -hE '[0-9][[:space:]]*zł' -- app lib components || true", { encoding: 'utf8' }).split('\n').filter(Boolean);
-  assert.ok(lines.length > 0, 'the product shows prices somewhere');
-  const missed = lines.filter(l => !paymentContentFindings([{ path: 'x.tsx', patch: `+${l}` }]).length);
-  assert.deepEqual(missed, []);
 });
 
 test('C2: every file that really sends mail/voice is refused by path (repository-wide); sending lines are refused anywhere', async () => {
@@ -355,7 +359,7 @@ test('C11: tylko powody _UNKNOWN są przejściowe, i tylko ograniczoną liczbę 
   assert.equal(isTransient(['REVIEW_THREADS_UNKNOWN']), true);
   assert.equal(isTransient(['WORKER_SCOPE_UNKNOWN', 'REVIEW_STATES_UNKNOWN']), true);
   // jeden powód mówiący coś o samej zmianie odbiera całości charakter przejściowy
-  assert.equal(isTransient(['REVIEW_THREADS_UNKNOWN', 'PAYMENT_PATH_FREEZE:app/kup/page.tsx']), false);
+  assert.equal(isTransient(['REVIEW_THREADS_UNKNOWN', 'PAYMENTS:lib/p24/sign.ts']), false);
   assert.equal(isTransient(['REVIEW_CHANGES_REQUESTED:bot']), false);
   assert.equal(isTransient([]), false, 'brak powodów nie jest przejściowy');
   assert.equal(isTransient(null), false);
