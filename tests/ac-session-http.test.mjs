@@ -12,7 +12,7 @@ import { ids, sessionPayload } from './helpers/ac-session-payload.mjs';
 // so the URL scoping in the page is what is tested here. Synthetic data only.
 const userId = ids.owner;
 const companyA = uuid(1), companyB = uuid(2);
-const recA = ids.recruitment, recBroken = uuid(13), recB = uuid(12);
+const recA = ids.recruitment, recBroken = uuid(13), recB = uuid(12), recNone = uuid(14);
 const posA = uuid(31), posB = uuid(32);
 const appC = uuid(43), appForeign = uuid(44);
 const ts = '2026-11-12T08:00:00.000Z';
@@ -22,7 +22,8 @@ const data = {
   company_members: [{ company_id: companyA, user_id: ids.recruiter, role: 'recruiter' }, { company_id: companyB, user_id: userId, role: 'recruiter' }],
   recruitments: [{ id: recA, company_id: companyA, position_id: posA, status: 'open', name: 'Rekrutacja HRBP' },
     { id: recBroken, company_id: companyA, position_id: posA, status: 'open', name: 'Rekrutacja Uszkodzona' },
-    { id: recB, company_id: companyB, position_id: posB, status: 'open', name: 'Rekrutacja Obca' }],
+    { id: recB, company_id: companyB, position_id: posB, status: 'open', name: 'Rekrutacja Obca' },
+    { id: recNone, company_id: companyA, position_id: posA, status: 'open', name: 'Rekrutacja Bez Sesji' }],
   positions: [{ id: posA, company_id: companyA, status: 'active', updated_at: ts }, { id: posB, company_id: companyB, status: 'active', updated_at: ts }],
   candidates: [
     { id: uuid(71), company_id: companyA, first_name: 'Anna', last_name: 'Finalistka' },
@@ -45,6 +46,9 @@ const audit = { fail: false, calls: [] };
 // R3-AC-NAMES: off = the name RPC does not exist (404, as before the migration); on = it answers
 // only for company A + its recruitment, like the database (42501 for anything else).
 const names = { on: false, calls: [] };
+// ROADMAP R3: undefined = the entitlement RPC is absent (404, page falls back to the forms);
+// otherwise the rows public.sc19_catalog_entitlements returns for the company asked about.
+const entitlements = { rows: undefined, calls: [] };
 const broken = () => { const payload = sessionPayload(); payload.finalists[0].stages[0].pair.sheets[1].authorId = ids.owner; return payload; };
 
 async function startStub(t, requests) {
@@ -69,6 +73,10 @@ async function startStub(t, requests) {
         names.calls.push(args);
         if (args.target_company !== companyA || args.target_recruitment !== recA) { res.statusCode = 403; return res.end(JSON.stringify({ code: '42501', message: 'forbidden' })); }
         return res.end(JSON.stringify([{ user_id: ids.recruiter, display_name: 'rekruter@example.invalid' }]));
+      }
+      if (name === 'sc19_catalog_entitlements' && entitlements.rows !== undefined) {
+        entitlements.calls.push(args);
+        return res.end(JSON.stringify(args.target_company === companyA ? entitlements.rows : []));
       }
       res.statusCode = 404; return res.end(JSON.stringify({ code: 'PGRST202', message: 'unknown rpc' }));
     }
@@ -212,6 +220,31 @@ test('SC-AC-SESSION HTTP: session page renders the evidence report, isolates con
       const other = await get(base, companyB, recB);
       assert.doesNotMatch(other.html, /example\.invalid/);
     } finally { names.on = false; }
+  });
+
+  await t.test('R3: without the paid ASSESSMENT CENTER package the owner sees why instead of the plan forms', async () => {
+    try {
+      entitlements.rows = []; entitlements.calls.length = 0;
+      const none = await get(base, companyA, recNone);
+      assert.equal(none.res.status, 200);
+      assert.match(none.html, /dostępna dla firm z opłaconym pakietem ASSESSMENT CENTER\. Twoja firma nie ma jeszcze tego pakietu\./);
+      assert.doesNotMatch(none.html, /Utwórz sesję/);
+      assert.deepEqual(entitlements.calls, [{ target_company: companyA }]);
+      for (const rows of [[{ code: 'package:WERYFIKACJA', available: 1, used: 0 }], [{ code: 'package:ASSESSMENT_CENTER', available: 0, used: 1 }]]) {
+        entitlements.rows = rows;
+        assert.match((await get(base, companyA, recNone)).html, /Twoja firma nie ma jeszcze tego pakietu/, JSON.stringify(rows));
+      }
+      entitlements.rows = [{ code: 'package:ASSESSMENT_CENTER', available: 1, used: 0 }];
+      const paid = await get(base, companyA, recNone);
+      assert.match(paid.html, /Utwórz sesję/); assert.doesNotMatch(paid.html, /nie ma jeszcze tego pakietu/);
+      // A malformed answer never blocks the page: the database still decides (PT402).
+      entitlements.rows = { unexpected: true };
+      assert.match((await get(base, companyA, recNone)).html, /Utwórz sesję/);
+      // An open session does not ask about the package at all.
+      entitlements.rows = []; entitlements.calls.length = 0;
+      assert.doesNotMatch((await get(base, companyA, recA)).html, /nie ma jeszcze tego pakietu/);
+      assert.deepEqual(entitlements.calls, []);
+    } finally { entitlements.rows = undefined; }
   });
 
   await t.test('without the Preview flag the page does not exist', async () => {

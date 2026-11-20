@@ -110,5 +110,7 @@
 20261120150000_r6_voice_retention.sql
 # R6 #542: read-only voice transcript reader for the recruiter (Preview page only): public.read_voice_interview_transcripts for one application, owner or recruiter of the company, completed calls only, minimal columns ({speaker,text} rows), transcripts past the 90-day retention shown as erased, every read logged in report_audit.voice_transcript_reads (no conversation text). Erasure signature unchanged, transcripts table stays closed to API roles, nothing sent, test data only.
 20261120180000_r6_voice_transcript_reader.sql
+# R3: an Assessment Center finalist session is tied to the company's paid ASSESSMENT CENTER package (sc19_commerce.entitlements 'package:ASSESSMENT_CENTER', available > 0): ac_session_create and opening a draft session (ac_session_set_status draft -> open) are refused without it (PT402). Functions only, owner-only helper, existing grants kept, erasure signature unchanged, no order, grant, price or payment change, nothing sent, test data only.
+20261121090000_r3_ac_package_gate.sql
 # R6-2 (packages): a company with a package gets its voice interview pool automatically (FREE 1 interview; PRESELEKCJA, WERYFIKACJA, ASSESSMENT_CENTER 10 each; owner 20.11.2026) through the owner-only, idempotent private.sc19_voice_sync_package_pools; an unused, owner-only top-up entry point (private.sc19_voice_grant_topup) for future purchased interviews, no price/checkout/payment; package data is only read. Functions only, erasure signature unchanged, nothing granted to API roles, not visible to customers, nothing sent, test data only.
-20261120210000_r6_voice_package_pools.sql
+20261121100000_r6_voice_package_pools.sql

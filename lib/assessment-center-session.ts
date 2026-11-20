@@ -1,6 +1,9 @@
 import { evaluateAssessmentCenter, type AssessmentCenterRating } from './assessment-center-evaluation.ts';
 import { parseExerciseDefinition, type ExerciseDefinition } from './exercise-definition.ts';
 
+/** ROADMAP R3: shown when the database refuses a session without the paid package (PT402). */
+export const AC_PACKAGE_MISSING_TEXT = 'Sesja Assessment Center jest dostępna dla firm z opłaconym pakietem ASSESSMENT CENTER. Twoja firma nie ma jeszcze tego pakietu.';
+
 /**
  * SC-AC-SESSION (#276). Pure, fail-closed projection of `public.ac_session_read`.
  * The RPC is the authorization boundary; this module never authorizes, never
