@@ -13,6 +13,13 @@
 4. Decyzje sprzed 16.11.2026 są w historii git plików `AGENTS.md` i `CLAUDE.md` (stan sprzed
    17.11.2026) oraz w `docs/BACKLOG.md` (archiwum).
 
+## 20.11.2026
+
+**Potwierdzenie decyzji z 19.11.2026 (Stripe zamiast Przelewy24, voicebot do 50 zł/mies., PR #546).**
+Pytanie czatu: „PR #546 zapisuje Twoje decyzje z 19.11 (Stripe zamiast P24, voicebot do 50 zł/mies.)
+… Odpisz TAK, jeśli tak zdecydowałeś” Właściciel, ok. 08:4x:
+„3 tak potwierdzam wyrzucamy całkowicie P24 , voicebot do 50zł”
+
 ## 19.11.2026
 
 **Zdjęcie zamrożenia ścieżki płatności w tym repozytorium, Stripe zamiast Przelewy24, voicebot

@@ -14,9 +14,10 @@
 4. **Decyzje właściciela** zapisujemy wyłącznie w [docs/DECYZJE.md](DECYZJE.md), jako dosłowne
    cytaty z datą. Tutaj zostaje tylko ich skutek.
 
-Bramki bezpieczeństwa (ścieżka płatności — zamrożenie zdjęte 19.11.2026, migracje produkcyjne, sekrety, ustawienia,
-kasowanie danych, nowe koszty, nowe realne wysyłki, polityka wydań #369) są w `AGENTS.md`. Ten plik
-ich nie zmienia i nie otwiera.
+Bramki bezpieczeństwa (migracje produkcyjne, sekrety, ustawienia, kasowanie danych, nowe koszty,
+nowe realne wysyłki, polityka wydań #369, ścieżka płatności) są w `AGENTS.md`. Ten plik ich nie
+definiuje; skutek decyzji z 19.11.2026 i 20.11.2026 (płatności na Stripe, voicebot do 50 zł/mies.)
+jest tylko odnotowany w etapach poniżej, a reguły i cytaty są w `AGENTS.md` i `docs/DECYZJE.md`.
 
 Statusy ustalono 17.11.2026 z kodu na `integration` (`7ebd063`) oraz z issue i PR.
 
