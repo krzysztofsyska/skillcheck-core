@@ -9,6 +9,7 @@
  */
 import type { SqlClient } from "./trusted-source-verifier.ts";
 import { projectVoiceProviderEvent } from "./provider-event-contract.ts";
+import { retellCostCentsToGrosze } from "./cost-cap.ts";
 import {
   readRetellWebhook, retellProviderEvent, RetellWebhookError,
   type RetellWebhookConfig, type RetellWebhookResult,
@@ -113,6 +114,18 @@ export async function ingestRetellWebhook(
     const row = attempts[0];
     const attempt = { company_id: String(row.company_id), id: String(row.id) };
     if (row.provider_account_id !== config.agentId) return fail("VOICE_ATTEMPT_REJECTED");
+    // R7: the real provider cost replaces the call's reservation in the monthly
+    // cost cap, once, in the same transaction as the receipt (a retried delivery
+    // is a duplicate above and records nothing). A call without a charge (ordered
+    // before the cap existed) or whose cost is already recorded is left as is;
+    // a cost above the reservation stops new calls for the month in the database.
+    const costGrosze = result.event === "call_analyzed" ? retellCostCentsToGrosze(result.costUsdCents) : null;
+    if (costGrosze !== null) {
+      await db.query([
+        "select voice_budget.record_call_cost(c.company_id,c.preparation_id,$3) from voice_budget.charges c",
+        "where c.company_id=$1 and c.preparation_id=$2 and c.cost_grosze is null",
+      ].join(" "), [attempt.company_id, String(row.preparation_id), costGrosze]);
+    }
     if (result.status === null) return receipt(result.event, "recorded", attempt);
     const transition = projectVoiceProviderEvent({
       providerAccountId: row.provider_account_id, providerCallId: row.provider_call_id,
