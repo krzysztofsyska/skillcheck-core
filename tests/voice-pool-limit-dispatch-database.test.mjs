@@ -7,7 +7,10 @@
 //  - pool 1: one order, a second one refused until the first is settled or released;
 //  - parallel orders never hold more units than the pool has;
 //  - an interview that did not take place (no answer, refused request, cancelled draft) gives the unit back;
-//  - another company's pool is never used and its data never appears in the error.
+//  - another company's pool is never used and its data never appears in the error;
+//  - a pool that comes from a package (PRESELEKCJA = 10, owner 20.11.2026) goes
+//    through the same order / settle / refund path: ten interviews, the eleventh
+//    refused, a call that did not take place gives its unit back.
 // Native disposable PostgreSQL only; synthetic data; no provider, no network, no API grant.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -24,6 +27,7 @@ import {
   prepareOfflineVoiceDraft, cancelOfflineVoicePreparation, OfflineVoicePreparationError,
   VOICE_PREPARATION_RECRUITER_MESSAGES, voicePreparationRecruiterMessage,
 } from '../lib/voice/offline-preparation.ts';
+import { ensurePackageVoicePool } from '../lib/voice/package-pools.ts';
 
 const behaviors = behaviorGuideDefinitions.map((x, i) => x.label + ': ' + (i < 4 ? 'Wysoki' : 'Standardowy'));
 const ratings = ['insufficient_data', 'meets', 'below', 'meets', 'above'];
@@ -289,6 +293,70 @@ test('R6-2: ordering a voice interview checks the package-free pool', async t =>
     assert.ok(outcome instanceof Error, 'the second reservation must fail');
     assert.ok(message('PT402', 'voice_entitlement_unavailable')(outcome), `${outcome.code} ${outcome.message}`);
     assert.deepEqual(await quota(last), { total: 1, used: 0, reserved: 1 });
+  });
+
+  await t.test('package pool (PRESELEKCJA = 10): last unit, refusal, refund, parallel orders, other company', async () => {
+    const tenant = await company(); // every company here has a PRESELEKCJA package (sc19_grant_paid)
+    const rivalTenant = await company();
+    const next = async () => { await h.asAdmin(); return ensurePackageVoicePool(db, tenant.companyId); };
+    const first = await next();
+    assert.equal(first.created, 1);
+    assert.equal(first.available, 10, 'PRESELEKCJA gives 10 interviews');
+    const pool = first.entitlementId;
+    assert.deepEqual(await quota(pool), { total: 10, used: 0, reserved: 0 });
+    // The other company's own package pool is separate and cannot be used by this company.
+    await h.asAdmin();
+    const rivalPool = (await ensurePackageVoicePool(db, rivalTenant.companyId)).entitlementId;
+    assert.notEqual(rivalPool, pool);
+    const extra = await ready(tenant);
+    // This company has its own pool, so a foreign pool id is simply unavailable.
+    await assert.rejects(order(extra, rivalPool), refused('UNAVAILABLE', rivalPool, rivalTenant.companyId));
+    assert.deepEqual(await quota(rivalPool), { total: 10, used: 0, reserved: 0 });
+
+    const candidates = [tenant, extra];
+    while (candidates.length < 11) candidates.push(await ready(tenant));
+    const orders = [];
+    for (const f of candidates.slice(0, 8)) {
+      const picked = await next();
+      assert.equal(picked.entitlementId, pool);
+      orders.push(await order(f, picked.entitlementId));
+    }
+    // Three orders at once for the last two units: never more than two held.
+    const burst = candidates.slice(8, 11);
+    const clients = await Promise.all(burst.map(f => server(f.owner)));
+    const results = await Promise.allSettled(burst.map((f, i) => order(f, pool, clients[i])));
+    for (const r of results) if (r.status === 'rejected')
+      assert.ok(['VOICE_PREPARATION_QUOTA_EXHAUSTED', 'VOICE_PREPARATION_CONFLICT'].includes(r.reason?.code), String(r.reason));
+    for (const [i, r] of results.entries()) if (r.status === 'rejected') {
+      await asServer(burst[i].owner, clients[i]);
+      await order(burst[i], pool, clients[i]).then(x => orders.push(x), e => assert.equal(e.code, 'VOICE_PREPARATION_QUOTA_EXHAUSTED'));
+    } else orders.push(r.value);
+    assert.equal(orders.length, 10, 'exactly ten interviews ordered');
+    assert.deepEqual(await quota(pool), { total: 10, used: 0, reserved: 10 });
+    // The last unit is taken: the next order is refused and the helper offers no pool.
+    const eleventh = await ready(tenant);
+    await assert.rejects(order(eleventh, pool), refused('QUOTA_EXHAUSTED'));
+    const empty = await next();
+    assert.equal(empty.entitlementId, null);
+    assert.equal(empty.available, 0);
+    assert.equal(empty.created, 0, 'syncing again never refills a used package');
+
+    // Interview 1 takes place (used); interview 2 does not (unit back).
+    const byOperation = new Map(orders.map((o, i) => [o.operationId, i]));
+    assert.equal(byOperation.size, 10);
+    const [done, missed] = [orders[0], orders[1]];
+    const held = await placed(tenant, done.operationId);
+    await finish(tenant, held, 'completed', 'completed');
+    const noShow = await placed(candidates[1], missed.operationId);
+    await finish(candidates[1], noShow, 'failed', 'no_answer');
+    assert.deepEqual(await quota(pool), { total: 10, used: 1, reserved: 8 });
+    const refunded = await next();
+    assert.equal(refunded.entitlementId, pool);
+    assert.equal(refunded.available, 1);
+    assert.equal((await order(eleventh, pool)).state, 'prepared_offline', 'the returned unit can be ordered again');
+    await assert.rejects(order(await ready(tenant), pool), refused('QUOTA_EXHAUSTED'));
+    assert.deepEqual(await quota(pool), { total: 10, used: 1, reserved: 9 });
+    assert.deepEqual(await quota(rivalPool), { total: 10, used: 0, reserved: 0 }, 'the other company is untouched');
   });
 
   await t.test('every refusal code has plain recruiter text without internal detail', () => {

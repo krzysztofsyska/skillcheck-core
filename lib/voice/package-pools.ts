@@ -1,6 +1,8 @@
 /**
  * R6-2 (packages), trusted-server-only: the voice interview pool that a
- * company's packages give it (FREE 1 interview, every paid package 10).
+ * company's packages give it (owner 20.11.2026: FREE 1 trial interview;
+ * PRESELEKCJA, WERYFIKACJA and ASSESSMENT CENTER 10 each). The numbers live only
+ * in private.sc19_voice_package_allowance; any other package gives nothing.
  *
  * `ensurePackageVoicePool` first gives the company every package pool it does
  * not have yet (private.sc19_voice_sync_package_pools, idempotent, owner-only),

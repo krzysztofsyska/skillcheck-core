@@ -1,7 +1,12 @@
 // R6-2 (packages): a company with a package gets its voice interview pool
 // automatically (20261121100000_r6_voice_package_pools.sql and
 // lib/voice/package-pools.ts) on the full checked-in chain:
-//  - FREE gives 1 interview, every paid package 10, an add-on gives nothing;
+//  - FREE gives 1 interview; PRESELEKCJA, WERYFIKACJA and ASSESSMENT CENTER 10
+//    each (owner 20.11.2026); an unknown package, an add-on, a pending or a
+//    cancelled order give nothing;
+//  - CV analyses, balances, orders and the package catalog are never changed;
+//  - the prepared top-up entry point grants once per purchase, only to a
+//    company that has a package, and is not callable by any API role;
 //  - FREE and an operator trial are the same single interview;
 //  - a catalog settlement (order + journal row) is one package, not two;
 //  - retries and parallel calls never grant twice;
@@ -19,7 +24,9 @@ import { ensurePackageVoicePool, PackageVoicePoolError } from '../lib/voice/pack
 // Same full-chain signature as tests/voice-pool-grant-database.test.mjs: functions only.
 const signature = '4dab3fae234c8233104d691381b62710570324bee0db8bd5df4be28f3d6702f7';
 const syncFn = 'private.sc19_voice_sync_package_pools(uuid)';
-const functions = [syncFn, 'private.sc19_voice_package_events(uuid)', 'private.sc19_voice_package_reference(uuid,text,text)'];
+const topupFn = 'private.sc19_voice_grant_topup(uuid,uuid,integer,timestamptz)';
+const functions = [syncFn, topupFn, 'private.sc19_voice_package_events(uuid)', 'private.sc19_voice_package_reference(uuid,text,text)',
+  'private.sc19_voice_package_allowance(text)', 'private.sc19_voice_package_window()'];
 const migration = '20261121100000_r6_voice_package_pools.sql';
 
 test('R6-2 packages: FREE 1, paid 10, idempotent, tenant-isolated, owner-only', async t => {
@@ -45,18 +52,37 @@ test('R6-2 packages: FREE 1, paid 10, idempotent, tenant-isolated, owner-only', 
   const version = await one("insert into pricing.catalog_versions(vat_basis_points) values(2300) returning id as v");
   // A catalog order settled the way sc19_settle_catalog_order does it: CV journal
   // row and the paid order under the same settlement reference.
-  const catalogOrder = async (company, kind = 'package') => {
+  const catalogOrder = async (company, kind = 'package', packageCode = 'PRESELEKCJA', status = 'paid') => {
     const reference = `synthetic-order-${randomUUID()}`;
     const order = await one(`insert into sc19_commerce.orders(company_id,buyer_id,request_id,version_id,kind,code,package_code,
       quantity,gross_minor,cv_credits,service_code,service_units,terms_revision,terms_text)
-      values($1,$2,$3,$4,$5,$6,'PRESELEKCJA',1,100,$7,$8,$9,'catalog-orders-v1','synthetic') returning id as v`,
-    [company, users.owner, randomUUID(), version, kind, kind === 'package' ? 'PRESELEKCJA' : 'skill_test',
+      values($1,$2,$3,$4,$5,$6,$7,1,100,$8,$9,$10,'catalog-orders-v1','synthetic') returning id as v`,
+    [company, users.owner, randomUUID(), version, kind, kind === 'package' ? packageCode : 'skill_test', packageCode,
       kind === 'package' ? 60 : 0, kind === 'package' ? null : 'skill_test', kind === 'package' ? 0 : 3]);
-    if (kind === 'package') await db.query(`insert into private.sc19_credit_journal(company_id,reason,delta,reference)
-      values($1,'paid_grant',60,$2)`, [company, `settlement:${reference}`]);
-    await db.query(`update sc19_commerce.orders set status='paid',settlement_reference=$2,settled_by=$3,settled_at=now() where id=$1`,
-      [order, reference, users.owner]);
+    if (status === 'paid') {
+      if (kind === 'package') await db.query(`insert into private.sc19_credit_journal(company_id,reason,delta,reference)
+        values($1,'paid_grant',60,$2)`, [company, `settlement:${reference}`]);
+      await db.query(`update sc19_commerce.orders set status='paid',settlement_reference=$2,settled_by=$3,settled_at=now() where id=$1`,
+        [order, reference, users.owner]);
+    } else if (status === 'cancelled') await db.query("update sc19_commerce.orders set status='cancelled' where id=$1", [order]);
+    return order;
   };
+  // A new company with its own synthetic owner (one company per owner).
+  const fresh = async () => {
+    const owner = randomUUID();
+    await h.asAdmin();
+    await db.query('insert into auth.users(id) values($1)', [owner]);
+    const f = await h.seed(owner);
+    await h.asAdmin();
+    return f;
+  };
+  // Everything a CV analysis or a sale depends on, as one digest.
+  const salesState = () => one(`select md5(concat_ws('|',
+    (select string_agg(j::text,',' order by j.id) from private.sc19_credit_journal j),
+    (select string_agg(b::text,',' order by b.company_id) from private.sc19_balances b),
+    (select string_agg(o::text,',' order by o.id) from sc19_commerce.orders o),
+    (select string_agg(e::text,',' order by e.company_id,e.code) from sc19_commerce.entitlements e),
+    (select string_agg(p::text,',' order by p.plan) from private.sc19_package_policy p))) as v`);
 
   await t.test('functions only, owner-only, nothing granted, package data untouched', async () => {
     assert.equal(await one('select private.erasure_schema_signature() as v'), signature);
@@ -144,7 +170,79 @@ test('R6-2 packages: FREE 1, paid 10, idempotent, tenant-isolated, owner-only', 
     assert.deepEqual((await pools(c.companyId)).map(p => p.total).sort((x, y) => x - y), [1, 10]);
   });
 
-  await t.test('a package older than its 365-day window gives no pool', async () => {
+  await t.test('each package gets its own number of interviews; unknown, pending and cancelled give nothing', async () => {
+    const allowance = async code => one('select private.sc19_voice_package_allowance($1) as v', [code]);
+    assert.equal(await allowance('FREE'), 1);
+    for (const code of ['PRESELEKCJA', 'WERYFIKACJA', 'ASSESSMENT_CENTER']) assert.equal(await allowance(code), 10, code);
+    for (const code of [null, '', 'free', 'Preselekcja', 'skill_test', 'ADDON', 'ASSESSMENT CENTER']) assert.equal(await allowance(code), 0, String(code));
+    const before = await salesState();
+    const w = await fresh();
+    await catalogOrder(w.companyId, 'package', 'WERYFIKACJA');
+    assert.deepEqual(await sync(w.companyId), { package_pools: 1, created: 1 }, 'WERYFIKACJA = one package (order + journal row)');
+    const ac = await fresh();
+    await catalogOrder(ac.companyId, 'package', 'ASSESSMENT_CENTER');
+    assert.deepEqual(await sync(ac.companyId), { package_pools: 1, created: 1 });
+    assert.deepEqual((await pools(w.companyId)).map(p => p.total), [10]);
+    assert.deepEqual((await pools(ac.companyId)).map(p => p.total), [10]);
+    // An order that is not paid gives nothing, and its later payment gives exactly one pool.
+    const q = await fresh();
+    await catalogOrder(q.companyId, 'package', 'WERYFIKACJA', 'cancelled');
+    const pending = await catalogOrder(q.companyId, 'package', 'ASSESSMENT_CENTER', 'pending');
+    assert.deepEqual(await sync(q.companyId), { package_pools: 0, created: 0 });
+    assert.equal((await pools(q.companyId)).length, 0);
+    const reference = `synthetic-order-${randomUUID()}`;
+    await db.query(`insert into private.sc19_credit_journal(company_id,reason,delta,reference) values($1,'paid_grant',60,$2)`,
+      [q.companyId, `settlement:${reference}`]);
+    await db.query(`update sc19_commerce.orders set status='paid',settlement_reference=$2,settled_by=$3,settled_at=now() where id=$1`,
+      [pending, reference, users.owner]);
+    const afterPayment = await salesState();
+    assert.deepEqual(await sync(q.companyId), { package_pools: 1, created: 1 });
+    assert.deepEqual((await pools(q.companyId)).map(p => p.total), [10]);
+    // A WERYFIKACJA order's CV journal row is the order, never an extra PRESELEKCJA.
+    assert.deepEqual((await db.query('select package_code from private.sc19_voice_package_events($1)', [w.companyId])).rows,
+      [{ package_code: 'WERYFIKACJA' }]);
+    // Syncing never changes CV analyses, balances, orders, sales entitlements or the package policy.
+    assert.equal(await salesState(), afterPayment, 'sync wrote nothing to the sales/CV data');
+    assert.notEqual(before, afterPayment, 'the synthetic sales above did change it (the digest is live)');
+    for (const company of [a.companyId, b.companyId]) await sync(company);
+    assert.equal(await salesState(), afterPayment);
+  });
+
+  await t.test('prepared top-up: once per purchase, only with a package, never callable by API roles', async () => {
+    const topup = (company, purchase, n = 5, days = 90) => db.query(
+      `select * from private.sc19_voice_grant_topup($1,$2,$3,clock_timestamp()+make_interval(days=>$4))`, [company, purchase, n, days]);
+    const none = await fresh();
+    await rejects(topup(none.companyId, randomUUID()), 'PT422', 'voice_topup_package_required');
+    assert.equal((await pools(none.companyId)).length, 0);
+    const buyer = await fresh();
+    await trial(buyer.companyId);
+    const purchase = randomUUID();
+    const first = (await topup(buyer.companyId, purchase, 5, 90)).rows[0];
+    assert.equal(first.replayed, false);
+    // The same purchase again: the same pool; changed terms: refused.
+    const again = (await db.query(`select * from private.sc19_voice_grant_topup($1,$2,5,(select expires_at from private.sc19_voice_entitlements where id=$3))`,
+      [buyer.companyId, purchase, first.entitlement_id])).rows[0];
+    assert.deepEqual(again, { entitlement_id: first.entitlement_id, replayed: true });
+    await assert.rejects(topup(buyer.companyId, purchase, 6, 90));
+    // The same purchase reference for another company is a different, separate pool.
+    await trial(none.companyId);
+    const otherCompany = (await topup(none.companyId, purchase, 2, 30)).rows[0];
+    assert.notEqual(otherCompany.entitlement_id, first.entitlement_id);
+    for (const bad of [[null, purchase], [buyer.companyId, null]]) await rejects(topup(bad[0], bad[1]), '22023');
+    await rejects(topup(buyer.companyId, randomUUID(), 0), '22023');
+    await rejects(topup(buyer.companyId, randomUUID(), 1001), '22023');
+    await rejects(topup(randomUUID(), randomUUID()), 'PT404');
+    // A top-up never changes the package pool and the package pool never absorbs it.
+    assert.deepEqual(await sync(buyer.companyId), { package_pools: 1, created: 1 });
+    assert.deepEqual((await pools(buyer.companyId)).map(p => p.total).sort((x, y) => x - y), [1, 5]);
+    assert.deepEqual(await balance(buyer.companyId), { granted: 6, used: 0, reserved: 0, available: 6 });
+    await h.asUser(users.owner);
+    await rejects(topup(a.companyId, randomUUID()), '42501');
+    await h.asAdmin();
+  });
+
+  await t.test('a package older than its technical window gives no pool', async () => {
+    assert.equal(await one("select private.sc19_voice_package_window()=interval '365 days' as v"), true);
     const d = await h.seed(users.viewer);
     await h.asAdmin();
     await trial(d.companyId, new Date(Date.now() - 366 * 86400000).toISOString());
