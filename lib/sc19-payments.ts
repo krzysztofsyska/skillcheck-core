@@ -86,8 +86,7 @@ export interface PaymentProvider {
   readSettlement?(order: PaymentOrder): Promise<VerifiedPayment | null>;
   /** OPTIONAL, READ ONLY: true only when the provider confirms the order's stored
    * session has expired and can never be paid (Stripe Checkout: status=expired).
-   * The order may then be bound to ONE fresh session at its snapshot price while
-   * its offer revision is still on sale. Throw on any uncertainty. */
+   * The stored link is then not returned. Throw on any uncertainty. */
   expiredSession?(order: PaymentOrder): Promise<boolean>;
   verifyAndRetrieve(rawBody: Uint8Array, signature: string): Promise<VerifiedPayment | null>;
 }
@@ -269,48 +268,6 @@ export function createSc19Payments(deps: PaymentDependencies) {
     });
   }
 
-  /** The stored session is provider-confirmed expired (unpayable). Re-check the
-   * order under its lock, create ONE fresh session with a key derived from the
-   * expired one (a retry reuses it), then bind it only if the order still points
-   * at the expired session. A paid order is never touched. */
-  async function replaceExpiredSession(order: PaymentOrder, userId: string):
-      Promise<HostedCheckout | { orderId: string; paid: true }> {
-    const expired = order.sessionId;
-    const checked = await deps.store.transaction<{ orderId: string; paid: true } | { reopen: PaymentOrder }>(async tx => {
-      const current = await tx.order(order.id);
-      if (!current) return deny('SC19_PAYMENT_RECONCILIATION_REQUIRED');
-      requireOrderScope(current);
-      const access = await tx.companyAccess(current.companyId, userId);
-      if (access.owner !== true || access.verified !== true ||
-          current.buyerId !== userId) return deny('SC19_PAYMENT_FORBIDDEN');
-      if (current.status === 'paid') return { orderId: current.id, paid: true as const };
-      if (current.status !== 'awaiting_payment' || current.sessionId !== expired)
-        return deny('SC19_PAYMENT_SESSION_CONFLICT');
-      const offer = clone(await tx.offer(current.offerId));
-      if (!offerValid(offer, current.offerId, current.termsRevision) ||
-          offer.revision !== current.offerRevision || packagesOf(offer, current) === null)
-        return deny('SC19_PAYMENT_RECONCILIATION_REQUIRED');
-      return { reopen: clone(current) };
-    });
-    if (!('reopen' in checked)) return checked;
-    const fresh = validateHosted(checked.reopen, clone(await deps.provider.createCheckout(
-      clone(checked.reopen), `${checkoutKey(checked.reopen)}:after:${expired}`)));
-    return deps.store.transaction(async tx => {
-      const current = await tx.order(order.id);
-      if (!current) return deny('SC19_PAYMENT_ORDER_MISSING');
-      requireOrderScope(current);
-      validateHosted(current, fresh);
-      const access = await tx.companyAccess(current.companyId, userId);
-      if (access.owner !== true || access.verified !== true ||
-          current.buyerId !== userId) return deny('SC19_PAYMENT_FORBIDDEN');
-      if (current.status === 'paid') return { orderId: current.id, paid: true as const };
-      if (current.sessionId === fresh.sessionId && current.checkoutUrl === fresh.url) return fresh;
-      if (current.sessionId !== expired) return deny('SC19_PAYMENT_SESSION_CONFLICT');
-      await tx.saveOrder({ ...current, sessionId: fresh.sessionId, checkoutUrl: fresh.url });
-      return fresh;
-    });
-  }
-
   async function checkout(input: unknown): Promise<HostedCheckout | { orderId: string; paid: true }> {
     checkoutGate();
     const req = clone(input);
@@ -370,9 +327,13 @@ export function createSc19Payments(deps: PaymentDependencies) {
     });
     if (order.status === 'paid') return { orderId: order.id, paid: true };
     if (order.sessionId && order.checkoutUrl) {
-      if (!deps.provider.expiredSession || !(await deps.provider.expiredSession(clone(order))))
-        return storedCheckout(order);
-      return replaceExpiredSession(order, userId);
+      // A provider-confirmed expired session can never be paid. The order row keeps
+      // its session for good (trigger sc19_order_immutable), so the buyer gets the
+      // reconciliation answer instead of a dead payment link. Releasing such an
+      // order needs an owner-approved schema change (see PR #556, KNOWN ISSUES).
+      if (deps.provider.expiredSession && await deps.provider.expiredSession(clone(order)))
+        return deny('SC19_PAYMENT_RECONCILIATION_REQUIRED');
+      return storedCheckout(order);
     }
     let pending = order;
     if (Date.now() >= order.checkoutDeadlineMs) {

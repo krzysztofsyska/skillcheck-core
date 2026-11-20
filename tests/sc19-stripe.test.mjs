@@ -337,23 +337,32 @@ test('a forged amount in the delivered body is ignored: payment truth is read fr
   assert.equal(st.credits.get(id(1)) ?? 0, 0);
 });
 
-test('an expired Stripe session is replaced by one fresh session at the same snapshot; a live one is reused', async () => {
+test('an expired Stripe session is never re-bound (order row is immutable): fail closed, no new session; a live one is reused', async () => {
   const { st, stripe, service } = harness();
   const first = await service.checkout(buy());
   const again = await service.checkout(buy());
   assert.equal(again.sessionId, first.sessionId);
   stripe.sessions.get(first.sessionId).status = 'expired';
   stripe.sessions.get(first.sessionId).url = null;
-  const fresh = await service.checkout(buy());
-  assert.notEqual(fresh.sessionId, first.sessionId);
-  assert.equal(st.orders.get(first.orderId).sessionId, fresh.sessionId);
-  assert.equal(fresh.amountMinor, 30000);
-  const keys = stripe.calls.filter(c => c.method === 'POST' && c.path === '/v1/checkout/sessions').map(c => c.key);
-  assert.deepEqual(keys, [`skillcheck-core:sc19:${first.orderId}`, `skillcheck-core:sc19:${first.orderId}:after:${first.sessionId}`]);
-  // The fresh session settles normally.
-  stripe.pay(fresh.sessionId); const ev = signed(completed(stripe.sessions.get(fresh.sessionId)));
-  assert.equal((await service.notification(ev.raw, ev.header)).state, 'applied');
-  assert.equal(st.credits.get(id(1)), 60);
+  await assert.rejects(service.checkout(buy()), e => e.code === 'SC19_PAYMENT_RECONCILIATION_REQUIRED');
+  assert.equal(st.orders.get(first.orderId).sessionId, first.sessionId, 'session_id unchanged (trigger sc19_order_immutable)');
+  assert.equal(stripe.calls.filter(c => c.method === 'POST' && c.path === '/v1/checkout/sessions').length, 1);
+});
+
+test('P24 notifications stay on the P24 runtime; a status read of another provider\'s order does not fail', async () => {
+  const route = readFileSync(new URL('../app/api/billing/webhook/route.ts', import.meta.url), 'utf8');
+  assert.match(route, /resolveSc19P24Runtime\(request\)\)\.webhook/);
+  assert.doesNotMatch(route, /resolveSc19PaymentRuntime|resolveSc19StripeRuntime/);
+  const { service } = harness();
+  const p24Order = { id: id(70), companyId: id(1), buyerId: id(2), requestId: id(71), offerId: 'preselection-v1', offerRevision: 'revision-v1',
+    termsRevision: 'terms-v1', amountMinor: 30000, currency: 'PLN', credits: 60, scope: { provider: 'przelewy24', account: '1', mode: 'test' },
+    status: 'awaiting_payment', sessionId: 'p24-session', checkoutUrl: 'https://sandbox.przelewy24.pl/trnRequest/x', paymentId: null, checkoutDeadlineMs: 1 };
+  const runtime = { service, authenticate: async () => ({ userId: id(2) }), readOrder: async () => p24Order, listOffers: async () => [],
+    appOrigin: ORIGIN, signatureHeader: 'stripe-signature' };
+  const res = await createSc19PaymentHttp(runtime).order(new Request(`${ORIGIN}/api/billing/orders/${id(70)}?companyId=${id(1)}`,
+    { method: 'POST', headers: { origin: ORIGIN, 'sec-fetch-site': 'same-origin' } }), id(70));
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).status, 'awaiting_payment');
 });
 
 test('KTIG control purchase (seller NIP) grants the package like any other; no invoice code exists yet', async () => {

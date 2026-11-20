@@ -10,6 +10,12 @@ import pg from 'pg';
 const url = process.env.SC19_TEST_DATABASE_URL;
 const migration = readFileSync(new URL('../supabase/migrations/20261121110000_r7_stripe_checkout.sql', import.meta.url), 'utf8');
 const rollback = readFileSync(new URL('../supabase/rollbacks/20261121110000_r7_stripe_checkout_down.sql', import.meta.url), 'utf8');
+// The REAL order guard, taken verbatim from the SC-019 migration: the trigger
+// function and its trigger on private.sc19_payment_orders.
+const history = readFileSync(new URL('../supabase/migrations/20261021084732_sc019_credits_payments_inventory.sql', import.meta.url), 'utf8');
+const guardFn = history.slice(history.indexOf('create or replace function private.sc19_payment_immutable()'),
+  history.indexOf('end $$;', history.indexOf('create or replace function private.sc19_payment_immutable()')) + 'end $$;'.length);
+const guardTrigger = /create trigger sc19_order_immutable[^;]+;/.exec(history)[0];
 const fixture = `
  do $$ begin
   if not exists(select from pg_roles where rolname='anon') then create role anon nologin; end if;
@@ -20,10 +26,10 @@ const fixture = `
  create table public.companies(id uuid primary key, name text not null, owner_id uuid not null);
  create table private.sc19_trial_approvals(company_id uuid primary key references public.companies(id), nip text not null);
  create table private.sc19_payment_orders(id uuid primary key, company_id uuid not null, provider text not null,
-  account text not null, mode text not null, status text not null);
+  account text not null, mode text not null, status text not null, session_id text, checkout_url text, payment_id text);
  alter table private.sc19_payment_orders enable row level security;
  grant usage on schema private to sc19_p24_checkout;
- grant select, insert on private.sc19_payment_orders to sc19_p24_checkout;
+ grant select, insert, update(status, session_id, checkout_url, payment_id) on private.sc19_payment_orders to sc19_p24_checkout;
  create policy p24_checkout_orders on private.sc19_payment_orders to sc19_p24_checkout
   using (mode='test' and provider='przelewy24') with check (mode='test' and provider='przelewy24');
  create function private.erasure_schema_signature() returns text language sql stable as $f$
@@ -46,6 +52,7 @@ test('R7 migration: additive, TEST-mode Stripe orders only, buyer data only for 
   const db = new pg.Client({ connectionString: u.href }); await db.connect();
   t.after(async () => { await db.end(); await root.query(`drop database "${name}"`); await root.end(); });
   await db.query(fixture);
+  await db.query(guardFn); await db.query(guardTrigger);
   const signature = (await db.query('select private.erasure_schema_signature() s')).rows[0].s;
   await db.query(migration);
   assert.equal((await db.query('select private.erasure_schema_signature() s')).rows[0].s, signature);
@@ -63,6 +70,15 @@ test('R7 migration: additive, TEST-mode Stripe orders only, buyer data only for 
   // No unpaid Stripe order yet: no buyer data.
   assert.equal((await asRole('select * from sc19_stripe.buyer($1)', [A])).rows.length, 0);
   await order('test');
+  // Stripe order lifecycle under the real immutability trigger: binding the first
+  // session and settling are allowed; replacing a bound session is not (why an
+  // expired Stripe session is refused rather than re-bound).
+  const stripeOrder = (await db.query(`select id from private.sc19_payment_orders where provider='stripe'`)).rows[0].id;
+  await asRole(`update private.sc19_payment_orders set session_id='cs_test_a', checkout_url='https://checkout.stripe.com/c/pay/cs_test_a' where id=$1`, [stripeOrder]);
+  await assert.rejects(asRole(`update private.sc19_payment_orders set session_id='cs_test_b', checkout_url='https://checkout.stripe.com/c/pay/cs_test_b' where id=$1`, [stripeOrder]), /sc19_order_immutable/);
+  await asRole(`update private.sc19_payment_orders set status='paid', payment_id='pi_fixture1' where id=$1`, [stripeOrder]);
+  await assert.rejects(asRole(`update private.sc19_payment_orders set status='awaiting_payment' where id=$1`, [stripeOrder]), /sc19_order_immutable/);
+  await asRole(`insert into private.sc19_payment_orders values (gen_random_uuid(),$1,'stripe','ktig-consulting','test','awaiting_payment')`, [A]);
   await assert.rejects(order('live'), /row-level security/);
   await assert.rejects(order('test', 'stripe', 'another-account'), /row-level security/);
   await order('test', 'przelewy24');
@@ -84,7 +100,8 @@ test('R7 migration: additive, TEST-mode Stripe orders only, buyer data only for 
   // Rollback refuses while accounting records exist, then undoes everything.
   await assert.rejects(db.query(rollback), /refused/);
   await db.query('rollback').catch(() => {});
-  await db.query(`delete from private.sc19_payment_orders where provider='stripe'; delete from sc19_stripe.customers;`);
+  await db.query(`alter table private.sc19_payment_orders disable trigger sc19_order_immutable;
+   delete from private.sc19_payment_orders where provider='stripe'; delete from sc19_stripe.customers;`);
   await db.query(rollback);
   assert.equal((await db.query(`select to_regnamespace('sc19_stripe') n`)).rows[0].n, null);
   assert.equal((await db.query(`select count(*)::int n from pg_policies where policyname like 'stripe_%'`)).rows[0].n, 0);

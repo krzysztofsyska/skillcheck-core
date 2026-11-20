@@ -47,7 +47,7 @@ export default function Checkout({companyId,recruitmentId,sandbox=false,statusOn
   const [accepted,setAccepted]=useState(false),[busy,setBusy]=useState(false);
   const [loading,setLoading]=useState(true),[message,setMessage]=useState('');
   const [checkoutAvailable,setCheckoutAvailable]=useState(true);
-  const [orderId,setOrderId]=useState(''),[paidOrder,setPaidOrder]=useState<{offerId:string;termsRevision:string}|null>(null);
+  const [orderId,setOrderId]=useState(''),[paidOrder,setPaidOrder]=useState<{offerId:string;termsRevision:string;packages:number|null}|null>(null);
   const [requestIds]=useState(()=>new Map<string,string>());
   const [returnedRecruitment,setReturnedRecruitment]=useState<string|null>(null);
   const selectedOffer=offers.find(o=>o.id===selected);
@@ -114,15 +114,19 @@ export default function Checkout({companyId,recruitmentId,sandbox=false,statusOn
     try {
       const r=await fetch(`/api/billing/orders/${encodeURIComponent(id)}?companyId=${encodeURIComponent(companyId)}`,{cache:'no-store',method:sandbox&&!stripe?'POST':'GET'});
       if(!r.ok)throw Error(); const data=await r.json();
-      setPaidOrder(data.status==='paid'?{offerId:data.offerId,termsRevision:data.termsRevision}:null);
+      // The paid order's own package count (its CV pool / 60), not the form's current
+      // value: the request key of THAT purchase is the one to clear.
+      const paidPackages=stripe&&Number.isSafeInteger(data.credits/STRIPE_CATALOG.PRESELEKCJA.cvCredits)
+        ?data.credits/STRIPE_CATALOG.PRESELEKCJA.cvCredits:null;
+      setPaidOrder(data.status==='paid'?{offerId:data.offerId,termsRevision:data.termsRevision,packages:paidPackages}:null);
       setMessage(data.status==='paid' ? `Płatność potwierdzona. Przyznano ${data.credits} analiz CV.` :
         'Czekamy na potwierdzenie płatności. Kredyty zostaną przyznane po jej weryfikacji.');
     } catch {setMessage('Nie udało się sprawdzić statusu. Spróbuj ponownie.');}
     finally {setBusy(false);}
   }
   function nextPurchase() {
-    if(!paidOrder||!offer)return;
-    const key=`sc19:request:${companyId}:${paidOrder.offerId}:${paidOrder.termsRevision}${stripe?`:${packages}`:''}`;
+    if(!paidOrder)return;
+    const key=`sc19:request:${companyId}:${paidOrder.offerId}:${paidOrder.termsRevision}${stripe?`:${paidOrder.packages}`:''}`;
     requestIds.delete(key);
     try {
       sessionStorage.removeItem(key);

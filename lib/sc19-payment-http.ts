@@ -127,7 +127,10 @@ export function createSc19PaymentHttp(runtime: PaymentHttpRuntime | null, catalo
               ['cross-site','none'].includes(request.headers.get('sec-fetch-site') ?? ''))
             throw new Sc19PaymentError('SC19_PAYMENT_ORIGIN');
           if (o.status === 'awaiting_payment' && o.sessionId) {
-            await runtime.service.refreshSettlement(o);
+            // An order of another provider (a Przelewy24 order read while Stripe takes
+            // new purchases) settles through its own webhook; only show its status.
+            try { await runtime.service.refreshSettlement(o); }
+            catch (e) { if (!(e instanceof Sc19PaymentError && e.code === 'SC19_PAYMENT_SCOPE_MISMATCH')) throw e; }
             o = await runtime.readOrder(companyId,uid,orderId);
             if (!o) return json({error:'SC19_PAYMENT_ORDER_MISSING'},404);
           }

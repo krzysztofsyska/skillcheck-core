@@ -33,6 +33,14 @@ export async function resolveSc19PaymentRuntime(request?: Request): Promise<Paym
   const stripe = sc19StripeConfig(process.env, origin);
   const config = sc19SandboxPaymentConfig(process.env, origin);
   if (stripe && (stripe.mode === 'test' || !config)) return resolveSc19StripeRuntime(request);
+  return resolveSc19P24Runtime(request);
+}
+/** The Przelewy24 sandbox runtime ONLY, whatever provider takes new purchases.
+ * The Przelewy24 notification URL (urlStatus) is /api/billing/webhook, so that
+ * route stays bound here: orders already opened with Przelewy24 keep settling
+ * after new purchases move to Stripe. */
+export async function resolveSc19P24Runtime(request?: Request): Promise<PaymentHttpRuntime | null> {
+  const config = sc19SandboxPaymentConfig(process.env, request && new URL(request.url).origin);
   if (!config) return null;
   const { previewRuntime } = await import('./sc19-payment-preview-runtime.ts');
   return previewRuntime(config);
