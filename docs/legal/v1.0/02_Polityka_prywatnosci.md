@@ -43,7 +43,7 @@ Dane mogą otrzymać wyłącznie podmioty, które pomagają nam świadczyć usł
 - Plus Five Five, Inc. (Resend) – wysyłka automatycznych wiadomości e-mail,
 - Fakturownia – wystawianie faktur i faktur proforma oraz ich przesyłanie do KSeF,
 - OpenAI Ireland Ltd – analiza AI tekstu przekazanego przez firmę (dotyczy danych powierzonych; dane nie są wykorzystywane do trenowania modeli),
-- PayPro S.A. (Przelewy24) – obsługa płatności online; PayPro S.A. przetwarza dane płatnicze również jako odrębny administrator,
+- Stripe Payments Europe, Limited – obsługa płatności online; Stripe przetwarza dane płatnicze również jako odrębny administrator,
 - biuro rachunkowe, bank i doradcy prawni – w zakresie niezbędnym do realizacji ich zadań,
 - organy publiczne – gdy wymagają tego przepisy.
 

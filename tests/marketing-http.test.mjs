@@ -118,7 +118,7 @@ test('public offer and demo pages respond without an account', async (t) => {
     '/polityka-prywatnosci', '/ai', '/platnosci-i-reklamacje', '/kontakt']) assert.ok(homeHrefs.includes(href), `footer link ${href}`);
   assert.match(home, />Regulamin sklepu</, 'footer names the shop terms');
   for (const [path, heading, marker, docx] of [
-    ['/regulamin', 'Regulamin świadczenia usług SkillCheck', 'PayPro S.A. Agent Rozliczeniowy', '/legal/01_Regulamin_SkillCheck_v1.0.docx'],
+    ['/regulamin', 'Regulamin świadczenia usług SkillCheck', 'Stripe Payments Europe, Limited', '/legal/01_Regulamin_SkillCheck_v1.0.docx'],
     ['/polityka-prywatnosci', 'Polityka prywatności SkillCheck', 'Wykazu podatników VAT', '/legal/02_Polityka_prywatnosci_v1.0.docx'],
     ['/regulamin/umowa-powierzenia', 'Umowa powierzenia przetwarzania danych osobowych (DPA)', 'art. 28 ust. 3 RODO', '/legal/03_Umowa_powierzenia_DPA_v1.0.docx'],
     ['/regulamin/formularz-odstapienia', 'Wzór formularza odstąpienia od umowy', 'informuję o moim odstąpieniu', '/legal/04_Formularz_odstapienia_v1.0.docx'],
