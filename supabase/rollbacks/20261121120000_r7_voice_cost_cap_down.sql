@@ -20,7 +20,7 @@ begin
  perform set_config('r7_voice_cost_cap.signature_before',private.erasure_schema_signature(),true);
  if not exists(select 1 from pg_catalog.pg_proc where oid='private.sc011b_dispatch_guard()'::regprocedure
   and encode(sha256(convert_to(prosrc,'UTF8')),'hex') in
-   ('2850610e17132511139b5fefbba79710fe5e0cbc46e8af11627b30698d5d5be5','e5404e835bbead0b47dbc9a686d8d8f6302e9f3ddc3498f4e6b7d57009b62a7f')) then
+   ('3e2933f68d3bac861ea364d52099b6b3d18a956c7c1c73eae2b3714032441f34','e5404e835bbead0b47dbc9a686d8d8f6302e9f3ddc3498f4e6b7d57009b62a7f')) then
   raise exception 'r7_voice_cost_cap_rollback_guard_unreviewed' using errcode='55000';end if;
 end $preflight$;
 
@@ -104,9 +104,11 @@ end $acl$;
 drop function if exists voice_budget.list_owner_alerts(integer);
 drop function if exists voice_budget.month_status(timestamptz);
 drop function if exists voice_budget.record_call_cost(uuid,uuid,integer);
+drop function if exists voice_budget.release_dispatch(uuid,uuid);
 drop function if exists voice_budget.reserve_dispatch(uuid,uuid);
 drop function if exists voice_budget.reserve_at(uuid,uuid,timestamptz);
 drop function if exists voice_budget.note_cap(date,text);
+drop function if exists voice_budget.reserve_exceeded(date);
 drop function if exists voice_budget.month_to_date(date);
 drop function if exists voice_budget.month_of(timestamptz);
 

@@ -5,7 +5,11 @@
 // worker turns it into a plain recruiter message without any HTTP request;
 // parallel dispatches cannot both take the last room; the month boundary is the
 // Polish calendar month; one owner alert per month (also when a recorded provider
-// cost crosses the cap); another company can neither read nor change a charge;
+// cost crosses the cap); the default reservation is a per-call upper bound and a
+// recorded cost above it stops new calls for the month (cause reserve_exceeded);
+// a rejected/abandoned claim is released on the ledger itself, so an SC-010
+// erasure of the claim leaves the month's sum unchanged; another company can
+// neither read nor change a charge;
 // API roles see nothing; the manual rollback restores the R20 claim guard.
 // Native disposable PostgreSQL only; synthetic data; no provider, no network.
 import test from 'node:test';
@@ -24,15 +28,22 @@ import { prepareOfflineVoiceDraft } from '../lib/voice/offline-preparation.ts';
 import {
   dispatchRetellCall, RetellDispatchError, retellDispatchRecruiterMessage, dispatchClaimErrorCode,
 } from '../lib/voice/retell-dispatch-worker.ts';
-import { VOICE_COST_CAP_RECRUITER_MESSAGE, VOICE_MONTHLY_COST_CAP_GROSZE, isVoiceCostCapRefusal } from '../lib/voice/cost-cap.ts';
+import {
+  VOICE_CALL_RESERVE_GROSZE, VOICE_COST_CAP_RECRUITER_MESSAGE, VOICE_MONTHLY_COST_CAP_GROSZE, isVoiceCostCapRefusal,
+} from '../lib/voice/cost-cap.ts';
 
 const migration = new URL('../supabase/migrations/20261121120000_r7_voice_cost_cap.sql', import.meta.url);
 const rollback = new URL('../supabase/rollbacks/20261121120000_r7_voice_cost_cap_down.sql', import.meta.url);
 const r20Guard = 'e5404e835bbead0b47dbc9a686d8d8f6302e9f3ddc3498f4e6b7d57009b62a7f';
-const r7Guard = '2850610e17132511139b5fefbba79710fe5e0cbc46e8af11627b30698d5d5be5';
-const r7Added = "  -- R7 (20261121120000): the monthly voice cost cap reserves this call's estimate\n" +
+const r7Guard = '3e2933f68d3bac861ea364d52099b6b3d18a956c7c1c73eae2b3714032441f34';
+const r7Added = "  -- R7 (20261121120000): the monthly voice cost cap reserves this call's upper bound\n" +
   "  -- or refuses the new claim (PT429 VOICE_COST_CAP_REACHED) before it exists.\n" +
   '  perform voice_budget.reserve_dispatch(new.company_id,new.preparation_id);\n';
+const r7Release = " -- R7 (20261121120000): a refused or abandoned claim releases its reservation on the\n" +
+  " -- cost ledger itself, so a later erasure of this claim cannot bring it back.\n" +
+  " if new.state in ('rejected','abandoned') and new.state is distinct from old.state then\n" +
+  '  perform voice_budget.release_dispatch(new.company_id,new.preparation_id);\n' +
+  ' end if;\n';
 const behaviors = behaviorGuideDefinitions.map((x, i) => x.label + ': ' + (i < 4 ? 'Wysoki' : 'Standardowy'));
 const ratings = ['insufficient_data', 'meets', 'below', 'meets', 'above'];
 const sha = value => createHash('sha256').update(value).digest('hex');
@@ -137,20 +148,24 @@ test('R7: the monthly voice cost cap refuses new dispatches in the database and 
     where oid='private.sc011b_dispatch_guard()'::regprocedure`);
   const signature = await one('select private.erasure_schema_signature() as v');
 
-  await t.test('installed closed: cap 50 zł, R20 guard plus one statement, erasure signature unchanged, no API role access', async () => {
+  await t.test('installed closed: cap 50 zł, R20 guard plus two statements, erasure signature unchanged, no API role access', async () => {
     await h.asAdmin();
     assert.equal(VOICE_MONTHLY_COST_CAP_GROSZE, 5000);
+    assert.equal(VOICE_CALL_RESERVE_GROSZE, 1500);
     assert.deepEqual((await db.query('select monthly_cap_grosze,call_reserve_grosze from voice_budget.settings')).rows,
-      [{ monthly_cap_grosze: 5000, call_reserve_grosze: 500 }]);
+      [{ monthly_cap_grosze: 5000, call_reserve_grosze: 1500 }]);
+    // 600 s at the highest published all-in Retell rate (USD 0.31/min) at 4.50 zł/USD = 13.95 zł <= 15 zł.
+    assert.ok(Math.ceil(10 * 0.31 * 4.5 * 100) <= VOICE_CALL_RESERVE_GROSZE);
     assert.equal(await guardHash(), r7Guard);
     const body = await one(`select prosrc as v from pg_proc where oid='private.sc011b_dispatch_guard()'::regprocedure`);
-    assert.equal(body.split(r7Added).length, 2, 'exactly one added statement');
-    assert.equal(sha(body.replace(r7Added, '')), r20Guard, 'otherwise the R20 body byte for byte');
+    assert.equal(body.split(r7Added).length, 2, 'exactly one added reservation statement');
+    assert.equal(body.split(r7Release).length, 2, 'exactly one added release statement');
+    assert.equal(sha(body.replace(r7Added, '').replace(r7Release, '')), r20Guard, 'otherwise the R20 body byte for byte');
     assert.equal(await one(`select count(*)::int as v from pg_class c join pg_namespace n on n.oid=c.relnamespace
       where n.nspname in ('public','private') and c.relname like '%budget%'`), 0, 'nothing new in public/private');
     const fns = (await db.query(`select p.oid::regprocedure::text sig,p.prosecdef,p.proconfig,p.proacl::text acl,
       p.prorettype='trigger'::regtype trig from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='voice_budget'`)).rows;
-    assert.equal(fns.length, 11);
+    assert.equal(fns.length, 13);
     for (const f of fns) {
       assert.deepEqual(f.proconfig, ['search_path=""'], f.sig);
       assert.ok(f.trig || f.prosecdef, `${f.sig} is security definer`);
@@ -239,6 +254,9 @@ test('R7: the monthly voice cost cap refuses new dispatches in the database and 
     await asServer(a1.owner);
     await db.query("update private.sc011b_voice_dispatches set state='rejected',rejection='invalid_request' where preparation_id=$1", [o1.operationId]);
     assert.equal(Number((await status(new Date())).month_to_date_grosze), 500);
+    await h.asAdmin();
+    assert.equal(await one('select released_at is not null as v from voice_budget.charges where preparation_id=$1', [o1.operationId]), true,
+      'the release is written on the charge itself');
     await claim(a3, o3.operationId);
     assert.equal(Number((await status(new Date())).month_to_date_grosze), 1000);
     await assert.rejects(claim(a4, o4.operationId), capped);
@@ -264,15 +282,17 @@ test('R7: the monthly voice cost cap refuses new dispatches in the database and 
     assert.equal(String(recorded[0].month), String(thisMonth));
   });
 
-  await t.test('a recorded provider cost that crosses the cap records the month alert (cause call_cost)', async () => {
+  await t.test('a recorded provider cost that leaves no room records the month alert (cause call_cost)', async () => {
     await setCap(1000, 500);
     await h.asAdmin();
     const p = randomUUID();
     assert.equal(await reserveAt(b.companyId, p, '2030-01-15T10:00:00Z'), 'reserved');
     assert.equal(await one("select count(*)::int as v from voice_budget.owner_alerts where month='2030-01-01'"), 0);
-    await db.query('select voice_budget.record_call_cost($1,$2,900)', [b.companyId, p]);
+    // A cost within the reservation only lowers the sum, so this needs a cap lowered by a later migration.
+    await setCap(900, 500);
+    await db.query('select voice_budget.record_call_cost($1,$2,450)', [b.companyId, p]);
     const row = (await db.query("select cause,month_to_date_grosze from voice_budget.owner_alerts where month='2030-01-01'")).rows;
-    assert.deepEqual(row.map(r => [r.cause, Number(r.month_to_date_grosze)]), [['call_cost', 900]]);
+    assert.deepEqual(row.map(r => [r.cause, Number(r.month_to_date_grosze)]), [['call_cost', 450]]);
     await assert.rejects(reserveAt(b.companyId, randomUUID(), '2030-01-20T10:00:00Z'), capped);
   });
 
@@ -323,6 +343,81 @@ test('R7: the monthly voice cost cap refuses new dispatches in the database and 
     for (const r of results) if (r.status === 'rejected') assert.ok(capped(r.reason), String(r.reason));
     assert.equal(Number((await status('2030-07-20T08:00:00Z')).month_to_date_grosze), 1000);
     assert.equal(await one("select count(*)::int as v from voice_budget.owner_alerts where month='2030-07-01'"), 1);
+  });
+
+  await t.test('the default reservation is a per-call upper bound: at most three calls a month fit under 50 zł', async () => {
+    await setCap(5000, 1500);
+    await h.asAdmin();
+    for (let i = 0; i < 3; i++) assert.equal(await reserveAt(a.companyId, randomUUID(), '2030-09-10T08:00:00Z'), 'reserved');
+    await assert.rejects(reserveAt(b.companyId, randomUUID(), '2030-09-10T08:00:00Z'), capped, '4500 + 1500 > 5000');
+    const s = await status('2030-09-20T08:00:00Z');
+    assert.equal(Number(s.month_to_date_grosze), 4500, 'with no cost ever recorded the real spend is at most 3 × 15 zł');
+    assert.equal(s.new_calls_blocked, true);
+    assert.equal(s.reserve_exceeded, false);
+    assert.equal(await one("select cause as v from voice_budget.owner_alerts where month='2030-09-01'"), 'dispatch');
+  });
+
+  await t.test('a recorded cost above its reservation fails the month closed and records the alert as reserve_exceeded', async () => {
+    await setCap(5000, 500);
+    await h.asAdmin();
+    const p = randomUUID();
+    assert.equal(await reserveAt(a.companyId, p, '2030-10-05T08:00:00Z'), 'reserved');
+    let s = await status('2030-10-06T08:00:00Z');
+    assert.equal(s.new_calls_blocked, false);
+    assert.equal(await one('select voice_budget.record_call_cost($1,$2,600) as v', [a.companyId, p]), 'recorded');
+    s = await status('2030-10-06T08:00:00Z');
+    assert.equal(Number(s.month_to_date_grosze), 600, 'the real cost counts, not the lower reservation');
+    assert.equal(s.reserve_exceeded, true);
+    assert.equal(s.new_calls_blocked, true, 'room is left under the cap, but the upper bound proved wrong');
+    await assert.rejects(reserveAt(b.companyId, randomUUID(), '2030-10-07T08:00:00Z'), capped);
+    const row = (await db.query("select cause,month_to_date_grosze from voice_budget.owner_alerts where month='2030-10-01'")).rows;
+    assert.deepEqual(row.map(r => [r.cause, Number(r.month_to_date_grosze)]), [['reserve_exceeded', 600]]);
+    // The next month starts with full room again.
+    assert.equal(await reserveAt(b.companyId, randomUUID(), '2030-11-02T08:00:00Z'), 'reserved');
+  });
+
+  await t.test('SC-010 erasure of dispatch claims leaves the month sum unchanged: releases live on the ledger', async () => {
+    await setCap(100000, 500);
+    const pool2 = await grant(a, 5);
+    const [a6, a7, a8] = [await ready(a), await ready(a), await ready(a)];
+    const o6 = await order(a6, pool2), o7 = await order(a7, pool2), o8 = await order(a8, pool2);
+    const mtd = async () => Number((await status(new Date())).month_to_date_grosze);
+    const before = await mtd();
+    await claim(a6, o6.operationId);
+    await claim(a7, o7.operationId);
+    await claim(a8, o8.operationId);
+    assert.equal(await mtd(), before + 1500);
+    // Provider refused call 6; call 7 went unknown and the operator confirmed it never left.
+    await asServer(a6.owner);
+    await db.query("update private.sc011b_voice_dispatches set state='rejected',rejection='invalid_request' where preparation_id=$1", [o6.operationId]);
+    await db.query("update private.sc011b_voice_dispatches set state='unknown' where preparation_id=$1", [o7.operationId]);
+    await db.query('begin');
+    await db.query("select set_config('skillcheck.sc011b_resolution','on',true)");
+    await db.query("update private.sc011b_voice_dispatches set state='abandoned' where preparation_id=$1", [o7.operationId]);
+    await db.query('commit');
+    assert.equal(await mtd(), before + 500, 'only call 8 (in flight) still counts');
+    await h.asAdmin();
+    assert.deepEqual((await db.query(`select preparation_id::text p,released_at is not null r from voice_budget.charges
+      where preparation_id = any($1::uuid[]) order by released_at nulls last`, [[o6.operationId, o7.operationId, o8.operationId]])).rows
+      .map(r => r.r), [true, true, false]);
+    // A release is written once and cannot be undone or combined with a cost.
+    await assert.rejects(db.query('update voice_budget.charges set released_at=null where preparation_id=$1', [o6.operationId]),
+      message('42501', 'VOICE_COST_CHARGE_IMMUTABLE'));
+    await assert.rejects(db.query('update voice_budget.charges set released_at=now() where preparation_id=$1', [o6.operationId]),
+      message('42501', 'VOICE_COST_CHARGE_IMMUTABLE'));
+    await assert.rejects(db.query('update voice_budget.charges set released_at=now(),cost_grosze=1 where preparation_id=$1', [o8.operationId]),
+      message('42501', 'VOICE_COST_CHARGE_IMMUTABLE'));
+    assert.equal(await one('select voice_budget.release_dispatch($1,$2) as v', [a.companyId, o6.operationId]), 'unchanged');
+    // The SC-010 purge deletes the claim rows (here: the rows disappear without the
+    // purge owner's bookkeeping); the cost ledger is not touched by erasure.
+    await db.query("set session_replication_role='replica'");
+    try {
+      await db.query('delete from private.sc011b_voice_dispatches where preparation_id = any($1::uuid[])',
+        [[o6.operationId, o7.operationId, o8.operationId]]);
+    } finally { await db.query("set session_replication_role='origin'"); }
+    assert.equal(await one('select count(*)::int as v from private.sc011b_voice_dispatches where preparation_id = any($1::uuid[])',
+      [[o6.operationId, o7.operationId, o8.operationId]]), 0);
+    assert.equal(await mtd(), before + 500, 'released stay 0, the unreleased call keeps counting');
   });
 
   await t.test('tenant isolation: another company can neither take over nor price a charge, and learns nothing', async () => {

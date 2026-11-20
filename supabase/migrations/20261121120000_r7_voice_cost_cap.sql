@@ -8,20 +8,31 @@
 --    erasure signature and inventory stay R23; it holds no candidate data: only a
 --    company id, the opaque id of the prepared call, a month and amounts in grosze);
 --  * `voice_budget.settings`: one row, monthly cap 5000 grosze (50 zł) and a
---    conservative estimate of 500 grosze (5 zł) per call whose real cost is not yet
---    known (the voicebot plan caps a call at 600 s). Changeable only by the database
---    owner (a migration), never by an API role;
+--    per-call reservation of 1500 grosze (15 zł). The reservation is an UPPER BOUND
+--    of one call's provider cost, not an average: a call is capped at 600 s (agent
+--    max_call_duration_ms and callTimeoutSeconds are checked to be <= 600 s in
+--    lib/voice/retell-config-profile.ts and lib/voice/retell-outbound-draft.ts), and
+--    10 min at the highest published Retell all-in rate (USD 0.31/min: voice engine
+--    + LLM + telephony) at a conservative 4.50 zł/USD is 13.95 zł; 15 zł leaves a
+--    margin. So even when no real cost is ever recorded, the sum of reservations
+--    (<= cap) bounds the real spend. Changeable only by the database owner (a
+--    migration), never by an API role;
 --  * `voice_budget.charges`: one row per dispatched call, attributed to the calendar
 --    month (Europe/Warsaw) in which the call was ordered. It counts its recorded
---    provider cost once known, otherwise the estimate, and 0 when the provider
+--    provider cost once known, otherwise the reservation, and 0 when the provider
 --    refused the request (dispatch claim 'rejected') or an operator confirmed it
---    never left ('abandoned');
+--    never left ('abandoned'). That release is written ON THE CHARGE itself
+--    (`released_at`) in the same transaction as the claim's state change, so the
+--    month's sum never depends on the claim row, which SC-010 erasure may delete;
+--  * if a recorded provider cost is ever HIGHER than the call's reservation, the
+--    upper bound was wrong: new calls stop for the rest of that month (fail closed)
+--    and the month's owner alert is recorded with cause 'reserve_exceeded';
 --  * before a NEW dispatch claim is written, the R20 claim guard calls
 --    `voice_budget.reserve_dispatch`: under one row lock on the settings (so
 --    parallel dispatches are serialized) it refuses with PT429
---    'VOICE_COST_CAP_REACHED' when month-to-date + one estimate would exceed the cap,
---    otherwise it reserves the estimate. A resend or replay of an existing claim
---    reserves nothing again;
+--    'VOICE_COST_CAP_REACHED' when month-to-date + one reservation would exceed the
+--    cap (or the month's bound was exceeded), otherwise it reserves. A resend or
+--    replay of an existing claim reserves nothing again;
 --  * `voice_budget.owner_alerts`: at most ONE alert per month, recorded in the
 --    transaction that leaves no room for another call (a reservation, or a recorded
 --    provider cost that crosses the cap). It is only a database record the operator
@@ -29,8 +40,10 @@
 --  * owner-only functions for the trusted server: `record_call_cost` (provider
 --    cost of a call, once, idempotent), `month_status` and `list_owner_alerts`.
 --
--- The only change to an existing object is ONE added statement in
--- private.sc011b_dispatch_guard() (the R20 body otherwise byte for byte, see
+-- The only change to an existing object is TWO added statements in
+-- private.sc011b_dispatch_guard(): the reservation before a new claim, and the
+-- release when a claim becomes 'rejected' or 'abandoned' (the R20 body otherwise
+-- byte for byte, see
 -- supabase/rollbacks/20261121120000_r7_voice_cost_cap_down.sql for the restore).
 -- Function bodies are not part of the erasure signature; triggers, tables, columns
 -- and constraints in 'public'/'private' are unchanged.
@@ -57,7 +70,7 @@ revoke all on schema voice_budget from public;
 create table voice_budget.settings (
  singleton boolean primary key default true check(singleton),
  monthly_cap_grosze integer not null default 5000 check(monthly_cap_grosze between 0 and 1000000),
- call_reserve_grosze integer not null default 500 check(call_reserve_grosze between 1 and 1000000),
+ call_reserve_grosze integer not null default 1500 check(call_reserve_grosze between 1 and 1000000),
  updated_at timestamptz not null default clock_timestamp()
 );
 insert into voice_budget.settings default values;
@@ -70,6 +83,7 @@ create table voice_budget.charges (
  cost_grosze integer check(cost_grosze between 0 and 1000000),
  reserved_at timestamptz not null default clock_timestamp(),
  cost_recorded_at timestamptz,
+ released_at timestamptz,
  check((cost_grosze is null)=(cost_recorded_at is null))
 );
 create index charges_month_idx on voice_budget.charges(month);
@@ -77,7 +91,7 @@ create index charges_company_month_idx on voice_budget.charges(company_id,month)
 
 create table voice_budget.owner_alerts (
  month date primary key check(extract(day from month)=1),
- cause text not null check(cause in ('dispatch','call_cost')),
+ cause text not null check(cause in ('dispatch','call_cost','reserve_exceeded')),
  cap_grosze integer not null,
  month_to_date_grosze bigint not null,
  recorded_at timestamptz not null default clock_timestamp()
@@ -99,7 +113,9 @@ create trigger settings_guard before update or delete on voice_budget.settings
 create trigger settings_no_truncate before truncate on voice_budget.settings
  for each statement execute function voice_budget.settings_guard();
 
--- A charge is written once; the only later change is its provider cost, once.
+-- A charge is written once (append-only, never deleted, also not by SC-010
+-- erasure: it holds no candidate data). The only later changes are its provider
+-- cost, once, and its release, once; each UPDATE makes exactly one of them.
 create function voice_budget.charge_guard() returns trigger
 language plpgsql security invoker set search_path='' as $$
 begin
@@ -107,18 +123,26 @@ begin
   raise exception using errcode='42501',message='VOICE_COST_CHARGE_IMMUTABLE';
  end if;
  if tg_op='INSERT' then
-  if new.cost_grosze is not null or new.cost_recorded_at is not null then
+  if new.cost_grosze is not null or new.cost_recorded_at is not null or new.released_at is not null then
    raise exception using errcode='42501',message='VOICE_COST_CHARGE_IMMUTABLE';
   end if;
   new.reserved_at:=clock_timestamp();
   return new;
  end if;
- if old.cost_grosze is not null or new.cost_grosze is null
-  or (to_jsonb(new)-array['cost_grosze','cost_recorded_at']) is distinct from (to_jsonb(old)-array['cost_grosze','cost_recorded_at']) then
+ if (to_jsonb(new)-array['cost_grosze','cost_recorded_at','released_at'])
+    is distinct from (to_jsonb(old)-array['cost_grosze','cost_recorded_at','released_at']) then
   raise exception using errcode='42501',message='VOICE_COST_CHARGE_IMMUTABLE';
  end if;
- new.cost_recorded_at:=clock_timestamp();
- return new;
+ if old.cost_grosze is null and new.cost_grosze is not null and new.released_at is not distinct from old.released_at then
+  new.cost_recorded_at:=clock_timestamp();
+  return new;
+ end if;
+ if old.released_at is null and new.released_at is not null
+  and new.cost_grosze is not distinct from old.cost_grosze and new.cost_recorded_at is not distinct from old.cost_recorded_at then
+  new.released_at:=clock_timestamp();
+  return new;
+ end if;
+ raise exception using errcode='42501',message='VOICE_COST_CHARGE_IMMUTABLE';
 end;$$;
 create trigger charge_guard before insert or update or delete on voice_budget.charges
  for each row execute function voice_budget.charge_guard();
@@ -141,18 +165,27 @@ language sql stable security definer set search_path='' as $$
  select date_trunc('month',at at time zone 'Europe/Warsaw')::date
 $$;
 
--- Month-to-date cost: recorded provider cost, else the reserved estimate, else 0
--- for a request the provider refused or an operator confirmed never left. A charge
--- whose claim is gone (candidate erasure) keeps counting: money spent stays spent.
+-- Month-to-date cost from the ledger alone: recorded provider cost, else 0 for a
+-- released charge (the provider refused the request or an operator confirmed it
+-- never left), else the reservation. It never reads the dispatch claims, so an
+-- SC-010 erasure of a claim changes nothing here: a released charge stays 0 and
+-- an unreleased one keeps counting (money possibly spent stays spent).
 create function voice_budget.month_to_date(target_month date) returns bigint
 language sql stable security definer set search_path='' as $$
  select coalesce(sum(case
    when c.cost_grosze is not null then c.cost_grosze
-   when d.state in ('rejected','abandoned') then 0
+   when c.released_at is not null then 0
    else c.reserved_grosze end),0)::bigint
  from voice_budget.charges c
- left join private.sc011b_voice_dispatches d on d.company_id=c.company_id and d.preparation_id=c.preparation_id
  where c.month=target_month
+$$;
+
+-- True when a recorded provider cost in the month is above its call's reservation:
+-- the per-call upper bound was wrong, so the month fails closed.
+create function voice_budget.reserve_exceeded(target_month date) returns boolean
+language sql stable security definer set search_path='' as $$
+ select exists(select 1 from voice_budget.charges c
+  where c.month=target_month and c.cost_grosze is not null and c.cost_grosze>c.reserved_grosze)
 $$;
 
 -- Called with the settings row locked. Records the month's single owner alert once
@@ -163,13 +196,16 @@ declare s voice_budget.settings;total bigint;
 begin
  select * into s from voice_budget.settings where singleton;
  total:=voice_budget.month_to_date(target_month);
- if total+s.call_reserve_grosze>s.monthly_cap_grosze then
+ if voice_budget.reserve_exceeded(target_month) then
+  insert into voice_budget.owner_alerts(month,cause,cap_grosze,month_to_date_grosze)
+  values(target_month,'reserve_exceeded',s.monthly_cap_grosze,total) on conflict (month) do nothing;
+ elsif total+s.call_reserve_grosze>s.monthly_cap_grosze then
   insert into voice_budget.owner_alerts(month,cause,cap_grosze,month_to_date_grosze)
   values(target_month,cause,s.monthly_cap_grosze,total) on conflict (month) do nothing;
  end if;
 end;$$;
 
--- Reserve one call's estimate in the month of `at`, or refuse. Serialized on the
+-- Reserve one call's upper bound in the month of `at`, or refuse. Serialized on the
 -- settings row so two parallel dispatches cannot both take the last room.
 create function voice_budget.reserve_at(target_company uuid,target_preparation uuid,at timestamptz) returns text
 language plpgsql volatile security definer set search_path='' as $$
@@ -189,7 +225,7 @@ begin
  end if;
  target_month:=voice_budget.month_of(at);
  total:=voice_budget.month_to_date(target_month);
- if total+s.call_reserve_grosze>s.monthly_cap_grosze then
+ if total+s.call_reserve_grosze>s.monthly_cap_grosze or voice_budget.reserve_exceeded(target_month) then
   raise exception using errcode='PT429',message='VOICE_COST_CAP_REACHED';
  end if;
  insert into voice_budget.charges(preparation_id,company_id,month,reserved_grosze)
@@ -202,6 +238,20 @@ create function voice_budget.reserve_dispatch(target_company uuid,target_prepara
 language sql volatile security definer set search_path='' as $$
  select voice_budget.reserve_at(target_company,target_preparation,clock_timestamp())
 $$;
+
+-- Called by the R20 claim guard in the transaction that moves a claim to
+-- 'rejected' or 'abandoned': the charge (if any) is released once, on the ledger
+-- row itself. A claim older than this migration has no charge: nothing to do.
+create function voice_budget.release_dispatch(target_company uuid,target_preparation uuid) returns text
+language plpgsql volatile security definer set search_path='' as $$
+begin
+ if target_company is null or target_preparation is null then
+  raise exception using errcode='PT422',message='VOICE_COST_CAP_INVALID';
+ end if;
+ update voice_budget.charges set released_at=clock_timestamp()
+  where preparation_id=target_preparation and company_id=target_company and released_at is null;
+ return case when found then 'released' else 'unchanged' end;
+end;$$;
 
 -- Trusted server: the provider's cost of one dispatched call, in grosze, once.
 -- Another company's or an unknown call gives the same PT404.
@@ -227,17 +277,20 @@ end;$$;
 -- Operator view (trusted server only): the month's numbers and whether new calls stop.
 create function voice_budget.month_status(at timestamptz default clock_timestamp())
 returns table(month date,cap_grosze integer,call_reserve_grosze integer,recorded_cost_grosze bigint,
- in_flight_grosze bigint,month_to_date_grosze bigint,remaining_grosze bigint,new_calls_blocked boolean,alert_recorded_at timestamptz)
+ in_flight_grosze bigint,month_to_date_grosze bigint,remaining_grosze bigint,new_calls_blocked boolean,
+ reserve_exceeded boolean,alert_recorded_at timestamptz)
 language plpgsql stable security definer set search_path='' as $$
-declare s voice_budget.settings;m date;recorded bigint;total bigint;
+declare s voice_budget.settings;m date;recorded bigint;total bigint;over boolean;
 begin
  select * into s from voice_budget.settings where singleton;
  m:=voice_budget.month_of(coalesce(at,clock_timestamp()));
  select coalesce(sum(c.cost_grosze),0) into recorded from voice_budget.charges c where c.month=m and c.cost_grosze is not null;
  total:=voice_budget.month_to_date(m);
+ over:=voice_budget.reserve_exceeded(m);
  return query select m,s.monthly_cap_grosze,s.call_reserve_grosze,recorded,total-recorded,total,
   greatest(s.monthly_cap_grosze-total,0),
-  s.monthly_cap_grosze is null or total+s.call_reserve_grosze>s.monthly_cap_grosze,
+  s.monthly_cap_grosze is null or total+s.call_reserve_grosze>s.monthly_cap_grosze or over,
+  over,
   (select a.recorded_at from voice_budget.owner_alerts a where a.month=m);
 end;$$;
 
@@ -248,7 +301,8 @@ language sql stable security definer set search_path='' as $$
  order by a.month desc limit least(greatest(coalesce(result_limit,12),1),120)
 $$;
 
--- R20 claim guard with one added statement (marked R7) before a new claim is accepted.
+-- R20 claim guard with two added statements (marked R7): the reservation before a
+-- new claim is accepted, and the release when a claim becomes rejected/abandoned.
 create or replace function private.sc011b_dispatch_guard() returns trigger
 language plpgsql security invoker set search_path='' as $$
 declare prep private.sc010c_voice_preparations;
@@ -280,7 +334,7 @@ begin
   if new.state<>'sending' or new.attempts<>1 or new.rejection is not null then
    raise exception using errcode='42501',message='VOICE_DISPATCH_INVALID_STATE';
   end if;
-  -- R7 (20261121120000): the monthly voice cost cap reserves this call's estimate
+  -- R7 (20261121120000): the monthly voice cost cap reserves this call's upper bound
   -- or refuses the new claim (PT429 VOICE_COST_CAP_REACHED) before it exists.
   perform voice_budget.reserve_dispatch(new.company_id,new.preparation_id);
   new.started_at:=clock_timestamp(); new.last_attempt_at:=new.started_at;
@@ -315,6 +369,11 @@ begin
  else
   new.last_attempt_at:=old.last_attempt_at;
   if new.state<>'sending' then new.lease_until:=null; end if;
+ end if;
+ -- R7 (20261121120000): a refused or abandoned claim releases its reservation on the
+ -- cost ledger itself, so a later erasure of this claim cannot bring it back.
+ if new.state in ('rejected','abandoned') and new.state is distinct from old.state then
+  perform voice_budget.release_dispatch(new.company_id,new.preparation_id);
  end if;
  return new;
 end;$$;
@@ -355,10 +414,10 @@ begin
  if private.erasure_schema_signature() is distinct from current_setting('r7_voice_cost_cap.signature_before',true) then
   raise exception 'voice_cost_cap_erasure_signature_changed' using errcode='55000';end if;
  if not exists(select 1 from pg_catalog.pg_proc where oid='private.sc011b_dispatch_guard()'::regprocedure
-  and encode(sha256(convert_to(prosrc,'UTF8')),'hex')='2850610e17132511139b5fefbba79710fe5e0cbc46e8af11627b30698d5d5be5'
+  and encode(sha256(convert_to(prosrc,'UTF8')),'hex')='3e2933f68d3bac861ea364d52099b6b3d18a956c7c1c73eae2b3714032441f34'
   and pg_get_userbyid(proowner)='postgres' and not prosecdef and proconfig=array['search_path=""']) then
   raise exception 'voice_cost_cap_final_function_mismatch:private.sc011b_dispatch_guard' using errcode='55000';end if;
- if (select count(*) from voice_budget.settings where singleton and monthly_cap_grosze=5000 and call_reserve_grosze=500)<>1 then
+ if (select count(*) from voice_budget.settings where singleton and monthly_cap_grosze=5000 and call_reserve_grosze=1500)<>1 then
   raise exception 'voice_cost_cap_settings_missing' using errcode='55000';end if;
  if exists(select 1 from pg_catalog.pg_proc p join pg_catalog.pg_namespace n on n.oid=p.pronamespace
    where n.nspname='voice_budget' and (not p.prosecdef and p.prorettype<>'trigger'::regtype or p.proconfig is distinct from array['search_path=""'])) then
