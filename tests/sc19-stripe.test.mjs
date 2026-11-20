@@ -140,7 +140,7 @@ test('catalog equals docs/cennik-2026-11-02.md; WERYFIKACJA and ASSESSMENT CENTE
     assert.doesNotMatch(o.termsText, /voicebot|\bbot|rozmow/i, 'no voicebot in package copy');
   }
   assert.deepEqual(STRIPE_PACKAGE_OFFERS.map(o => o.plan), ['WERYFIKACJA', 'ASSESSMENT_CENTER']);
-  const pinned = readFileSync(new URL('../supabase/migrations/20261121130000_r7_stripe_packages.sql', import.meta.url), 'utf8');
+  const pinned = readFileSync(new URL('../supabase/migrations/20261121150000_r7_stripe_packages.sql', import.meta.url), 'utf8');
   assert.match(pinned, new RegExp(`package_code='WERYFIKACJA' and amount_minor=${STRIPE_CATALOG.WERYFIKACJA.grossMinor} and credits=${STRIPE_CATALOG.WERYFIKACJA.cvCredits}`));
   assert.match(pinned, new RegExp(`package_code='ASSESSMENT_CENTER' and amount_minor=${STRIPE_CATALOG.ASSESSMENT_CENTER.grossMinor} and credits=${STRIPE_CATALOG.ASSESSMENT_CENTER.cvCredits}`));
   assert.equal(STRIPE_APP, 'skillcheck-core');
@@ -533,7 +533,7 @@ test('form encoding and source hygiene: no key in code, no Stripe invoices, P24 
     .replace(/--[^\n]*/g, '').replace(/\$\$[\s\S]*?\$\$/g, '');
   assert.doesNotMatch(sql, /\b(drop|truncate|delete\s+from|update\s+\w|rename|alter\s+column)\b/i);
   assert.match(sql, /mode = 'test' and provider = 'stripe'/);
-  const packages = readFileSync(new URL('../supabase/migrations/20261121130000_r7_stripe_packages.sql', import.meta.url), 'utf8')
+  const packages = readFileSync(new URL('../supabase/migrations/20261121150000_r7_stripe_packages.sql', import.meta.url), 'utf8')
     .replace(/--[^\n]*/g, '').replace(/\$\$[\s\S]*?\$\$/g, '');
   // The ONE drop allowed: the one-unresolved-order index, rebuilt at once under the
   // same name without the retired Przelewy24 provider (Codex P2, PR #566). No data changes.

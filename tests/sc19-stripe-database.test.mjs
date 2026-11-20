@@ -120,8 +120,8 @@ test('R7 migration: additive, TEST-mode Stripe orders only, buyer data only for 
 // orchestration (lib/sc19-payments.ts), the REAL Postgres store with the package
 // extension, both R7 migrations and the REAL R3 gate function, run as the payment
 // adapter's restricted role; Stripe itself is a fake provider (no network).
-const packagesMigration = readFileSync(new URL('../supabase/migrations/20261121130000_r7_stripe_packages.sql', import.meta.url), 'utf8');
-const packagesRollback = readFileSync(new URL('../supabase/rollbacks/20261121130000_r7_stripe_packages_down.sql', import.meta.url), 'utf8');
+const packagesMigration = readFileSync(new URL('../supabase/migrations/20261121150000_r7_stripe_packages.sql', import.meta.url), 'utf8');
+const packagesRollback = readFileSync(new URL('../supabase/rollbacks/20261121150000_r7_stripe_packages_down.sql', import.meta.url), 'utf8');
 const gateSource = readFileSync(new URL('../supabase/migrations/20261121090000_r3_ac_package_gate.sql', import.meta.url), 'utf8');
 const gateStart = gateSource.indexOf('create function private.ac_package_required');
 const gateFn = gateSource.slice(gateStart, gateSource.indexOf('end;$$;', gateStart) + 'end;$$;'.length);

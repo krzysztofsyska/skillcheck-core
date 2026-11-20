@@ -55,7 +55,7 @@
 -- PRESELEKCJA, exactly as before (and a stale Przelewy24 order still counts as the
 -- unresolved purchase until this migration rebuilds the index). Production: applied only through
 -- db-migrate-production after the owner's approval.
--- Rollback: supabase/rollbacks/20261121130000_r7_stripe_packages_down.sql.
+-- Rollback: supabase/rollbacks/20261121150000_r7_stripe_packages_down.sql.
 begin;
 
 do $preflight$

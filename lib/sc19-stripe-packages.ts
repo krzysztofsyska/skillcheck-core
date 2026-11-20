@@ -2,7 +2,7 @@
  *
  * The SC-019 orchestration (lib/sc19-payments.ts) and the Stripe adapter are the
  * same as for PRESELEKCJA. Only the storage differs: these orders live in
- * sc19_stripe.package_orders (migration 20261121130000_r7_stripe_packages.sql),
+ * sc19_stripe.package_orders (migration 20261121150000_r7_stripe_packages.sql),
  * because private.sc19_payment_offers/orders are PRESELEKCJA-only and changing
  * them would change the SC-010 erasure schema signature. This module plugs that
  * table into the Postgres payment store inside the SAME database transaction, so

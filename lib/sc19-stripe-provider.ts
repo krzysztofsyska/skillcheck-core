@@ -85,7 +85,7 @@ export type StripeBuyer = Readonly<{ email: string; companyName: string; nip: st
 /** Company name and NIP for the Stripe checkout form, through the security-definer
  * sc19_stripe.buyer() (the adapter roles cannot read the NIP column directly). It
  * answers only while the company has an unpaid Stripe order, PRESELEKCJA or (after
- * migration 20261121130000) WERYFIKACJA / ASSESSMENT CENTER; otherwise
+ * migration 20261121150000) WERYFIKACJA / ASSESSMENT CENTER; otherwise
  * SC19_PAYMENT_FORBIDDEN. `query` runs on the adapter's restricted login. */
 export async function readStripeBuyerCompany(
   query: (sql: string, values: unknown[]) => Promise<Record<string, unknown>[]>, companyId: string,

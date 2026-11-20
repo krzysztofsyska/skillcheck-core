@@ -27,7 +27,7 @@ const fail = (code: string): never => { throw new Sc19PaymentError(code); };
  * 19.11.2026). Their unpaid TEST orders can never be paid or granted, so they no
  * longer count as the company's unresolved purchase; the rows stay unchanged. The
  * database index sc19_payment_one_unresolved excludes the same provider
- * (migration 20261121130000_r7_stripe_packages.sql). */
+ * (migration 20261121150000_r7_stripe_packages.sql). */
 export const RETIRED_PAYMENT_PROVIDERS: readonly string[] = Object.freeze(['przelewy24']);
 function orderRow(r: Record<string, unknown>): PaymentOrder {
   return {

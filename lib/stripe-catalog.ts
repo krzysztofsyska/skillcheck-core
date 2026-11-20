@@ -36,7 +36,7 @@ export const STRIPE_CATALOG: Readonly<Record<StripePackageCode, StripePackage>> 
   // R7 (docs/ROADMAP.md): bought through Stripe Checkout in TEST mode only, behind the
   // same default-off sales switch (SC19_PACKAGES_ENABLED). One whole package per
   // purchase; the paid package is recorded as sc19_commerce.entitlements
-  // 'package:<code>' (migration 20261121130000_r7_stripe_packages.sql), which is what
+  // 'package:<code>' (migration 20261121150000_r7_stripe_packages.sql), which is what
   // the R3 Assessment Center gate reads.
   WERYFIKACJA: Object.freeze({ code: 'WERYFIKACJA', name: 'WERYFIKACJA', grossMinor: 61_500, cvCredits: 60, available: true, maxPackages: 1 }),
   ASSESSMENT_CENTER: Object.freeze({ code: 'ASSESSMENT_CENTER', name: 'ASSESSMENT CENTER', grossMinor: 149_900, cvCredits: 50, available: true, maxPackages: 1 }),

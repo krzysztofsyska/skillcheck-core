@@ -1,5 +1,5 @@
 -- Manual rollback ONLY; never placed in supabase/migrations/ (would run forwards).
--- Rollback R7 Stripe packages (20261121130000_r7_stripe_packages.sql).
+-- Rollback R7 Stripe packages (20261121150000_r7_stripe_packages.sql).
 -- Refuses while any WERYFIKACJA / ASSESSMENT CENTER Stripe order exists: orders,
 -- receipts and the grants they made are accounting records and are never deleted
 -- by a rollback. Run with `psql -v ON_ERROR_STOP=1`.
