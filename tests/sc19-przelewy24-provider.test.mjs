@@ -1,312 +1,50 @@
-import test from 'node:test';
+// R7 (owner decision 19.11.2026, confirmed 20.11.2026: „wyrzucamy całkowicie P24”):
+// the Przelewy24 adapter is removed. This file keeps its name because
+// .github/workflows/sc19-payments.yml runs it by path; it now guards the removal so
+// that no Przelewy24 code path, route or environment reader comes back unnoticed.
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
-import { createSc19PaymentHttp } from '../lib/sc19-payment-http.ts';
-import { createSc19Payments } from '../lib/sc19-payments.ts';
-import { createPrzelewy24Provider, przelewy24NotificationSignature, przelewy24Sign, sessionIdFor } from '../lib/sc19-przelewy24-provider.ts';
-import { createFakturowniaClient } from '../lib/fakturownia-client.ts';
+import test from 'node:test';
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
-// Real SC-019 orchestration + real Przelewy24 adapter against a deterministic
-// in-memory Przelewy24 sandbox. No network, no real money, synthetic keys only.
-const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
-const MERCHANT = 123456;
-const CRC = 'synthetic-crc-key-0123';
-const API_KEY = 'synthetic-api-key-0123456789';
-const ORIGIN = 'https://sandbox.przelewy24.pl';
-const scope = { provider: 'przelewy24', account: String(MERCHANT), mode: 'test' };
-const offer = () => ({ id: 'preselection-v1', revision: 'rev-1', plan: 'PRESELEKCJA', active: true, approved: true,
-  amountMinor: 36900, currency: 'PLN', credits: 60, termsRevision: 'terms-v1', validUntilMs: Date.now() + 3_600_000 });
-const reply = (status, body) => ({ status, ok: status >= 200 && status < 300, json: async () => structuredClone(body) });
+const root = new URL('../', import.meta.url);
+const removed = [
+  'lib/sc19-przelewy24-provider.ts',
+  'lib/sc19-payment-preview-runtime.ts',
+  'lib/sc19-p24-diagnostic.ts',
+  'app/operator/billing/p24-diagnostic.tsx',
+  'app/api/billing/webhook/route.ts',
+];
 
-function fakeP24() {
-  const s = { tx: new Map(), registers: [], verifies: [], reads: 0, nextOrder: 900001, dropRegisterResponse: false,
-    registerReply: null, readReply: null };
-  const fetchImpl = async (url, init) => {
-    const u = new URL(url);
-    assert.equal(u.origin, ORIGIN);
-    assert.equal(init.headers.authorization, 'Basic ' + Buffer.from(`${MERCHANT}:${API_KEY}`).toString('base64'));
-    if (init.method === 'POST' && u.pathname === '/api/v1/transaction/register') {
-      const b = JSON.parse(init.body);
-      s.registers.push(b);
-      if (s.registerReply) return s.registerReply;
-      const sign = createHash('sha384').update(JSON.stringify({ sessionId: b.sessionId, merchantId: MERCHANT, amount: b.amount, currency: b.currency, crc: CRC })).digest('hex');
-      if (b.sign !== sign) return reply(400, { error: 'Incorrect sign', code: 400 });
-      if (s.tx.has(b.sessionId)) return reply(400, { error: 'sessionId already used', code: 400 });
-      s.tx.set(b.sessionId, { sessionId: b.sessionId, orderId: s.nextOrder++, amount: b.amount, currency: 'PLN', status: 0 });
-      if (s.dropRegisterResponse) { s.dropRegisterResponse = false; return reply(504, null); }
-      return reply(200, { data: { token: `TOKEN-${b.sessionId.slice(5, 13)}` }, responseCode: 0 });
-    }
-    if (init.method === 'PUT' && u.pathname === '/api/v1/transaction/verify') {
-      const b = JSON.parse(init.body);
-      s.verifies.push(b);
-      const t = s.tx.get(b.sessionId);
-      const sign = createHash('sha384').update(JSON.stringify({ sessionId: b.sessionId, orderId: b.orderId, amount: b.amount, currency: 'PLN', crc: CRC })).digest('hex');
-      if (!t || b.sign !== sign || t.orderId !== b.orderId || t.amount !== b.amount || t.status === 0) return reply(400, { error: 'verify failed', code: 400 });
-      if (t.status === 1) t.status = 2;
-      return reply(200, { data: { status: 'success' }, responseCode: 0 });
-    }
-    const m = /^\/api\/v1\/transaction\/by\/sessionId\/(.+)$/.exec(u.pathname);
-    if (init.method === 'GET' && m) {
-      s.reads++;
-      if (s.readReply) return s.readReply;
-      const t = s.tx.get(decodeURIComponent(m[1]));
-      return t ? reply(200, { data: { ...t } }) : reply(404, { error: 'not found', code: 404 });
-    }
-    return reply(404, {});
-  };
-  /** Customer paid on the hosted page: Przelewy24 marks it paid-awaiting-verify and notifies. */
-  const pay = (sessionId, { amount, crc = CRC, extra = {} } = {}) => {
-    const t = s.tx.get(sessionId);
-    t.status = 1;
-    const n = { merchantId: MERCHANT, posId: MERCHANT, sessionId, amount: amount ?? t.amount, originAmount: amount ?? t.amount,
-      currency: 'PLN', orderId: t.orderId, methodId: 154, statement: 'p24-A1-B2-C3' };
-    n.sign = createHash('sha384').update(JSON.stringify({ ...n, crc })).digest('hex');
-    return new TextEncoder().encode(JSON.stringify({ ...n, ...extra }));
-  };
-  return { s, fetchImpl, pay };
-}
-
-function memoryStore() {
-  const st = { orders: new Map(), requests: new Map(), grants: new Map(), credits: new Map() };
-  let tail = Promise.resolve();
-  return { st, store: { async transaction(fn) {
-    let release; const wait = tail; tail = new Promise(r => { release = r; }); await wait;
-    const before = structuredClone(st);
-    const tx = {
-      async companyAccess(c, u) { return c === id(1) && u === id(2) ? { owner: true, verified: true } : { owner: false, verified: false }; },
-      async offer(k) { return k === 'preselection-v1' ? offer() : null; },
-      async orderByRequest(c, r) { return structuredClone(st.orders.get(st.requests.get(`${c}:${r}`)) ?? null); },
-      async unresolvedOrder(c) { return structuredClone([...st.orders.values()].find(o => o.companyId === c && o.status === 'awaiting_payment') ?? null); },
-      async bindRequest(c, r, o) { st.requests.set(`${c}:${r}`, o); },
-      async order(k) { return structuredClone(st.orders.get(k) ?? null); },
-      async insertOrder(o) { st.orders.set(o.id, structuredClone(o)); },
-      async saveOrder(o) { st.orders.set(o.id, structuredClone(o)); },
-      async grantOnce(key, o) { if (st.grants.has(key)) return st.grants.get(key); st.grants.set(key, o.id);
-        st.credits.set(o.companyId, (st.credits.get(o.companyId) ?? 0) + o.credits); return null; },
-    };
-    try { return await fn(tx); } catch (e) { Object.assign(st, before); throw e; } finally { release(); }
-  } } };
-}
-
-const config = { merchantId: MERCHANT, apiKey: API_KEY, crc: CRC, mode: 'test' };
-function harness() {
-  const api = fakeP24();
-  const provider = createPrzelewy24Provider({ config, scope, urlStatus: 'https://skillcheck.pl/api/billing/przelewy24/notify',
-    urlReturn: o => `https://skillcheck.pl/dashboard/${o.companyId}/billing?order=${o.id}`,
-    email: async () => 'owner@fixture.invalid', description: o => `SkillCheck PRESELEKCJA — ${o.credits} analiz CV` }, api.fetchImpl);
-  const { st, store } = memoryStore();
-  const service = createSc19Payments({ store, provider, authenticate: async () => ({ userId: id(2) }), scope,
-    checkoutOrigins: [ORIGIN], enabled: true, liveApproved: false });
-  const checkout = (rid = id(10)) => service.checkout({ companyId: id(1), offerId: 'preselection-v1', requestId: rid, termsRevision: 'terms-v1' });
-  const notify = raw => service.notification(raw, przelewy24NotificationSignature(raw));
-  return { api, st, service, checkout, notify, provider };
-}
-
-test('signature is sha384 of compact JSON in the documented field order', () => {
-  const expected = createHash('sha384').update('{"sessionId":"s","merchantId":1,"amount":100,"currency":"PLN","crc":"k"}').digest('hex');
-  assert.equal(przelewy24Sign({ sessionId: 's', merchantId: 1, amount: 100, currency: 'PLN', crc: 'k' }), expected);
+test('the Przelewy24 adapter, its runtime, diagnostic and notification route are gone', () => {
+  for (const file of removed) assert.equal(existsSync(new URL(file, root)), false, file);
 });
 
-test('checkout registers exactly one signed transaction and returns the sandbox payment page', async () => {
-  const h = harness();
-  const out = await h.checkout();
-  assert.equal(h.api.s.registers.length, 1);
-  const r = h.api.s.registers[0];
-  assert.equal(r.sessionId, sessionIdFor(out.orderId));
-  assert.equal(r.amount, 36900); assert.equal(r.currency, 'PLN'); assert.equal(r.merchantId, MERCHANT); assert.equal(r.posId, MERCHANT);
-  assert.equal(r.urlStatus, 'https://skillcheck.pl/api/billing/przelewy24/notify');
-  assert.ok(r.urlReturn.startsWith('https://skillcheck.pl/dashboard/'));
-  assert.equal(r.email, 'owner@fixture.invalid');
-  assert.equal(r.timeLimit, 0, 'the stored link must stay payable; no 30-minute expiry');
-  assert.ok(out.url.startsWith(`${ORIGIN}/trnRequest/`));
-  assert.equal(out.amountMinor, 36900);
-  const again = await h.checkout();
-  assert.equal(again.url, out.url);
-  assert.equal(h.api.s.registers.length, 1, 'retry reuses the stored session; no second charge');
+test('no application code imports, calls or reads Przelewy24', () => {
+  const files = execFileSync('git', ['ls-files', 'app', 'lib', 'components'],
+    { cwd: fileURLToPath(root), encoding: 'utf8' }).split('\n').filter(f => /\.(ts|tsx|js|mjs)$/.test(f));
+  assert.ok(files.length > 50, 'the application files are listed');
+  const offenders = [];
+  for (const file of files) {
+    let text = '';
+    try { text = readFileSync(new URL(file, root), 'utf8'); } catch { continue; }
+    // Executable references only: imports of the removed modules, the P24 hosts,
+    // the P24 environment variables and the P24 resolver. Comments that record the
+    // removal and the historical database role names (sc19_p24_*) stay allowed.
+    if (/sc19-przelewy24-provider|sc19-payment-preview-runtime|sc19-p24-diagnostic|p24-diagnostic'|przelewy24\.pl|\bP24_(SANDBOX|MERCHANT_ID|POS_ID|CRC|API_KEY)\b|resolveSc19P24Runtime|sc19SandboxPayment|checkP24/.test(text))
+      offenders.push(file);
+  }
+  assert.deepEqual(offenders, []);
 });
 
-test('a lost register response never leads to a second registration', async () => {
-  const h = harness();
-  h.api.s.dropRegisterResponse = true;
-  await assert.rejects(h.checkout(), e => e.code === 'P24_SESSION_EXISTS' && e.httpStatus === 504);
-  await assert.rejects(h.checkout(), e => e.code === 'P24_SESSION_EXISTS' && e.httpStatus === 400);
-  assert.equal(h.api.s.tx.size, 1);
-  assert.equal(h.api.s.registers.length, 2, 'second attempt was refused by Przelewy24 (duplicate sessionId)');
-  assert.equal(h.st.credits.get(id(1)), undefined);
-});
-
-// SC-P24-UNBLOCK-001: a refused registration is named by a fixed code and the
-// numeric HTTP status only; the provider's own message never leaves the adapter.
-const named = (code, httpStatus) => e => e instanceof Error && e.code === code && e.httpStatus === httpStatus &&
-  e.message === code && !/Incorrect|invalid|credential|synthetic/i.test(JSON.stringify(e));
-
-test('401 on register is P24_UNAUTHORIZED and does not read the session', async () => {
-  const h = harness();
-  h.api.s.registerReply = reply(401, { error: 'Incorrect authentication', code: 401 });
-  await assert.rejects(h.checkout(), named('P24_UNAUTHORIZED', 401));
-  assert.equal(h.api.s.reads, 0);
-  assert.equal(h.api.s.tx.size, 0);
-});
-
-test('a rejected register is named: wrong CRC/sign vs other rejection, each with the HTTP status', async () => {
-  const crc = harness();
-  crc.api.s.registerReply = reply(400, { error: 'Incorrect CRC value', code: 400 });
-  await assert.rejects(crc.checkout(), named('P24_SIGN_REJECTED', 400));
-  assert.equal(crc.api.s.reads, 1, 'absence is still confirmed before naming the rejection');
-  const other = harness();
-  other.api.s.registerReply = reply(400, { error: 'Invalid email', code: 400 });
-  await assert.rejects(other.checkout(), named('P24_REGISTER_REJECTED', 400));
-  const design = harness();
-  design.api.s.registerReply = reply(400, { error: 'Session assigned to another design', code: 400 });
-  await assert.rejects(design.checkout(), named('P24_REGISTER_REJECTED', 400));
-  const noBody = harness();
-  noBody.api.s.registerReply = reply(500, null);
-  await assert.rejects(noBody.checkout(), named('P24_REGISTER_REJECTED', 500));
-  // The real signature check of the in-memory operator, with a wrong CRC key configured.
-  const api = fakeP24();
-  const wrong = createPrzelewy24Provider({ config: { ...config, crc: 'another-crc-key-0123' }, scope,
-    urlStatus: 'https://skillcheck.pl/api/billing/przelewy24/notify', urlReturn: () => 'https://skillcheck.pl/x',
-    email: async () => 'owner@fixture.invalid', description: () => 'x' }, api.fetchImpl);
-  const order = { id: id(30), amountMinor: 36900, currency: 'PLN' };
-  await assert.rejects(wrong.createCheckout(order, `sc19:${id(30)}`), named('P24_SIGN_REJECTED', 400));
-});
-
-test('401 on a session read is P24_UNAUTHORIZED', async () => {
-  const h = harness();
-  h.api.s.readReply = reply(401, { error: 'Incorrect authentication', code: 401 });
-  await assert.rejects(h.provider.lookupCheckout({ id: id(31), amountMinor: 36900, currency: 'PLN' }, `sc19:${id(31)}`),
-    named('P24_UNAUTHORIZED', 401));
-});
-
-test('#427: a register that never happened is retried with the same session once the order is past its deadline', async () => {
-  const h = harness();
-  h.api.s.registerReply = reply(401, { error: 'Incorrect authentication', code: 401 });
-  await assert.rejects(h.checkout(), e => e.code === 'P24_UNAUTHORIZED');
-  const [order] = h.st.orders.values();
-  assert.equal(order.sessionId, null);
-  h.st.orders.set(order.id, { ...order, checkoutDeadlineMs: Date.now() - 1 });
-  h.api.s.registerReply = null;
-  const out = await h.checkout(id(11));
-  assert.equal(out.orderId, order.id);
-  assert.equal(h.api.s.registers.length, 2);
-  assert.equal(h.api.s.registers[1].sessionId, sessionIdFor(order.id));
-  assert.equal(h.api.s.registers[1].sessionId, h.api.s.registers[0].sessionId);
-  assert.equal(h.api.s.tx.size, 1);
-  assert.equal(h.st.orders.get(order.id).sessionId, sessionIdFor(order.id));
-  assert.equal(h.st.orders.size, 1);
-});
-
-test('a verified, settled payment grants the order credits exactly once', async () => {
-  const h = harness();
-  const out = await h.checkout();
-  const raw = h.api.pay(sessionIdFor(out.orderId));
-  assert.deepEqual(await h.notify(raw), { state: 'applied', orderId: out.orderId });
-  assert.equal(h.api.s.verifies.length, 1);
-  assert.equal(h.st.credits.get(id(1)), 60);
-  // Przelewy24 repeats notifications: still exactly one grant.
-  const again = await h.notify(raw);
-  assert.notEqual(again.state, 'applied_twice');
-  assert.equal(h.st.credits.get(id(1)), 60);
-});
-
-test('owner refresh reads the real session by id, verifies the amount and shares the idempotent webhook grant', async () => {
-  const h = harness();
-  const result = await h.checkout();
-  const order = h.st.orders.get(result.orderId);
-  await h.service.refreshSettlement(order);
-  assert.equal(h.st.credits.size, 0);
-  const raw = h.api.pay(order.sessionId);
-  const tx = h.api.s.tx.get(order.sessionId);
-  tx.amount = 100;
-  await assert.rejects(h.service.refreshSettlement(order), /P24_ORDER_INVALID/);
-  assert.equal(h.api.s.verifies.length, 0);
-  tx.amount = order.amountMinor;
-  await h.service.refreshSettlement(order);
-  await h.notify(raw);
-  assert.equal(h.st.credits.get(order.companyId), 60);
-});
-
-test('notifications signed with a wrong CRC, for another merchant, or with extra fields are refused', async () => {
-  const h = harness();
-  const out = await h.checkout();
-  const sid = sessionIdFor(out.orderId);
-  await assert.rejects(h.notify(h.api.pay(sid, { crc: 'attacker-crc-0000' })), e => e.code === 'P24_NOTIFICATION_UNAUTHENTICATED');
-  await assert.rejects(h.notify(h.api.pay(sid, { extra: { merchantId: 999 } })), e => e.code === 'P24_SCOPE_MISMATCH');
-  await assert.rejects(h.notify(h.api.pay(sid, { extra: { bonus: 1 } })), e => e.code === 'P24_NOTIFICATION_INVALID');
-  assert.equal(h.api.s.verifies.length, 0, 'nothing confirmed with Przelewy24 for forged input');
-  assert.equal(h.st.credits.get(id(1)), undefined);
-});
-
-test('a forged notification body cannot claim payment the provider does not report', async () => {
-  const h = harness();
-  const out = await h.checkout();
-  const sid = sessionIdFor(out.orderId);
-  // Correctly signed but the transaction was never paid (status 0): verify fails, fresh read says unpaid.
-  const t = h.api.s.tx.get(sid);
-  const n = { merchantId: MERCHANT, posId: MERCHANT, sessionId: sid, amount: 36900, originAmount: 36900, currency: 'PLN', orderId: t.orderId, methodId: 154, statement: 'x' };
-  n.sign = przelewy24Sign({ ...n, crc: CRC });
-  assert.deepEqual(await h.notify(new TextEncoder().encode(JSON.stringify(n))), { state: 'not_paid' });
-  assert.equal(h.st.credits.get(id(1)), undefined);
-});
-
-test('an underpaid amount never grants the order', async () => {
-  const h = harness();
-  const out = await h.checkout();
-  const sid = sessionIdFor(out.orderId);
-  h.api.s.tx.get(sid).amount = 100; // provider reports 1.00 PLN settled
-  await assert.rejects(h.notify(h.api.pay(sid)));
-  assert.equal(h.st.credits.get(id(1)), undefined);
-});
-
-test('configuration must name the exact merchant and environment', () => {
-  const mk = (cfg, sc) => () => createPrzelewy24Provider({ config: cfg, scope: sc, urlStatus: 'https://x.invalid/n', urlReturn: () => 'https://x.invalid',
-    email: async () => 'a@b.c', description: () => 'd' }, async () => { throw new Error('no network'); });
-  assert.throws(mk(config, { ...scope, account: '1' }), e => e.code === 'P24_CONFIG_INVALID');
-  assert.throws(mk(config, { ...scope, mode: 'live' }), e => e.code === 'P24_CONFIG_INVALID');
-  assert.throws(mk({ ...config, crc: '' }, scope), e => e.code === 'P24_CONFIG_INVALID');
-  assert.throws(() => createPrzelewy24Provider({ config, scope, urlStatus: 'http://insecure.invalid', urlReturn: () => '', email: async () => '', description: () => '' }),
-    e => e.code === 'P24_CONFIG_INVALID');
-});
-
-test('paid VAT invoice is issued once, gross-exact and marked paid', async () => {
-  const posts = [];
-  const fetchImpl = async (url, init) => {
-    const body = JSON.parse(init.body);
-    if (posts.some(p => p.oid === body.invoice.oid)) return reply(422, { code: 'error' });
-    posts.push(body.invoice);
-    return reply(201, { id: 77, kind: 'vat', status: 'paid', oid: body.invoice.oid, price_gross: body.invoice.positions[0].total_price_gross,
-      paid: body.invoice.paid, currency: 'PLN', number: 'FV 1/10/2026' });
-  };
-  const client = createFakturowniaClient({ account: 'krzysztof-syskaa', token: 'SyntheticTok3n_value/abc' }, fetchImpl);
-  const input = { oid: `sc19-paid:${id(5)}`, grossMinor: 36900, itemName: 'SkillCheck PRESELEKCJA — 60 analiz CV', issueDate: '2026-10-26',
-    paymentReference: 'przelewy24:900001',
-    buyer: { name: 'FIRMA TESTOWA SP. Z O.O.', nip: '5260250274', street: 'UL. TESTOWA 1', postCode: '00-001', city: 'WARSZAWA', email: 'owner@fixture.invalid' } };
-  const inv = await client.createPaidInvoice(input);
-  assert.equal(inv.kind, 'vat'); assert.equal(inv.status, 'paid');
-  assert.equal(posts[0].status, 'paid'); assert.equal(posts[0].paid, '369.00'); assert.equal(posts[0].oid_unique, 'yes');
-  assert.equal(posts[0].positions[0].total_price_gross, '369.00'); assert.equal(posts[0].buyer_tax_no, '5260250274');
-  await assert.rejects(client.createPaidInvoice(input), e => e.code === 'FAKTUROWNIA_REQUEST_REJECTED');
-  assert.equal(posts.length, 1);
-  await assert.rejects(client.createPaidInvoice({ ...input, oid: 'free-text' }), e => e.code === 'FAKTUROWNIA_REQUEST_REJECTED');
-});
-
-test('P24 HTTP callback verifies the signature inside the JSON; protected-preview refresh authorizes the owner first', async () => {
-  const h=harness();
-  const result=await h.checkout();
-  const raw=h.api.pay(sessionIdFor(result.orderId));
-  const appOrigin='https://preview.fixture.invalid';
-  const runtime={appOrigin, signatureHeader:null, service:h.service, authenticate:async()=>({userId:id(2)}),
-    readOrder:async(company,user,order)=>company===id(1)&&user===id(2)?h.st.orders.get(order):null};
-  const http=createSc19PaymentHttp(runtime);
-  const post=(origin=appOrigin)=>new Request(appOrigin+'/api/billing/orders/'+result.orderId+'?companyId='+id(1),
-    {method:'POST',headers:{origin}});
-  assert.equal((await http.order(post('https://evil.invalid'),result.orderId)).status,403);
-  const foreign=createSc19PaymentHttp({...runtime,authenticate:async()=>({userId:id(3)})});
-  assert.equal((await foreign.order(post(),result.orderId)).status,404);
-  assert.equal(h.api.s.verifies.length,0);
-  const spoofed=new Request(appOrigin,{method:'POST',headers:{'x-signature':przelewy24NotificationSignature(raw)},body:'{}'});
-  assert.equal((await http.webhook(spoofed)).ok,false);
-  assert.equal((await http.webhook(new Request(appOrigin,{method:'POST',body:raw}))).status,200);
-  assert.equal((await (await http.order(post(),result.orderId)).json()).status,'paid');
-  assert.equal(h.st.credits.get(id(1)),60);
+test('every payment route resolves the Stripe runtime only', () => {
+  const runtime = readFileSync(new URL('lib/sc19-payment-runtime.ts', root), 'utf8');
+  assert.match(runtime, /export async function resolveSc19PaymentRuntime\([^)]*\)[^{]*\{\s*return resolveSc19StripeRuntime\(request\);\s*\}/);
+  assert.doesNotMatch(runtime, /sc19-payment-preview|previewRuntime/);
+  const http = readFileSync(new URL('lib/sc19-payment-http.ts', root), 'utf8');
+  // The webhook signature always comes from the configured header; there is no
+  // provider that signs inside the body any more.
+  assert.match(http, /signatureHeader: string;/);
+  assert.match(http, /const signature = request\.headers\.get\(runtime\.signatureHeader\) \?\? '';/);
 });
