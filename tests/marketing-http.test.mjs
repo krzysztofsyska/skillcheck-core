@@ -84,7 +84,7 @@ test('public offer and demo pages respond without an account', async (t) => {
   // Only FREE and PRESELEKCJA can be bought today, but the later stages carry their
   // approved prices (owner decision 2026-11-02, reconfirmed in chat the same evening).
   assert.equal((home.match(/>Planowany pakiet<\/p>/g) ?? []).length, 0);
-  // Owner decision 2026-11-10: while the payment operator verified the shop, WERYFIKACJA and ASSESSMENT CENTER are
+  // Owner decision 2026-11-10: while the payment operator was verifying the shop, WERYFIKACJA and ASSESSMENT CENTER are
   // hidden from the public pages (PUBLIC_FUTURE_OFFERS_ENABLED unset or not "true"). Their copy stays in the code.
   for (const hidden of ['id="planowane-pakiety"', 'id="przyklady-pakietow"', 'WERYFIKACJA', 'ASSESSMENT CENTER', 'Assessment Center', '615 zł', '1 499 zł', 'w przygotowaniu — nie można jeszcze kupić', 'Cena zatwierdzona', 'do 10 testowanych osób', 'do 6 finalistów', 'To plan rozwoju.', 'Zapytaj o plan']) {
     assert.equal(home.includes(hidden), false, `announced packages hidden on the home page: ${hidden}`);

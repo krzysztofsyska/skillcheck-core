@@ -1,6 +1,6 @@
 // Public visibility of the announced packages WERYFIKACJA and ASSESSMENT CENTER.
 //
-// Owner decision 2026-11-10: while the payment operator verified the shop, the public offer contained only what a
+// Owner decision 2026-11-10: while the payment operator was verifying the shop, the public offer contained only what a
 // verifier can actually buy (FREE and PRESELEKCJA). Owner decision 2026-11-16 (ROADMAP R4, "tak jak
 // polecasz"): the packages were hidden only because of that verification, so they are visible again, with their
 // approved prices and the note that they cannot be bought yet. The switch stays as a kill switch: the
