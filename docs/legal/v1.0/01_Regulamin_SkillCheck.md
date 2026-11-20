@@ -51,9 +51,9 @@ Do korzystania z Serwisu potrzebne są: urządzenie z dostępem do Internetu, ak
 # § 7. Płatności
 
 1. Za pakiet można zapłacić:
-   a) **online za pośrednictwem Przelewy24** – szybkim przelewem, BLIK-iem lub kartą płatniczą, w zakresie metod udostępnianych przez operatora w chwili płatności;
+   a) **online za pośrednictwem Stripe** – kartą płatniczą, BLIK-iem lub inną metodą, w zakresie metod udostępnianych przez operatora w chwili płatności;
    b) **przelewem tradycyjnym na podstawie faktury proforma** wystawionej po złożeniu zamówienia, w terminie wskazanym na fakturze proforma.
-2. Operatorem płatności online jest PayPro S.A. z siedzibą w Poznaniu, ul. Pastelowa 8, 60-198 Poznań, KRS 0000347935, NIP 7792369887, REGON 301345068. Podmiotem świadczącym obsługę płatności online w zakresie kart płatniczych jest PayPro S.A. Agent Rozliczeniowy, ul. Pastelowa 8, 60-198 Poznań, wpisana do rejestru przedsiębiorców KRS pod numerem 0000347935, NIP 7792369887, REGON 301345068.
+2. Operatorem płatności online jest Stripe Payments Europe, Limited z siedzibą w Dublinie (1 Grand Canal Street Lower, Grand Canal Dock, Dublin, D02 H210, Irlandia).
 3. Płatność uznaje się za dokonaną z chwilą potwierdzenia jej przez operatora płatności (płatność online) albo z chwilą uznania rachunku bankowego Usługodawcy (przelew tradycyjny). Sam powrót ze strony operatora do Serwisu nie jest potwierdzeniem płatności.
 4. Po zaksięgowaniu płatności Usługodawca wystawia fakturę VAT i przesyła ją na adres e-mail Klienta oraz – jeżeli wymagają tego przepisy – za pośrednictwem Krajowego Systemu e-Faktur (KSeF). Klient odpowiada za poprawność danych do faktury.
 5. Usługodawca nie stosuje automatycznych obciążeń cyklicznych. Pakiety abonamentowe, jeśli zostaną udostępnione w Ofercie, są opłacane z góry za każdy okres rozliczeniowy.

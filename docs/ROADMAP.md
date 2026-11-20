@@ -96,12 +96,19 @@ Zamrożenie ścieżki płatności zdjęte 19.11.2026 (`docs/DECYZJE.md`). Ceny w
 | Krok | Status | Dowód |
 |---|---|---|
 | W1 + W2 — audyt źródeł cennika i katalog cen w bazie | ZROBIONE | PR #265 |
-| W2b — suwak liczby CV co 5 | W TOKU (część 2/2: suwak za flagą PRICING_CV_SLIDER_ENABLED, domyślnie wyłączoną) | PR #286 (część 1), część 2: PR #552 |
+| W2b — suwak liczby CV co 5 | W TOKU (część 2/2 zrobiona za flagą PRICING_CV_SLIDER_ENABLED, domyślnie wyłączoną; zostaje: walidacja liczby CV po stronie serwera przy zamówieniu — nie weszła do W3 (#557), do zrobienia razem z formularzem zamówienia z suwakiem) | PR #286 (część 1), część 2: PR #552 |
 | W3, W4 — publiczny cennik z katalogu, za wyłączoną flagą | ZROBIONE (W3 i W4 za wyłączonymi flagami PRICING_PAID_OPTIONS_ENABLED i PRICING_PUBLIC_CATALOG_ENABLED; włączenie flag — decyzja właściciela, TAK/NIE z liczbami przed i po) | W3: PR #557, W4: PR #559 |
 
 ### R6. Voicebot — równolegle z R1–R3 (od 18.11.2026)
 
-Docelowo w każdym pakiecie (FREE 1 rozmowa, płatne 10). Do czasu, aż działa, niewidoczny dla klientów.
+Docelowo w każdym pakiecie: FREE 1 próbna rozmowa, PRESELEKCJA 10, WERYFIKACJA 10, ASSESSMENT CENTER 10;
+po wykorzystaniu puli klient będzie mógł dokupić kolejne rozmowy — cena, wielkość dodatkowej puli,
+ważność i sposób zakupu NIEUSTALONE (decyzja 20.11.2026, `docs/DECYZJE.md`). Pula z pakietu jest ważna
+3 miesiące, jak pakiet CV. Limit kosztu 50 zł/mies. zostaje na czas testów; przed pokazaniem
+voicebota klientom wraca do decyzji właściciela (przy 15 zł rezerwacji na rozmowę to ok. 3 rozmowy
+miesięcznie łącznie, a pakiet ma 10). Limity rozmów i analiz
+CV są odrębne; limity CV bez zmian. Do czasu, aż działa i właściciel zatwierdzi uruchomienie,
+niewidoczny dla klientów.
 Od 18.11.2026 prowadzony równolegle z R1–R3 (decyzja w `docs/DECYZJE.md`). Część dotykająca
 katalogu pakietów jest odblokowana (19.11.2026). Płatny dostawca rozmów (Retell) dozwolony do 50 zł
 miesięcznie, z limitem pilnowanym w aplikacji (decyzja 19.11.2026, `docs/DECYZJE.md`).
@@ -109,7 +116,7 @@ miesięcznie, z limitem pilnowanym w aplikacji (decyzja 19.11.2026, `docs/DECYZJ
 | Krok | Status | Dowód |
 |---|---|---|
 | Architektura i MVP rozmowy (dawne SC-011, SC-012) | W TOKU (sprawdzone 18.11.2026) | audyt PR #526, `docs/checks/r6-voice-audit-2026-11-18.md`: fundamenty działają tylko na sztucznym dostawcy i bazie testowej; brakuje migracji, webhooka, połączenia z Retell i ekranu (R6-1a…1e). R6-1a/1b: PR #527; R6-1b cz. 2: PR #530; R6-1c: PR #529; R6-1d: PR #528; R6-1c cz. 2: PR #531; R6-1c cz. 3: PR #533; R6-1c cz. 4: PR #534; R6-1c cz. 5: PR #535; R6-1c cz. 6: PR #536; R6-1c cz. 7: PR #539; R6-1c cz. 8: PR #540; transkrypt w podglądzie (#542): PR #543 |
-| Podpięcie do limitów pakietów (FREE 1, płatne 10) | W TOKU (przyznanie puli przez operatora gotowe; sprawdzanie limitu przy zlecaniu rozmowy gotowe i potwierdzone testem bazy, także przy równoległych zleceniach; pakiety do podpięcia po zdjęciu zamrożenia 19.11.2026) | PR #532, PR #544 |
+| Podpięcie do limitów pakietów (FREE 1; PRESELEKCJA, WERYFIKACJA, AC po 10) | W TOKU (przyznanie puli przez operatora gotowe; sprawdzanie limitu, rezerwacja, rozliczenie i zwrot nieodbytej rozmowy gotowe i potwierdzone testem bazy, także przy równoległych zleceniach; pula z pakietu przyznawana automatycznie osobno dla każdego pakietu, bez podwójnego przyznania, oraz przygotowane, nieużywane miejsce na dokupione rozmowy — ważność puli 3 miesiące jak pakiet CV (decyzja 20.11.2026, 18:31) — w PR #553 (scalenie do `integration` zatwierdzone przez właściciela 20.11.2026, 18:31, po przeglądzie); poprawka: zakup kilku pakietów jedną płatnością lub jednym zamówieniem daje 10 rozmów za każdy pakiet (wcześniej 10 za całą płatność), bez podwójnego przyznania — PR #572; zostaje: wywołanie przy zlecaniu rozmowy z ekranu rekrutera, gdy ten ekran powstanie, oraz zakup dodatkowych rozmów po decyzji o cenie) | PR #532, PR #544, PR #553, PR #572 |
 
 ### R7. Płatności Stripe w tym repozytorium (od 19.11.2026)
 
@@ -120,7 +127,7 @@ Decyzja 19.11.2026 (`docs/DECYZJE.md`): Stripe zamiast Przelewy24, to samo konto
 |---|---|---|
 | Zdjęcie `PAYMENT_PATH_FREEZE` z publikatora (`.github/workflows/auto-release.yml`) i testów polityki wydań | DO SPRAWDZENIA (zamrożenie usunięte w całości: `PAYMENT_PATH_FREEZE` i `PAYMENT_CONTENT_FREEZE`; zostaje tylko blokada kodu, który rusza pieniądze lub faktury — `PAYMENTS`; działa na produkcji po promocji #564 na `main`) | kod: PR #564, zasady: PR #565 |
 | Zakup PRESELEKCJI, WERYFIKACJI i ASSESSMENT CENTER przez Stripe Checkout (wzór: `skillcheck-preselekcja`), ceny z `docs/cennik-2026-11-02.md`, domyślnie wyłączony do czasu kluczy | W TOKU (PRESELEKCJA w całych pakietach po 60 CV, tylko tryb testowy; WERYFIKACJA i ASSESSMENT CENTER „wkrótce”; bez faktur) | PR #556 |
-| Usunięcie kodu Przelewy24 | W TOKU (część 1: kod płatności, trasy, panel operatora i ekran zakupu bez Przelewy24; cz. 2 (teksty stron): PR #567 — teksty stron publicznych i kalkulatora mówią o Stripe; zostają martwe gałęzie w komponencie zakupu (PR #563), regulamin w wersji .docx, dokumentacja oraz lista plików w workflow) | PR #562, PR #567 |
+| Usunięcie kodu Przelewy24 | W TOKU (część 1: kod płatności, trasy, panel operatora i ekran zakupu bez Przelewy24; cz. 2 (teksty stron): PR #567 — teksty stron publicznych i kalkulatora mówią o Stripe; cz. 3 (dokumenty prawne): PR #570 — regulamin i polityka prywatności nazywają Stripe, wersja zgody r4; zostają martwe gałęzie w komponencie zakupu (PR #563), regulamin w wersji .docx, dokumentacja oraz lista plików w workflow) | PR #562, PR #567; dokumenty prawne: PR #570 |
 | Limit kosztu rozmów voicebota 50 zł miesięcznie w aplikacji (blokada nowych rozmów i powiadomienie właściciela) | W TOKU (blokada w bazie i alert dla właściciela w bazie; każda rozmowa rezerwuje 15 zł, czyli jej najwyższy możliwy koszt, więc limitu nie da się przekroczyć także bez rozliczenia rzeczywistych kosztów — przy obecnej rezerwie mieszczą się 3 rozmowy w miesiącu; usunięcie danych kandydata nie zmienia miesięcznej sumy; rzeczywisty koszt rozmowy z webhooka Retell (call_analyzed, przeliczony po stałym kursie 4,50 zł/USD) zastępuje rezerwę raz na rozmowę, a koszt wyższy niż rezerwa blokuje resztę miesiąca; alert dla właściciela jest widoczny w panelu operatora „Koszty AI i marża” razem z limitem, kosztem od początku miesiąca i informacją, czy nowe rozmowy są wstrzymane (PR #568); zostaje zewnętrzne powiadomienie (e-mail) — to nowa prawdziwa wysyłka i wymaga zgody właściciela) | PR #558, PR #561, PR #568 |
 
 ## Wstrzymane do pierwszej sprzedaży

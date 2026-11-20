@@ -15,6 +15,52 @@
 
 ## 20.11.2026
 
+**Pula rozmów voicebota: scalenie, ważność, limit kosztu (odpowiedź właściciela w czacie, 18:31).**
+Pytania sesji Claude w poprzedniej wiadomości czatu (TAK/NIE, każde z rekomendacją TAK):
+1) czy scalić pulę rozmów z pakietów (PR #553) do wersji testowej (`integration`);
+2) czy rozmowy z pakietu mają być ważne 3 miesiące, tak jak pakiet CV;
+3) czy zostawić limit 50 zł miesięcznie na czas testów i wrócić do niego po pierwszych próbnych
+   rozmowach (przy 15 zł rezerwacji na rozmowę to w najgorszym razie ok. 3 rozmowy miesięcznie
+   łącznie, a pakiet ma 10 — do decyzji przed pokazaniem voicebota klientom).
+Cytat odpowiedzi właściciela: „1 tak, 2 tak, 3 tak”.
+
+**Voicebot w pakietach: pula rozmów i dokupowanie (polecenie właściciela dla PR #553, ok. 09:55).**
+Cytat z polecenia właściciela (układ tabeli i listy zachowany):
+
+> Voicebot będzie częścią pakietów SkillCheck:
+>
+> | Pakiet | Rozmowy voicebota w cenie |
+> |---|---|
+> | FREE | 1 próbna rozmowa |
+> | PRESELEKCJA | 10 rozmów |
+> | WERYFIKACJA | 10 rozmów |
+> | ASSESSMENT CENTER | 10 rozmów |
+>
+> Po wykorzystaniu przyznanej puli klient będzie mógł dokupić kolejne rozmowy.
+>
+> Cena, wielkość dodatkowej puli i sposób jej zakupu zostaną ustalone później. Nie wprowadzaj
+> własnych założeń handlowych.
+>
+> Limity analiz CV pozostają bez zmian:
+>
+> * FREE — 5 analiz CV.
+> * PRESELEKCJA — 60 analiz CV za 300 zł brutto.
+>
+> Limity rozmów i analiz CV są odrębnymi uprawnieniami.
+
+oraz: „Voicebot pozostaje niewidoczny dla klientów do czasu skonfigurowania i zatwierdzenia
+uruchomienia.”
+
+**Korekta w PR #553, 08:51 (komentarz właściciela).** „Właściciel wyjaśnił, że wcześniej pomylił
+limity **analiz CV** z limitami **rozmów voicebota**. Cofnięcie całej koncepcji z poprzedniego
+komentarza było wynikiem nieporozumienia; **nie jest już aktualną dyspozycją**.” oraz „Wcześniejszy
+komentarz o wycofaniu 1/10 jest NIEAKTUALNY. Nie przyjmować zatwierdzenia jako zgody na płatnego
+dostawcę ani koszty.”
+
+**Wycofanie limitów 1/10 w PR #553, 08:42 (komentarz właściciela) — NIEAKTUALNE (20.11.2026, 08:51,
+zob. wyżej).** „Właściciel wprost zakwestionował i COFNĄŁ wcześniejsze ustalenie `FREE = 1 rozmowa`,
+`płatne = 10 rozmów`.” (…) „PR #553 zamknięty bez merge.”
+
 **Potwierdzenie decyzji z 19.11.2026 (Stripe zamiast Przelewy24, voicebot do 50 zł/mies., PR #546).**
 Pytanie czatu: „PR #546 zapisuje Twoje decyzje z 19.11 (Stripe zamiast P24, voicebot do 50 zł/mies.)
 … Odpisz TAK, jeśli tak zdecydowałeś” Właściciel, ok. 08:4x:
