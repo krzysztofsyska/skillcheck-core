@@ -205,6 +205,7 @@ test('F1: every money-moving or invoicing file is refused by path (repository-wi
     'lib/sc19-stripe-config.ts': 'Stripe adapter (test mode until the owner enters live keys)',
     'lib/sc19-stripe-provider.ts': 'Stripe adapter (test mode until the owner enters live keys)',
     'lib/sc19-stripe-runtime.ts': 'Stripe adapter (test mode until the owner enters live keys)',
+    'lib/sc19-stripe-packages.ts': 'Stripe WERYFIKACJA / AC order store (R7); imports the payments store',
   };
   const missed = [];
   for (const f of files) {

@@ -1,16 +1,18 @@
 import { sc19StripeConfig } from './sc19-stripe-config.ts';
 import type { PaymentDependencies } from './sc19-payments.ts';
 import { createSc19Payments } from './sc19-payments.ts';
-import { createPostgresPaymentStore, type PaymentSqlPool } from './sc19-payment-postgres.ts';
+import { createPostgresPaymentStore, type PaymentSqlPool, type PaymentStoreExtension } from './sc19-payment-postgres.ts';
 import type { PaymentHttpRuntime } from './sc19-payment-http.ts';
 export function composeSc19PaymentRuntime(config: Omit<PaymentDependencies,'store'> & {
   pool: PaymentSqlPool; appOrigin: string; signatureHeader: PaymentHttpRuntime['signatureHeader'];
+  /** R7: the Stripe runtime adds the WERYFIKACJA / ASSESSMENT CENTER order source. */
+  storeExtension?: PaymentStoreExtension;
 }): PaymentHttpRuntime {
   const origin=new URL(config.appOrigin);
   if(origin.origin!==config.appOrigin || !['https:','http:'].includes(origin.protocol) ||
     (origin.protocol==='http:' && !['localhost','127.0.0.1'].includes(origin.hostname)) ||
     !/^[a-z0-9-]{1,80}$/.test(config.signatureHeader))throw Error('SC19_PAYMENT_CONFIGURATION_INVALID');
-  const store=createPostgresPaymentStore(config.pool);
+  const store=createPostgresPaymentStore(config.pool,config.storeExtension);
   const service=createSc19Payments({...config,store});
   return Object.freeze({service, authenticate:config.authenticate,
     readOrder:store.readOrder,listOffers:store.listOffers,appOrigin:config.appOrigin,

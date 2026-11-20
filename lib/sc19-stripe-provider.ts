@@ -15,8 +15,8 @@
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { HostedCheckout, PaymentMode, PaymentOrder, PaymentProvider, PaymentScope, VerifiedPayment } from './sc19-payments.ts';
-import { Sc19PaymentError } from './sc19-payments.ts';
-import { STRIPE_APP, STRIPE_CATALOG, stripeLookupKey, stripeQuote } from './stripe-catalog.ts';
+import { Sc19PaymentError, orderPackage } from './sc19-payments.ts';
+import { STRIPE_APP, STRIPE_CATALOG, stripeLookupKey, stripeQuote, type StripePackageCode } from './stripe-catalog.ts';
 
 export const STRIPE_API = 'https://api.stripe.com';
 export const STRIPE_CHECKOUT_ORIGIN = 'https://checkout.stripe.com';
@@ -82,6 +82,19 @@ export function stripeForm(params: Record<string, unknown>): string {
 }
 
 export type StripeBuyer = Readonly<{ email: string; companyName: string; nip: string | null }>;
+/** Company name and NIP for the Stripe checkout form, through the security-definer
+ * sc19_stripe.buyer() (the adapter roles cannot read the NIP column directly). It
+ * answers only while the company has an unpaid Stripe order, PRESELEKCJA or (after
+ * migration 20261121150000) WERYFIKACJA / ASSESSMENT CENTER; otherwise
+ * SC19_PAYMENT_FORBIDDEN. `query` runs on the adapter's restricted login. */
+export async function readStripeBuyerCompany(
+  query: (sql: string, values: unknown[]) => Promise<Record<string, unknown>[]>, companyId: string,
+): Promise<{ companyName: string; nip: string | null }> {
+  const rows = await query('select company_name,nip from sc19_stripe.buyer($1)', [companyId]);
+  if (!rows[0] || typeof rows[0].company_name !== 'string') throw new Sc19PaymentError('SC19_PAYMENT_FORBIDDEN');
+  const nip = typeof rows[0].nip === 'string' && /^[0-9]{10}$/.test(rows[0].nip) ? rows[0].nip : null;
+  return { companyName: rows[0].company_name, nip };
+}
 /** One Stripe customer per company and mode, stored by the runtime (sc19_stripe.customers). */
 export type StripeCustomerStore = Readonly<{
   find(companyId: string, mode: PaymentMode): Promise<string | null>;
@@ -147,10 +160,12 @@ export function createStripeProvider(options: StripeProviderOptions): PaymentPro
     catch (e) { if (e instanceof Sc19PaymentError) throw e; return fail('SC19_PAYMENT_RETRY'); }
   };
 
-  /** Server-side check that the snapshotted order is whole PRESELEKCJA packages at the catalog price. */
+  /** Server-side check that the snapshotted order is whole packages of its own
+   * package at the catalog price (WERYFIKACJA and ASSESSMENT CENTER: exactly one). */
   function packagesOf(order: PaymentOrder): number {
-    const n = order.credits / STRIPE_CATALOG.PRESELEKCJA.cvCredits;
-    const quote = stripeQuote('PRESELEKCJA', n);
+    const code = orderPackage(order);
+    const n = order.credits / STRIPE_CATALOG[code].cvCredits;
+    const quote = stripeQuote(code, n);
     if (!quote || quote.grossMinor !== order.amountMinor || quote.cvCredits !== order.credits || order.currency !== 'PLN')
       return fail('SC19_PAYMENT_CHECKOUT_INVALID');
     return n;
@@ -192,8 +207,8 @@ export function createStripeProvider(options: StripeProviderOptions): PaymentPro
 
   /** Price created by the setup step (lookup key skillcheck-core:<code>), checked
    * against the code catalog. Absent → inline price data from the same catalog. */
-  async function linePrice(n: number) {
-    const code = 'PRESELEKCJA' as const, pkg = STRIPE_CATALOG[code];
+  async function linePrice(code: StripePackageCode, n: number) {
+    const pkg = STRIPE_CATALOG[code];
     const list = await call('GET', '/v1/prices', { lookup_keys: [stripeLookupKey(code)], active: true, limit: 1 });
     const price = Array.isArray(list?.data) ? (list.data as Json[])[0] : undefined;
     if (price) {
@@ -221,17 +236,18 @@ export function createStripeProvider(options: StripeProviderOptions): PaymentPro
   async function createCheckout(order: PaymentOrder, idempotencyKey: string): Promise<HostedCheckout> {
     if (!sameScope(order.scope, scope)) return fail('SC19_PAYMENT_SCOPE_MISMATCH');
     const n = packagesOf(order);
+    const code = orderPackage(order), pkg = STRIPE_CATALOG[code];
     const buyer = await options.buyer(order);
     const customer = await ensureCustomer(order.companyId, buyer);
-    const line = await linePrice(n);
+    const line = await linePrice(code, n);
     const metadata = { app: STRIPE_APP, order_id: order.id, company_id: order.companyId,
-      package_code: 'PRESELEKCJA', packages: String(n), pool_cv: String(order.credits) };
+      package_code: code, packages: String(n), pool_cv: String(order.credits) };
     const back = `${appOrigin}/dashboard/${order.companyId}/billing/checkout`;
     const session = await call('POST', '/v1/checkout/sessions', {
       mode: 'payment', locale: 'pl', currency: 'pln', customer,
       customer_update: { name: 'auto', address: 'auto' },
       client_reference_id: order.id, metadata,
-      payment_intent_data: { metadata, description: `SkillCheck PRESELEKCJA — ${n} × ${STRIPE_CATALOG.PRESELEKCJA.cvCredits} analiz CV` },
+      payment_intent_data: { metadata, description: `SkillCheck ${pkg.name} — ${n} × ${pkg.cvCredits} analiz CV` },
       line_items: [line],
       // Immediate methods only: the package is granted solely on checkout.session.completed
       // (owner, 19.11.2026), so a delayed method (bank transfer, SEPA…) is never offered.
