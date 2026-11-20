@@ -15,6 +15,22 @@
 
 ## 20.11.2026
 
+**Uruchomienie Stripe na żywo w obu aplikacjach, faktury i korekty z Fakturowni, zdjęcie blokady
+płatności w core.** Wiadomość właściciela w sesji Claude Code
+https://claude.ai/code/session_01TVLzgdPHQxd9p7t7a6Egwp (19.11.2026, ok. 22:33 czasu polskiego), m.in.:
+„Cel: płatności Stripe w OBU aplikacjach, jedno konto Stripe NA ŻYWO (KTIG Consulting Sp. z o.o., nazwa handlowa SkillCheck), faktury VAT z Fakturowni wysyłane automatycznie do KSeF. Piaskownicy Stripe nie używamy. Kolejność: najpierw skillcheck-preselekcja (sprzedaż FREE + PRESELEKCJA), potem skillcheck-core. Ścieżka płatności była zamrożona do uruchomienia Stripe'a — to zadanie jest tym uruchomieniem.”
+„W skillcheck-core zostały stare zmienne P24_* — nie kasuj ich bez zgody właściciela.”
+„2. Produkty i ceny tworzone skryptem przez API Stripe, idempotentnie, z metadata app i kodem pakietu: PRESELEKCJA 300 zł brutto / 60 CV, WERYFIKACJA 615 zł / 60 CV, ASSESSMENT CENTER 1 499 zł / 50 CV. Suwak puli CV (wielokrotności 5) — kwota liczona na serwerze, nigdy z przeglądarki. Pakiety "wkrótce" nie do kupienia (brak przycisku + blokada na serwerze).”
+„3. Webhooki: zarejestruj endpointy w Stripe przez API (checkout.session.completed, charge.refunded). Masz zgodę właściciela, żeby w TYM zadaniu samodzielnie zapisać zwrócony sekret jako STRIPE_WEBHOOK_SECRET (Production, sensitive) w odpowiednim projekcie Vercel przez API Vercel — osobny dla każdej aplikacji. Poza tym sekretów nie ruszasz.”
+„5. Faktury: NIE używaj faktur Stripe (Stripe Invoicing wyłączone). Po checkout.session.completed aplikacja wystawia fakturę VAT w Fakturowni przez API: nabywca (nazwa, NIP, adres) z rejestracji/sesji, pozycja = pakiet i pula CV, kwota brutto z VAT 23%, status "opłacona", metoda płatności, ID płatności Stripe w uwagach. Idempotentnie (jedna faktura na płatność). Przy charge.refunded — automatyczna faktura korygująca. Do KSeF i mailem do klienta wysyła Fakturownia (już włączone) — nie wysyłaj do KSeF sam. W skillcheck-core użyj istniejących zmiennych FAKTUROWNIA_*.”
+„10. Po wydaniu każdej aplikacji: przygotuj dla właściciela jeden zakup kontrolny (link + co sprawdzić: pakiet włączony, faktura w Fakturowni z numerem KSeF), a po jego potwierdzeniu automatycznie zwróć płatność przez API Stripe (z korektą faktury).”
+
+Pytania czatu do planu (ta sama sesja; odpowiedź właściciela 20.11.2026, ok. 8:4x): „2. W core do kupienia tylko pakiety, które dziś działają.
+WERYFIKACJA i ASSESSMENT CENTER zostają „wkrótce”, dopóki nie potwierdzisz, że działają.” oraz
+„3. W core zdejmujesz blokadę płatności i odblokowujesz Fakturownię. Ten cytat wpiszę do DECYZJE.md.”
+Właściciel: **„1 TAK (PRESELEKCJA tylko w całych pakietach po 60 CV, np. 2 pakiety = 600 zł = 120 CV). 2 TAK. 3 TAK. 4 TAK.”**
+oraz: „zakup kontrolny robię na własną firmę KTIG Consulting sp. z o.o., innej firmy nie będzie. Jeśli faktura KTIG dla KTIG jest problemem w KSeF, rozwiąż to sam w najbezpieczniejszy sposób (np. ta jedna płatność kontrolna bez faktury albo od razu z korektą po zwrocie) i opisz w raporcie, co wybrałeś.”
+
 **Potwierdzenie decyzji z 19.11.2026 (Stripe zamiast Przelewy24, voicebot do 50 zł/mies., PR #546).**
 Pytanie czatu: „PR #546 zapisuje Twoje decyzje z 19.11 (Stripe zamiast P24, voicebot do 50 zł/mies.)
 … Odpisz TAK, jeśli tak zdecydowałeś” Właściciel, ok. 08:4x:
