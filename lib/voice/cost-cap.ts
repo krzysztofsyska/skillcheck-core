@@ -32,3 +32,27 @@ export function isVoiceCostCapRefusal(error: unknown): boolean {
   const { code, message } = error as { code?: unknown; message?: unknown };
   return code === VOICE_COST_CAP_SQLSTATE && message === VOICE_COST_CAP_REACHED;
 }
+
+/**
+ * USD to grosze for recording Retell's real call cost: the same conservative
+ * 4.50 zł/USD the migration (20261121120000_r7_voice_cost_cap.sql) uses to size
+ * the per-call reservation. A fixed constant, never a live exchange rate.
+ */
+export const VOICE_COST_GROSZE_PER_USD = 450;
+/** The database's upper limit for one recorded call cost (`charges.cost_grosze`). */
+export const VOICE_COST_MAX_GROSZE = 1_000_000;
+
+/**
+ * Retell's `combined_cost` (USD cents, may be fractional) to whole grosze,
+ * rounded UP so a recorded cost is never below the real one. A cost above the
+ * database limit is clamped to it: still far above any reservation, so the month
+ * fails closed (reserve_exceeded). Null for anything that is not a cost.
+ */
+export function retellCostCentsToGrosze(cents: unknown): number | null {
+  if (typeof cents !== "number" || !Number.isFinite(cents) || cents < 0) return null;
+  if (cents > 1e9) return VOICE_COST_MAX_GROSZE;
+  // Integer arithmetic on 1/10000 of a cent: no float drift in the rounding.
+  const tenThousandths = Math.round(cents * 10_000);
+  const grosze = Math.ceil((tenThousandths * VOICE_COST_GROSZE_PER_USD) / 1_000_000);
+  return Math.min(grosze, VOICE_COST_MAX_GROSZE);
+}

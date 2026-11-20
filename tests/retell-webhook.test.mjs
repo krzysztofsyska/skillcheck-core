@@ -6,6 +6,9 @@ import {
   RetellWebhookError, RETELL_WEBHOOK_MAX_BYTES,
 } from "../lib/voice/retell-webhook.ts";
 import { projectVoiceProviderEvent } from "../lib/voice/provider-event-contract.ts";
+import {
+  retellCostCentsToGrosze, VOICE_CALL_RESERVE_GROSZE, VOICE_COST_GROSZE_PER_USD, VOICE_COST_MAX_GROSZE,
+} from "../lib/voice/cost-cap.ts";
 
 const key = "key_synthetic_webhook_0123456789";
 const config = { webhookKey: key, agentId: "agent_1234567890abcdef", agentVersion: 2 };
@@ -159,4 +162,29 @@ test("status events feed the existing SC-011 projection with Retell identifiers"
   assert.equal(projectVoiceProviderEvent(b.state, retellProviderEvent(started, config, attemptId)).outcome, "ignored_terminal");
   rejected(() => retellProviderEvent(deliver({ event: "call_analyzed", call: call() }), config, attemptId));
   rejected(() => retellProviderEvent(deliver({ event: "transcript_updated", call: call() }), config, attemptId));
+});
+
+test("R7: only call_analyzed carries the provider's total cost; malformed or absent cost is null", () => {
+  assert.equal(deliver({ event: "call_analyzed", call: call() }).costUsdCents, 12);
+  assert.equal(deliver({ event: "call_analyzed", call: call({ call_cost: { combined_cost: 12.345, product_costs: [] } }) }).costUsdCents, 12.345);
+  assert.equal(deliver({ event: "call_ended", call: call() }).costUsdCents, null);
+  assert.equal(deliver({ event: "call_started", call: call() }).costUsdCents, null);
+  for (const call_cost of [undefined, null, {}, { combined_cost: "12" }, { combined_cost: -1 }, [12], 12])
+    assert.equal(deliver({ event: "call_analyzed", call: call({ call_cost }) }).costUsdCents, null, JSON.stringify(call_cost));
+});
+
+test("R7: USD cents become whole grosze at the fixed 4.50 zł/USD, rounded up and clamped", () => {
+  assert.equal(VOICE_COST_GROSZE_PER_USD, 450);
+  assert.equal(retellCostCentsToGrosze(0), 0);
+  assert.equal(retellCostCentsToGrosze(40), 180);
+  assert.equal(retellCostCentsToGrosze(1), 5, "4.5 grosze round up");
+  assert.equal(retellCostCentsToGrosze(0.1), 1);
+  assert.equal(retellCostCentsToGrosze(0.0001), 1);
+  assert.equal(retellCostCentsToGrosze(0.3), 2, "1.35 rounds up without float drift");
+  // 600 s at USD 0.31/min = 186 cents = 837 grosze: below the 1500 grosze reservation.
+  assert.equal(retellCostCentsToGrosze(186), 837);
+  assert.ok(retellCostCentsToGrosze(186) <= VOICE_CALL_RESERVE_GROSZE);
+  assert.equal(retellCostCentsToGrosze(1e7), VOICE_COST_MAX_GROSZE);
+  assert.equal(retellCostCentsToGrosze(1e12), VOICE_COST_MAX_GROSZE);
+  for (const bad of [null, undefined, -0.01, NaN, Infinity, "40", {}]) assert.equal(retellCostCentsToGrosze(bad), null);
 });
