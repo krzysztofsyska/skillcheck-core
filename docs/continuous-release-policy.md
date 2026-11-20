@@ -60,16 +60,18 @@ repository publishes, so it blocks nothing on its own and is kept only as an ext
 
 ## Refused automatically (hard, with an explicit reason code)
 
-- `PAYMENT_PATH_FREEZE:<file>` — the owner's payment-path freeze (2026-11-15, unchanged):
-  payment integration, purchase flow (`kup`, `checkout`), prices (`cennik`), package catalog and
-  offers, order states, `stripe`. Lifted only when Stripe works in test mode and the owner says so.
-- `PAYMENT_CONTENT_FREEZE:<file>` — any added/removed line mentioning Przelewy24/P24, Stripe,
-  Fakturownia, checkout, prices (`zł`, `PLN`, `cena`, `price`…) or order states, whatever the file
-  is called. A repository-wide test checks that every file mentioning payment identifiers is also
-  frozen by path.
+- The payment-path freeze (`PAYMENT_PATH_FREEZE`, `PAYMENT_CONTENT_FREEZE`) was lifted by the
+  owner on 2026-11-19 (`docs/DECYZJE.md`). Purchase flow, prices, package catalog and offers, order
+  states and Stripe release like other reviewed work once PR #564 (the publisher change) is on
+  `main`; it changes the publisher itself, so it reaches `main` only through a promotion, and until
+  then the publisher on `main` still refuses them with these two codes. `PAYMENTS_CONTENT` below
+  replaces `PAYMENT_CONTENT_FREEZE` from that moment.
+- `PAYMENTS_CONTENT:<file>` — any added/removed line calling the money-moving or invoicing core
+  (Przelewy24/P24, `sc19-payment*`, Fakturownia), whatever the file is called. A repository-wide
+  test checks that every such file is also refused by path (`PAYMENTS`), with listed exceptions.
 - `UNRELEASED_MIGRATIONS_PRECEDE` — `integration` holds migrations not yet on production; product
   code (`app/`, `lib/`, `supabase/`, …) may depend on them, so only docs/tests ship until they do.
-- `PAYMENTS:<file>`, `OUTBOUND_SENDS:<file>` — billing/P24/invoices; mail/SMS/voice/notifications.
+- `PAYMENTS:<file>`, `OUTBOUND_SENDS:<file>` — billing/payments/P24/Fakturownia/invoices; mail/SMS/voice/notifications.
 - `SECRETS_OR_PIPELINE:<file>` — `.github/`, env files, `vercel.json`, `supabase/config`, the
   agent pipeline, the publisher itself and `tools/db-migrate/` (the executor that runs with the
   production database credential). Changes to the gates need a human merge.
