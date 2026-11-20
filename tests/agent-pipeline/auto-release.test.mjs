@@ -91,7 +91,7 @@ test('payments, sends, pipeline/secrets paths need owner consent', () => {
     deny(i => { i.promotion.manifest.files.push(f); }, c);
   assert.deepEqual(classifyReleaseFiles(['app/page.tsx']).reasons, []);
 });
-test('payment-path freeze removed (owner 2026-11-20): purchase flow, prices, catalog and orders release', () => {
+test('payment-path freeze removed (owner 2026-11-19): purchase flow, prices, catalog and orders release', () => {
   for (const f of ['app/kup/preselekcja/page.tsx', 'lib/sc19-catalog-orders.ts', 'lib/sc19-offer-catalog-runtime.ts',
     'lib/sc19-offer-amounts.ts', 'lib/sc19-package-sizes.ts', 'lib/preselekcja-offer.ts',
     'app/components/marketing/package-comparison.tsx', 'app/checkout/route.ts', 'lib/stripe/client.ts',

@@ -8,9 +8,10 @@ export const SHA = /^[0-9a-f]{40}$/;
 // Release scope that never ships automatically. Path based; a denylist on top of the
 // evidence checks, never proof of safety by itself.
 // The payment-path freeze (PAYMENT_PATH_FREEZE / PAYMENT_CONTENT_FREEZE, owner 2026-11-15) was
-// removed entirely by the owner on 2026-11-20 (docs/DECYZJE.md). Purchase flow, prices, package
-// catalog, order states and Stripe now release like other reviewed work. PAYMENTS below is the
-// older, separate rule for code that moves money or issues invoices (billing, P24, Fakturownia).
+// lifted by the owner on 2026-11-19 (docs/DECYZJE.md: "1. Zdjąć zamrożenie płatności w core…"
+// -> "1 tak"). Purchase flow, prices, package catalog, order states and Stripe now release like
+// other reviewed work. PAYMENTS below is the older, separate rule for code that moves money or
+// issues invoices (billing, P24, Fakturownia).
 export const OWNER_CONSENT_PATHS = [
   // Tokens match a whole path segment or any -/_/. delimited part of one (lib/sc19-payment-http.ts).
   ['PAYMENTS', /(^|[/._-])(p24|przelewy24|billing|payments?|fakturownia|invoices?|platnosci)([/._-]|$)/i],
@@ -245,7 +246,7 @@ export function classifyRelease(files, migrations = []) {
 
 // Changed LINES (added or removed) that call the money-moving or invoicing code covered by
 // PAYMENTS, whatever the file is called. Prices, Stripe, checkout and order states are no longer
-// frozen (owner 2026-11-20).
+// frozen (owner 2026-11-19).
 const PAYMENT_CONTENT = /przelewy24|\bp24[_A-Za-z]|P24_|sc19[-_]payment|fakturownia/iu;
 // Changed lines that touch real outbound sending (e-mail provider, voice provider).
 const OUTBOUND_CONTENT = /api\.resend\.com|RESEND_API_KEY|\bretell|sendBulkEmail|sendMail|twilio/i;

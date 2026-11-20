@@ -60,7 +60,7 @@ test('every migration needs a fresh completed backup and an unattended executor'
   assert.deepEqual(fresh, ['MIGRATION_EXECUTOR_UNAVAILABLE']);
 });
 
-test('owner-consent areas stay refused; the payment-path freeze is gone (owner 2026-11-20)', () => {
+test('owner-consent areas stay refused; the payment-path freeze is gone (owner 2026-11-19)', () => {
   for (const [file, code] of [
     ['lib/p24/sign.ts', 'PAYMENTS'], ['app/operator/billing/page.tsx', 'PAYMENTS'],
     ['lib/sales-leads.ts', 'OUTBOUND_SENDS'], ['lib/email/send.ts', 'OUTBOUND_SENDS'],
@@ -194,7 +194,7 @@ test('F1: every money-moving or invoicing file is refused by path (repository-wi
     'lib/ai-ledger-writer.ts': 'only imports the shared TLS helper previewPoolTls from sc19-payment-preview-tls.ts',
     'lib/competency-broker-tls.ts': 'only imports the shared TLS helper previewPoolTls from sc19-payment-preview-tls.ts',
     'lib/tenant-domain-network.ts': 'only imports the shared TLS helper previewPoolTls from sc19-payment-preview-tls.ts',
-    // Payment-path freeze removed by the owner on 2026-11-20: purchase flow, offers and the Stripe
+    // Payment-path freeze lifted by the owner on 2026-11-19: purchase flow, offers and the Stripe
     // adapter release like other reviewed work. Their changed lines that touch the P24/Fakturownia
     // or sc19-payments core are still refused by PAYMENTS_CONTENT.
     'app/components/marketing/content.ts': 'marketing copy names Przelewy24',
@@ -224,7 +224,7 @@ test('money-moving content in changed lines is refused whatever the file is call
   assert.ok(r('+const x = createPrzelewy24Order()').includes('PAYMENTS_CONTENT:app/regulamin/page.tsx'));
   assert.ok(r('+import { x } from "@/lib/sc19-payment-http"').includes('PAYMENTS_CONTENT:app/regulamin/page.tsx'));
   assert.ok(r('+await fakturowniaInvoice()').includes('PAYMENTS_CONTENT:app/regulamin/page.tsx'));
-  // Payment-path freeze removed by the owner on 2026-11-20: prices, Stripe, checkout and order states ship.
+  // Payment-path freeze lifted by the owner on 2026-11-19: prices, Stripe, checkout and order states ship.
   for (const line of ['-  cena: "300 zł brutto"', '+PRESELEKCJA za 300 zł brutto', '-<b>615 zł</b>', '+  label: "1 499 zł",',
     '+ status = orders_status', '+const s = new Stripe(key)', '+redirect("/checkout")']) {
     assert.deepEqual(r(line), [], line);
