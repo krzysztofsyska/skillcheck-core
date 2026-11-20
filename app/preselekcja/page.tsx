@@ -7,6 +7,8 @@ import { loadPublicOffer, preselekcjaOffer, preselekcjaPrice } from "../componen
 import { sc19PolicyPendingScope } from "../../lib/sc19-package-sizes";
 import { preselekcjaGuarantee } from "../../lib/preselekcja-guarantee";
 import { BUY_PRESELEKCJA_LABEL, BUY_PRESELEKCJA_PATH } from "../../lib/buy-preselekcja";
+import { loadPaidOptions } from "../../lib/pricing/paid-options-server";
+import { PaidOptionsPicker } from "../components/marketing/paid-options-picker";
 
 // The PRESELEKCJA count follows the SC-019 catalog flag and policy per request,
 // as on the home page.
@@ -33,6 +35,8 @@ export default async function PreselectionOfferPage() {
   // transfer), so removing it would make the page less useful, not more honest.
   const { preselekcja, catalogEnabled } = await loadPublicOffer();
   const scope = preselekcja === null ? null : `${preselekcja} analiz CV`;
+  // SC-PRICING-W3: flaga PRICING_PAID_OPTIONS_ENABLED (dokładnie "true"); wyłączona = brak zapytania i brak sekcji.
+  const paidOptions = await loadPaidOptions();
   return <main className={styles.page}>
     <SiteHeader />
     <div id="tresc" className={styles.wrap}>
@@ -68,6 +72,7 @@ export default async function PreselectionOfferPage() {
           ? <p className={styles.note}>Zamówienie w panelu firmy: zaloguj się, wybierz firmę, otwórz <strong>Pakiety</strong> i przejdź do zakupu PRESELEKCJI. Zakup może złożyć wyłącznie właściciel konta firmy. Masz już konto? <Link href="/login">Zaloguj się</Link>.</p>
           : <p className={styles.note}>Konto firmowe służy na razie tylko do rejestracji — zamówienia w panelu firmy jeszcze nie składasz. Pakiet uruchamiamy na Twoim koncie po zaksięgowaniu wpłaty z faktury proforma. Masz już konto? <Link href="/login">Zaloguj się</Link>.</p>}
       </section>
+      {paidOptions ? <PaidOptionsPicker options={paidOptions.options} vatBasisPoints={paidOptions.vatBasisPoints} /> : null}
       <section aria-labelledby="pilot-process">
         <h2 id="pilot-process">Jak zamówić z pomocą obsługi?</h2>
         <ol>
