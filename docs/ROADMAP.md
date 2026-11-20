@@ -119,7 +119,7 @@ Decyzja 19.11.2026 (`docs/DECYZJE.md`): Stripe zamiast Przelewy24, to samo konto
 | Krok | Status | Dowód |
 |---|---|---|
 | Zdjęcie `PAYMENT_PATH_FREEZE` z publikatora (`.github/workflows/auto-release.yml`) i testów polityki wydań | DO ZROBIENIA | — |
-| Zakup PRESELEKCJI, WERYFIKACJI i ASSESSMENT CENTER przez Stripe Checkout (wzór: `skillcheck-preselekcja`), ceny z `docs/cennik-2026-11-02.md`, domyślnie wyłączony do czasu kluczy | DO ZROBIENIA | — |
+| Zakup PRESELEKCJI, WERYFIKACJI i ASSESSMENT CENTER przez Stripe Checkout (wzór: `skillcheck-preselekcja`), ceny z `docs/cennik-2026-11-02.md`, domyślnie wyłączony do czasu kluczy | W TOKU (PRESELEKCJA w całych pakietach po 60 CV, tylko tryb testowy; WERYFIKACJA i ASSESSMENT CENTER „wkrótce”; bez faktur) | PR #556 |
 | Usunięcie kodu Przelewy24 | DO ZROBIENIA | — |
 | Limit kosztu rozmów voicebota 50 zł miesięcznie w aplikacji (blokada nowych rozmów i powiadomienie właściciela) | DO ZROBIENIA | — |
 
