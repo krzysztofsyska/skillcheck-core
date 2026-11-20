@@ -51,7 +51,7 @@ automatycznie. W obu trybach test dostaje tylko kandydat z shortlisty (reguła R
 | Reguła R1 w bazie | ZROBIONE | PR #273 |
 | Tryb automatyczny w bazie (`auto_release`) | ZROBIONE | PR #291 |
 | Przełącznik rekrutera „zatwierdzam sam” / „automatycznie” na ekranie | ZROBIONE | PR #497 |
-| Automatyczne wysłanie testu kandydatowi w trybie automatycznym | W TOKU (dostęp bez kliknięcia rekrutera; realna wysyłka do kandydata nadal zamknięta) | PR #510, PR #517 |
+| Automatyczne wysłanie testu kandydatowi w trybie automatycznym | W TOKU (dostęp bez kliknięcia rekrutera; realna wysyłka do kandydata nadal zamknięta) | PR #510, PR #517, PR #545 |
 | Włączenie testu kompetencji w Preview i przejście całej ścieżki | DO SPRAWDZENIA (częściowo — zob. `docs/checks/r1-preview-walk-2026-11-18.md`) | ścieżka ręczna przeszła w bazie Preview; na stronie Preview test wyłączony (brak zmiennych Vercel) |
 
 ### R2. Rozszerzony raport kandydata, bez części głosowej (etap 2)
@@ -107,8 +107,8 @@ koszt (osobna zgoda właściciela).
 
 | Krok | Status | Dowód |
 |---|---|---|
-| Architektura i MVP rozmowy (dawne SC-011, SC-012) | W TOKU (sprawdzone 18.11.2026) | audyt PR #526, `docs/checks/r6-voice-audit-2026-11-18.md`: fundamenty działają tylko na sztucznym dostawcy i bazie testowej; brakuje migracji, webhooka, połączenia z Retell i ekranu (R6-1a…1e). R6-1a/1b: PR #527; R6-1b cz. 2: PR #530; R6-1c: PR #529; R6-1d: PR #528; R6-1c cz. 2: PR #531; R6-1c cz. 3: PR #533; R6-1c cz. 4: PR #534; R6-1c cz. 5: PR #535; R6-1c cz. 6: PR #536; R6-1c cz. 7: PR #539; R6-1c cz. 8: PR #540 |
-| Podpięcie do limitów pakietów (FREE 1, płatne 10) | W TOKU (przyznanie puli przez operatora i sprawdzanie limitu bez pakietów; pakiety czekają na zdjęcie zamrożenia) | PR #532 |
+| Architektura i MVP rozmowy (dawne SC-011, SC-012) | W TOKU (sprawdzone 18.11.2026) | audyt PR #526, `docs/checks/r6-voice-audit-2026-11-18.md`: fundamenty działają tylko na sztucznym dostawcy i bazie testowej; brakuje migracji, webhooka, połączenia z Retell i ekranu (R6-1a…1e). R6-1a/1b: PR #527; R6-1b cz. 2: PR #530; R6-1c: PR #529; R6-1d: PR #528; R6-1c cz. 2: PR #531; R6-1c cz. 3: PR #533; R6-1c cz. 4: PR #534; R6-1c cz. 5: PR #535; R6-1c cz. 6: PR #536; R6-1c cz. 7: PR #539; R6-1c cz. 8: PR #540; transkrypt w podglądzie (#542): PR #543 |
+| Podpięcie do limitów pakietów (FREE 1, płatne 10) | W TOKU (przyznanie puli przez operatora gotowe; sprawdzanie limitu przy zlecaniu rozmowy gotowe i potwierdzone testem bazy, także przy równoległych zleceniach; pakiety czekają na zdjęcie zamrożenia) | PR #532, PR #544 |
 
 ## Wstrzymane do pierwszej sprzedaży
 

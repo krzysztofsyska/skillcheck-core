@@ -12,6 +12,14 @@ export default async function Exercises({ params, searchParams }: {
   const { client, base, canEdit, editable, recruitment, position } = await exerciseContext(companyId, recruitmentId);
   const generationEnabled=editable && process.env.EXERCISE_AI_ENABLED==='true';
   const company=generationEnabled?await client.from('company_profiles').select('updated_at').eq('company_id',companyId).maybeSingle():null;
+  // Ten sam istniejący, tylko odczytowy RPC co w ExerciseAiAutoReleaseSection. Błąd lub brak danych = tryb ręczny.
+  let autoRelease=false;
+  if(generationEnabled){
+    try{
+      const mode=await client.rpc('read_exercise_ai_settings',{target_company:companyId,target_recruitment:recruitmentId});
+      autoRelease=!mode?.error&&mode?.data===true;
+    }catch{autoRelease=false;}
+  }
   const { after } = await searchParams;
   if (after !== undefined && (typeof after !== 'string' || !exerciseUuid.test(after))) notFound();
   let query = client.from('latest_exercise_definitions').select('exercise_id,version,definition').eq('company_id', companyId)
@@ -29,7 +37,7 @@ export default async function Exercises({ params, searchParams }: {
       {editable && <Link href={`${base}/new`}>Utwórz zadanie</Link>}
       {generationEnabled && !company?.error && <details><summary>Przygotuj zadanie z pomocą AI</summary>
         <ExerciseGenerationForm companyId={companyId} recruitmentId={recruitmentId} requestKey={randomUUID()}
-          positionStamp={position.updated_at} companyStamp={company?.data?.updated_at??null}/>
+          positionStamp={position.updated_at} companyStamp={company?.data?.updated_at??null} autoRelease={autoRelease}/>
       </details>}
       {canEdit && process.env.EXERCISE_AI_ENABLED==='true' && <p><Link href={`${base}/individual-questions`}>Pytania indywidualne z luk w CV (osobno od wspólnego wyniku)</Link></p>}
       {!rows.length && <p>Brak zadań na tej stronie.</p>}

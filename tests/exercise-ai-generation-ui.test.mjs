@@ -98,3 +98,24 @@ test('SC-021-C: over budget, generation is refused with a Polish message before 
   assert.deepEqual(r.calls,['access']);assert.equal(r.rpc.length,0);assert.deepEqual(log,['reserve']);
  }
 });
+test('R1 copy: manual mode keeps the approve wording; auto mode says the task is approved at once and links to it',()=>{
+ let state={};
+ const mod=load(base+'exercise-generation-form.tsx',{
+  react:{createElement,useState:initial=>[initial,()=>{}],useActionState:(action)=>[state,action,false]},
+  'next/link':{default:()=>null},'./exercise-generation-action':{generateExerciseProposal:()=>assert.fail('render must not call provider action')},
+ });
+ const textOf=node=>Array.isArray(node)?node.map(textOf).join(''):typeof node==='string'?node:node&&typeof node==='object'?textOf(node.props?.children):'';
+ const render=(extra)=>{const wrapper=mod.ExerciseGenerationForm({companyId,recruitmentId,requestKey,positionStamp:stamp,companyStamp:null,...extra});return textOf(wrapper.type(wrapper.props));};
+ const manual=render({autoRelease:false}),defaulted=render({});
+ assert.match(manual,/Propozycję trzeba przeczytać i zatwierdzić przed użyciem\./);
+ assert.doesNotMatch(manual,/zatwierdzane od razu/);
+ assert.equal(defaulted,manual,'a missing mode reads as manual');
+ const auto=render({autoRelease:true});
+ assert.match(auto,/W trybie „Automatycznie” zadanie jest zatwierdzane od razu i dostęp dostaje tylko kandydat z shortlisty\. Możesz je przeczytać i poprawić\./);
+ assert.doesNotMatch(auto,/Propozycję trzeba przeczytać/);
+ assert.doesNotMatch(auto,/wysłan|e-mail|mail/i,'auto copy must not claim anything is sent');
+ for(const text of [manual,auto])assert.match(text,/Limit wynosi do 20 prób na rekrutację/);
+ state={exerciseId:'eeeeeeee-1111-4222-8333-444444444444'};
+ assert.match(render({autoRelease:true}),/Zobacz zadanie/);assert.doesNotMatch(render({autoRelease:true}),/Przeczytaj i zatwierdź/);
+ assert.match(render({autoRelease:false}),/Przeczytaj i zatwierdź/);assert.doesNotMatch(render({autoRelease:false}),/Zobacz zadanie/);
+});
