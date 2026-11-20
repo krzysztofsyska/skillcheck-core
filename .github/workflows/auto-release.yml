@@ -6,7 +6,7 @@
 #
 # Authorization of a release = green required checks on the exact SHA (source PR head and
 # release PR head) + an independent reviewer's PASS on the exact source PR head SHA.
-# Hard refusals (tools/release/auto/policy.mjs): payment-path freeze, payments, outbound
+# Hard refusals (tools/release/auto/policy.mjs): payments (money-moving/invoicing core), outbound
 # sends, pipeline/workflows/secrets, destructive SQL, migrations without a fresh backup and an
 # unattended executor. After the merge: Vercel Production deployment is
 # confirmed and production is smoke-tested; a failure reverts the release and opens a

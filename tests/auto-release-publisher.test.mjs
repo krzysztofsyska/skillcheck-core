@@ -132,14 +132,14 @@ test('small reviewed change ships: exact patch on main, trailer recorded, deploy
   assert.equal((await runPublisher(deps(fx, gh))).status, 'NOTHING_TO_RELEASE');
 });
 
-test('payment-path change is held; an unrelated later change still ships alone', async () => {
-  const fx = fixture([{ 'app/kup/page.tsx': 'pay\n' }, { 'app/regulamin/page.tsx': 'v3\n' }]);
+test('money-moving (PAYMENTS) change is held; an unrelated later change still ships alone', async () => {
+  const fx = fixture([{ 'lib/p24/sign.ts': 'pay\n' }, { 'app/regulamin/page.tsx': 'v3\n' }]);
   const { gh } = fakeGithub({ fx, comments: { 100: [pass(fx.prs[0].head)], 101: [pass(fx.prs[1].head)] } });
   const r = await runPublisher(deps(fx, gh));
   assert.equal(r.status, 'RELEASED'); assert.equal(r.source_pr, 101);
-  assert.deepEqual(r.held[0], { pr: 100, reasons: ['PAYMENT_PATH_FREEZE:app/kup/page.tsx'] });
+  assert.deepEqual(r.held[0], { pr: 100, reasons: ['PAYMENTS:lib/p24/sign.ts'] });
   assert.equal(fx.originGit('cat-file', '-t', 'main:app/regulamin/page.tsx').trim(), 'blob');
-  assert.throws(() => fx.originGit('cat-file', '-t', 'main:app/kup/page.tsx'));
+  assert.throws(() => fx.originGit('cat-file', '-t', 'main:lib/p24/sign.ts'));
 });
 
 test('no independent PASS or no green CI on the exact SHA: nothing ships', async () => {
