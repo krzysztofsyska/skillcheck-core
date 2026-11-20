@@ -15,17 +15,20 @@ const compiled = ts.transpileModule(source, { compilerOptions: {
   jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022,
 } }).outputText;
 const companyId = '00000000-0000-4000-8000-000000000001';
+// One whole PRESELEKCJA package (60 CV): the default pool on the slider is one package,
+// so the amount and the CV count posted and shown are the offer's own.
 const offer = (id = 'offer-a') => ({ id, revision: 'revision-v1', amountMinor: 12345,
-  currency: 'PLN', credits: 12, termsRevision: 'terms-v1', termsText: 'Synthetic terms',
+  currency: 'PLN', credits: 60, termsRevision: 'terms-v1', termsText: 'Synthetic terms',
   validUntilMs: 4102444800000 });
-const requestKey = o => `sc19:request:${companyId}:${o.id}:${o.termsRevision}`;
+// R7: the request key carries the number of whole packages bought (here 1).
+const requestKey = o => `sc19:request:${companyId}:${o.id}:${o.termsRevision}:1`;
 const orderKey = `sc19:order:${companyId}`;
 const ok = data => ({ ok: true, json: async () => structuredClone(data) });
 
 async function harness({ offers = [offer()], entries = [], checkout, order, clientNow, storageUnavailable=false,
-  checkoutAvailable = true, offersResponse, sandbox = false, search = '', statusOnly = false,
+  checkoutAvailable = true, offersResponse, search = '', statusOnly = false, testMode = false,
   recruitmentId, currentCompany = companyId } = {}) {
-  const storage = new Map(entries), posts = [], redirects = [], statusReads = [];
+  const storage = new Map(entries), posts = [], redirects = [], statusReads = [], replacedUrls = [];
   const hooks = [], effects = [];
   let cursor = 0, sequence = 0, offerReads = 0, tree;
   const react = {
@@ -46,7 +49,7 @@ async function harness({ offers = [offer()], entries = [], checkout, order, clie
     },
   };
   const context = {
-    exports: {}, Intl, URLSearchParams, Date:clientNow===undefined?Date:class extends Date {static now(){return clientNow;}}, AbortController,
+    exports: {}, Intl, URL, URLSearchParams, Date:clientNow===undefined?Date:class extends Date {static now(){return clientNow;}}, AbortController,
     // Node resolves a TypeScript source only with its extension; Next adds it.
     require(name) { return name === 'react' ? react : require(name.startsWith('.') ? name + '.ts' : name); },
     crypto: { randomUUID() { return `00000000-0000-4000-8000-${String(++sequence).padStart(12, '0')}`; } },
@@ -55,7 +58,9 @@ async function harness({ offers = [offer()], entries = [], checkout, order, clie
       setItem: (key, value) => {if(storageUnavailable)throw Error('blocked');storage.set(key, value);},
       removeItem: key => {if(storageUnavailable)throw Error('blocked');storage.delete(key);},
     },
-    window: { location: { search, assign: url => redirects.push(url) } },
+    window: { location: { search, href: `https://app.fixture.invalid/dashboard/${companyId}/billing/checkout${search}`,
+      assign: url => redirects.push(url) },
+      history: { state: null, replaceState: (_state, _title, url) => replacedUrls.push(String(url)) } },
     async fetch(url, options) {
       if (url.startsWith('/api/billing/offers?')) {
         offerReads++;
@@ -77,7 +82,7 @@ async function harness({ offers = [offer()], entries = [], checkout, order, clie
   runInNewContext(compiled, context);
   function render() {
     cursor = 0;
-    tree = context.exports.default({ companyId: currentCompany, recruitmentId, sandbox, statusOnly });
+    tree = context.exports.default({ companyId: currentCompany, recruitmentId, statusOnly, testMode });
     for (const effect of effects.splice(0)) effect();
     return tree;
   }
@@ -104,9 +109,14 @@ async function harness({ offers = [offer()], entries = [], checkout, order, clie
   // Flush the catalog fetch and its chained callbacks; no real timer/network I/O.
   await new Promise(resolve => setImmediate(resolve));
   render();
-  return { storage, posts, redirects, statusReads, find, click,
+  // The terms checkbox, not the CV pool number input rendered above it.
+  function checkbox() {
+    render();
+    return elements(tree).find(node => node.type === 'input' && node.props.type === 'checkbox');
+  }
+  return { storage, posts, redirects, statusReads, replacedUrls, find, click, checkbox,
     uuidCount: () => sequence,
-    accept() { find('input').props.onChange({ target: { checked: true } }); render(); },
+    accept() { checkbox().props.onChange({ target: { checked: true } }); render(); },
     close() { for (const hook of hooks) hook?.cleanup?.(); },
   };
 }
@@ -133,7 +143,7 @@ test('server-confirmed payment permits an explicit new purchase with fresh reque
     checkout: async (_input, count) => count === 1
       ? ok({ orderId: 'paid-order', status: 'paid' })
       : ok({ orderId: 'new-order', status: 'awaiting_payment', checkoutUrl: 'https://pay.fixture.invalid/new' }),
-    order: async () => ok({ status: 'paid', credits: 12, offerId: selected.id, termsRevision: selected.termsRevision }),
+    order: async () => ok({ status: 'paid', credits: 60, offerId: selected.id, termsRevision: selected.termsRevision }),
   });
   t.after(h.close);
   h.accept();
@@ -145,7 +155,8 @@ test('server-confirmed payment permits an explicit new purchase with fresh reque
   await h.click('Kup kolejny');
   assert.equal(h.storage.has(requestKey(selected)), false);
   assert.equal(h.storage.has(orderKey), false);
-  assert.equal(h.find('input').props.checked, false);
+  assert.equal(h.replacedUrls.length, 1, 'the return parameter is cleared from the address');
+  assert.equal(h.checkbox().props.checked, false);
   assert.equal(h.find('button', 'Zamawiam').props.disabled, true);
   h.accept();
   await h.click('Zamawiam');
@@ -162,7 +173,7 @@ test('reset of paid offer B preserves pending offer A and reuses its original re
     [requestKey(pending), pendingRequest], [requestKey(paid), 'paid-request'], [orderKey, 'paid-order-b'],
   ],
     checkout: async () => ok({ orderId: 'pending-order-a', status: 'awaiting_payment', checkoutUrl: 'https://pay.fixture.invalid/pending-a' }),
-    order: async () => ok({ status: 'paid', credits: 12, offerId: paid.id, termsRevision: paid.termsRevision }),
+    order: async () => ok({ status: 'paid', credits: 60, offerId: paid.id, termsRevision: paid.termsRevision }),
   });
   t.after(h.close);
   assert.equal(h.find('select').props.value, pending.id);
@@ -191,7 +202,7 @@ test('server expiry refreshes terms, resets acceptance and never automatically s
  t.after(h.close);h.accept();await h.click('Zamawiam');
  assert.equal(h.posts.length,1);assert.deepEqual(h.redirects,[]);
  assert.equal(h.find('select').props.value,replacement.id);
- assert.equal(h.find('input').props.checked,false);assert.equal(h.find('button','Zamawiam').props.disabled,true);
+ assert.equal(h.checkbox().props.checked,false);assert.equal(h.find('button','Zamawiam').props.disabled,true);
  assert.ok(h.find('p','Oferta wygasła'));
  h.accept();await h.click('Zamawiam');assert.equal(h.posts[1].termsRevision,'terms-v2');
 });
@@ -200,7 +211,7 @@ test('expired catalog becomes unavailable and a manual refresh requires fresh ac
  const h=await harness({offers:read=>read===2?[]:[offer()],checkout:async()=>({ok:false,json:async()=>({error:'SC19_PAYMENT_OFFER_UNAVAILABLE'})})});
  t.after(h.close);h.accept();await h.click('Zamawiam');
  assert.equal(h.find('button','Zamawiam'),undefined);
- await h.click('Odśwież oferty');assert.equal(h.find('input').props.checked,false);
+ await h.click('Odśwież oferty');assert.equal(h.checkbox().props.checked,false);
  assert.equal(h.find('button','Zamawiam').props.disabled,true);assert.equal(h.posts.length,1);
 });
 
@@ -229,7 +240,7 @@ test('offers load without a provider: full summary with net/VAT/gross and a disa
  for(const expected of ['Pakiet','PRESELEKCJA','Liczba analiz CV','100,37','23,08','123,45'])
   assert.ok(rows.includes(expected),`summary is missing ${expected}`);
  assert.ok(h.find('details'),'the terms text is rendered');
- assert.ok(h.find('input'),'the terms-acceptance checkbox is rendered');
+ assert.ok(h.checkbox(),'the terms-acceptance checkbox is rendered');
  const button=h.find('button','Zamawiam');
  assert.ok(button,'the pay button is rendered');
  assert.equal(button.props.disabled,true,'the pay button is disabled while payment is being activated');
@@ -305,7 +316,9 @@ test('an available checkout still renders the breakdown and keeps working',async
  assert.deepEqual(h.redirects,['https://pay.fixture.invalid/a']);
 });
 
-test('net and VAT sent by the server are displayed instead of being recomputed in the browser',async t=>{
+// R7: the amount is gross per package times the package count, so net and VAT are
+// derived from that gross with the shared formula (the server pair is per package).
+test('net and VAT of the chosen package count are derived from the gross amount',async t=>{
  const served={...offer(),amountMinor:30000,netMinor:24390,vatMinor:5610,vatBasisPoints:2300};
  const h=await harness({offers:[served],checkoutAvailable:false});
  t.after(h.close);
@@ -313,27 +326,28 @@ test('net and VAT sent by the server are displayed instead of being recomputed i
  for(const expected of ['243,90','56,10','300,00'])assert.ok(rows.includes(expected),`missing ${expected}`);
 });
 
-test('return from the sandbox requests the authenticated order status and cannot claim success from the URL', async t => {
+test('return from Stripe requests the authenticated order status and cannot claim success from the URL', async t => {
   const id = '00000000-0000-4000-8000-000000000003';
   let method;
-  const h = await harness({ sandbox:true, search:`?p24=${id}&success=true`, order:async (url,options) => {
-    assert.ok(url.includes(id)); method=options.method; return ok({status:'awaiting_payment'});
+  const h = await harness({ search:`?stripe=${id}&success=true`, order:async (url,options) => {
+    assert.ok(url.includes(id)); method=options?.method ?? 'GET'; return ok({status:'awaiting_payment'});
   } });
   t.after(h.close);
-  assert.equal(method,'POST');
+  assert.equal(method,'GET','a status read never changes the order');
   assert.equal(h.statusReads.length,1);
   assert.equal(h.find('button','Kup kolejny'),undefined);
 });
 
-test('flag-off sandbox return reads the pending order without loading offers or selling a new package', async t => {
+test('flag-off Stripe return reads the pending order without loading offers or selling a new package', async t => {
   const id = '00000000-0000-4000-8000-000000000003';
-  const h = await harness({ sandbox:true, statusOnly:true, search:`?p24=${id}`,
+  const h = await harness({ statusOnly:true, search:`?stripe=${id}`,
     offersResponse:()=>assert.fail('status-only must not load offers'), order:async()=>ok({status:'paid',credits:60}) });
   t.after(h.close);
   assert.equal(h.statusReads.length,1);
   assert.equal(h.find('button','Zamawiam'),undefined);
   assert.equal(h.find('button','Kup kolejny'),undefined);
   assert.ok(h.find('button','Sprawdź status'));
+  assert.ok(h.find('p','Przyznano 60 analiz CV'));
 });
 
 const recruitment = 'bbbbbbbb-1111-4222-8333-444444444444';
@@ -347,8 +361,10 @@ test('checkout remembers a recruitment per order and restores navigation after t
   departing.accept(); await departing.click('Zamawiam');
   assert.equal(departing.storage.get(returnKey()), recruitment);
   assert.deepEqual(departing.redirects, ['https://pay.fixture.invalid/order']);
-  assert.deepEqual(Object.keys(departing.posts[0]).sort(), ['companyId','offerId','requestId','termsRevision']);
-  const returned = await harness({ sandbox:true, search:`?p24=${returnOrder}`, entries:[...departing.storage],
+  assert.deepEqual(Object.keys(departing.posts[0]).sort(), ['companyId','offerId','packageCode','packages','requestId','termsRevision']);
+  assert.equal(departing.posts[0].packages, 1);
+  assert.equal(departing.posts[0].packageCode, 'PRESELEKCJA');
+  const returned = await harness({ search:`?stripe=${returnOrder}`, entries:[...departing.storage],
     order:async()=>ok({status:'awaiting_payment'}) });
   t.after(returned.close);
   assert.equal(returned.find('a','Wróć do rekrutacji').props.href, `/dashboard/${companyId}/recruitments/${recruitment}`);
@@ -359,7 +375,7 @@ test('checkout remembers a recruitment per order and restores navigation after t
 });
 
 test('return navigation works with packages off without loading offers', async t => {
-  const h = await harness({ sandbox:true,statusOnly:true,search:`?p24=${returnOrder}`,
+  const h = await harness({ statusOnly:true,search:`?stripe=${returnOrder}`,
     entries:[[returnKey(),recruitment]],offersResponse:()=>assert.fail('no offers'),
     order:async()=>ok({status:'awaiting_payment'}) });
   t.after(h.close);
@@ -372,18 +388,18 @@ test('return navigation never crosses company or order scopes', async t => {
     [[returnKey('cccccccc-1111-4222-8333-444444444444'),recruitment]],
     [[returnKey(companyId,'dddddddd-1111-4222-8333-444444444444'),recruitment]],
   ]) {
-    const h=await harness({sandbox:true,search:`?p24=${returnOrder}`,entries,order:async()=>ok({status:'awaiting_payment'})});
+    const h=await harness({search:`?stripe=${returnOrder}`,entries,order:async()=>ok({status:'awaiting_payment'})});
     t.after(h.close); assert.equal(h.find('a','Wróć do rekrutacji'),undefined);
   }
 });
 
 test('missing, malformed or inaccessible return hints fall back without affecting order status', async t => {
   for(const saved of [null,'','https://evil.example','//evil.example','../operator',recruitment+'/../operator',JSON.stringify([recruitment])]) {
-    const h=await harness({sandbox:true,search:`?p24=${returnOrder}`,entries:saved===null?[]:[[returnKey(),saved]],
+    const h=await harness({search:`?stripe=${returnOrder}`,entries:saved===null?[]:[[returnKey(),saved]],
       order:async()=>ok({status:'awaiting_payment'})});
     t.after(h.close); assert.equal(h.find('a','Wróć do rekrutacji'),undefined); assert.equal(h.statusReads.length,1);
   }
-  const h=await harness({sandbox:true,search:`?p24=${returnOrder}`,storageUnavailable:true,
+  const h=await harness({search:`?stripe=${returnOrder}`,storageUnavailable:true,
     order:async()=>ok({status:'awaiting_payment'})});
   t.after(h.close); assert.equal(h.find('a','Wróć do rekrutacji'),undefined); assert.equal(h.statusReads.length,1);
 });
@@ -398,62 +414,45 @@ test('blocked storage or invalid recruitment hints cannot prevent a checkout red
   }
 });
 
-test('stored context alone never creates a return link without a sandbox order return', async t => {
-  for(const options of [{sandbox:false,search:`?p24=${returnOrder}`},{sandbox:true,search:''},{sandbox:true,search:'?p24=invalid'}]) {
+test('stored context alone never creates a return link without a Stripe order return', async t => {
+  // A legacy `?p24=` return parameter is ignored: Stripe is the only provider (R7).
+  for(const options of [{search:`?p24=${returnOrder}`},{search:''},{search:'?stripe=invalid'}]) {
     const h=await harness({...options,entries:[[returnKey(),recruitment]]});
     t.after(h.close);assert.equal(h.find('a','Wróć do rekrutacji'),undefined);assert.equal(h.statusReads.length,0);
   }
 });
 
-// The paragraph below the accepted offer terms must say the same thing the terms
-// say. Until PR #413 it claimed the operator's confirmation was the only trigger
-// ("Analizy przyznajemy po potwierdzeniu płatności przez operatora, zwykle w
-// ciągu kilku minut."), which is false for a traditional transfer (Regulamin
-// § 7.3) and contradicted the corrected terms rendered one line above it, both
-// under a single acceptance checkbox.
-test('the delivery sentence under the terms is true for both payment branches', async t => {
+// R7: Stripe is the only payment provider (owner decision 19.11.2026). The
+// paragraph under the accepted terms names Stripe, says the package is granted after
+// Stripe confirms the payment and points to the complaint and withdrawal paragraphs.
+// No Przelewy24-as-operator copy (PayPro, sandbox notice, P24_* codes) is left.
+test('the payment paragraph under the terms names Stripe and the grant after confirmation', async t => {
   const h = await harness({ checkoutAvailable: false, checkout: async () => { throw Error('must not POST'); } });
   t.after(h.close);
-  const paragraph = h.find('p', 'Płatność online obsługuje Przelewy24');
+  const paragraph = h.find('p', 'Płatność online obsługuje Stripe');
   assert.ok(paragraph, 'the payment paragraph is rendered under the terms');
   const text = String(paragraph.props.children);
-  // Regulamin § 7.3: online — operator confirmation; transfer — our account credited.
-  // Regulamin § 8.1: granted "niezwłocznie po potwierdzeniu płatności".
-  assert.ok(text.includes('Analizy przyznajemy niezwłocznie po potwierdzeniu płatności'),
-    'the § 8.1 trigger is stated');
-  assert.ok(text.includes('po zaksięgowaniu wpłaty na naszym rachunku'),
-    'the bank-transfer branch of § 7.3 is not left out');
-  assert.ok(text.includes('przy płatności online — po jej potwierdzeniu przez operatora'),
-    'the online branch of § 7.3 stays, with the operator named');
-  assert.ok(text.includes('Zasady reklamacji i odstąpienia opisuje'), 'the § 10–11 pointer stays');
-  // The old sentence made the operator the only trigger. It must not come back,
-  // in this file or anywhere else the checkout screen renders.
+  assert.ok(text.includes('Pakiet przyznajemy automatycznie po potwierdzeniu płatności przez Stripe'));
+  assert.ok(text.includes('Zasady reklamacji i odstąpienia opisuje Regulamin (§ 10–11)'));
   assert.ok(!source.includes('Analizy przyznajemy po potwierdzeniu płatności przez operatora'),
     'the operator-only delivery claim is gone from the checkout source');
-  // And the regulation it has to agree with still says what the sentence claims.
-  const regulamin = await readFile(new URL('../docs/legal/v1.0/01_Regulamin_SkillCheck.md', import.meta.url), 'utf8');
-  assert.ok(regulamin.includes('niezwłocznie po potwierdzeniu płatności'), 'Regulamin § 8.1 unchanged');
-  assert.ok(regulamin.includes('albo z chwilą uznania rachunku bankowego Usługodawcy'),
-    'Regulamin § 7.3 still covers the transfer branch');
+  for (const removed of ['PayPro', 'Sandboxie Przelewy24', 'P24_', 'Sprawdzamy potwierdzenie w Przelewy24', "'p24'"])
+    assert.ok(!source.includes(removed), `dead Przelewy24 branch left in the checkout source: ${removed}`);
 });
 
-// The sandbox now also runs on the production domain (owner decision 2026-11-11),
-// where a test payment grants REAL analyses on the real account. That is the point
-// of the verifier's walk, so the screen must say both halves of it plainly: nothing
-// is charged, and the analyses are granted anyway. It must promise no payment
-// method of its own beyond what the operator offers.
-test('the sandbox notice says that nothing is charged AND that the analyses are still granted', async t => {
-  const sandbox = await harness({ sandbox:true });
-  t.after(sandbox.close);
-  const note = sandbox.find('p','Sandboxie Przelewy24');
-  assert.ok(note,'the sandbox notice is shown');
+// Stripe test mode: nothing is charged, but the package IS granted on this account,
+// so the screen says both halves plainly, and only in test mode.
+test('the Stripe test-mode notice says nothing is charged AND the package is still granted', async t => {
+  const test = await harness({ testMode:true });
+  t.after(test.close);
+  const note = test.find('p','Płatność testowa Stripe');
+  assert.ok(note,'the test-mode notice is shown');
   const text = String(note.props.children);
   assert.match(text,/żadne pieniądze nie zostaną pobrane/);
-  assert.match(text,/Analizy CV zostaną jednak przyznane na tym koncie/);
-  assert.doesNotMatch(text,/proforma|faktur|kart[ąay]|BLIK|przelewem/i);
-  const live = await harness({ sandbox:false });
+  assert.match(text,/zostaną jednak przyznane na tym koncie/);
+  const live = await harness({ testMode:false });
   t.after(live.close);
-  assert.equal(live.find('p','Sandboxie Przelewy24'),undefined,'not shown outside the sandbox');
+  assert.equal(live.find('p','Płatność testowa'),undefined,'not shown outside test mode');
 });
 
 // A buyer who abandons an unpaid payment can be left with an order whose provider
@@ -471,39 +470,24 @@ test('an order that can no longer be reconciled is named as such, not offered a 
   assert.equal(h.redirects.length,0);
 });
 
-// SC-P24-UNBLOCK-001: the server names a Przelewy24 failure with a fixed code in
-// `detail`. The screen shows it next to the generic code so support can tell a
-// wrong key from an outage; anything not in the fixed format is never rendered.
-test('a named Przelewy24 failure shows its code; anything else in detail is ignored', async t => {
+// Any other failure names only its short machine code. A `detail` field in the
+// response is never rendered, whatever it holds (R7: no provider-specific codes).
+test('an unnamed checkout failure shows only its code and invites a retry; detail is never rendered', async t => {
   const failing = detail => harness({ checkout: async () => ({ ok:false, status:503,
     json: async () => ({ error:'SC19_PAYMENT_RETRY', ...(detail === undefined ? {} : { detail }) }) }) });
-  const named = await failing('P24_UNAUTHORIZED');
-  t.after(named.close);
-  named.accept();
-  await named.click('Zamawiam');
-  assert.match(String(named.find('p','pomoc@skillcheck.pl').props.children), /kod: SC19_PAYMENT_RETRY \/ P24_UNAUTHORIZED\./);
-  for (const detail of [undefined, '<b>P24_UNAUTHORIZED</b>', 'Incorrect CRC value', 'P24_unauthorized', 42]) {
+  for (const detail of [undefined, 'P24_UNAUTHORIZED', 'P24_SESSION_EXISTS', '<b>x</b>', 42]) {
     const h = await failing(detail);
     t.after(h.close);
     h.accept();
     await h.click('Zamawiam');
     const message = String(h.find('p','pomoc@skillcheck.pl').props.children);
+    assert.match(message, /Ponów próbę/, String(detail));
     assert.match(message, /kod: SC19_PAYMENT_RETRY\.$/, String(detail));
     assert.equal(h.redirects.length, 0);
   }
-});
-
-// A lost Przelewy24 answer leaves a session behind: retrying cannot help, so the
-// screen says so and names the code instead of the generic "Ponów próbę".
-test('an existing Przelewy24 session says that retrying will not help', async t => {
-  const h = await harness({ checkout: async () => ({ ok:false, status:503,
-    json: async () => ({ error:'SC19_PAYMENT_RETRY', detail:'P24_SESSION_EXISTS' }) }) });
-  t.after(h.close);
-  h.accept();
-  await h.click('Zamawiam');
-  const message = String(h.find('p','pomoc@skillcheck.pl').props.children);
-  assert.match(message, /Ponawianie nie pomoże/);
-  assert.match(message, /kod: P24_SESSION_EXISTS\./);
-  assert.doesNotMatch(message, /Ponów próbę/);
-  assert.equal(h.redirects.length, 0);
+  const html = await harness({ checkout: async () => ({ ok:false, status:502, json: async () => { throw Error('HTML'); } }) });
+  t.after(html.close);
+  html.accept();
+  await html.click('Zamawiam');
+  assert.match(String(html.find('p','pomoc@skillcheck.pl').props.children), /kod: HTTP 502\.$/);
 });
