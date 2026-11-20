@@ -1,3 +1,5 @@
+> **Nieaktualne (20.11.2026):** Przelewy24 usunięte z SkillCheck (decyzja właściciela 19.11.2026, `docs/DECYZJE.md`; PR #562). Płatności: Stripe (R7 w `docs/ROADMAP.md`). Dokument zostaje jako archiwum.
+
 # Przelewy24 Sandbox na skillcheck.pl — co zrobił agent, co musi zrobić właściciel
 
 Decyzja właściciela (głosowo, 11.11.2026): weryfikator Przelewy24 musi móc przejść

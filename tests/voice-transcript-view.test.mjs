@@ -1,5 +1,6 @@
 // R6 #542: page guard and result parsing of the Preview-only voice transcript page.
 // Offline: no database, no network, synthetic data only.
+import './voice-order-check.test.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
