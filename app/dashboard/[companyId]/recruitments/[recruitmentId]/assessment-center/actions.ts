@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { revalidatePath } from 'next/cache';
 import { exerciseContext } from '../../../../../../lib/exercise-context';
 import { assessmentCenterPreviewEnabled } from '../../../../../../lib/assessment-center-preview';
-import { acChangeAssessments, acStageTypes, parseAssessmentCenterSession, parseReconciliationForm } from '../../../../../../lib/assessment-center-session';
+import { AC_PACKAGE_MISSING_TEXT, acChangeAssessments, acStageTypes, parseAssessmentCenterSession, parseReconciliationForm } from '../../../../../../lib/assessment-center-session';
 import { hrbpCaseTemplate } from '../../../../../../lib/assessment-center-session-template';
 import { bindMethodToDefinitions } from '../../../../../../lib/method-binding';
 
@@ -21,6 +21,7 @@ const field = (form: FormData, name: string) => { const value = form.get(name); 
 
 function failure(error: { code?: string; message?: string }): AcSessionActionState {
   const message = error.message ?? '';
+  if (error.code === 'PT402') return { error: AC_PACKAGE_MISSING_TEXT };
   if (error.code === 'PT422') {
     if (message.includes('Coverage plan incomplete')) return { error: 'Plan pokrycia ma lukę: co najmniej jedna kompetencja nie ma etapu, który ją ocenia. Dodaj etap z odpowiednim kryterium.' };
     if (message.includes('Finalist limit reached')) return { error: 'W sesji może być najwyżej 10 finalistów.' };

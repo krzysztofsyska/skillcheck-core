@@ -77,7 +77,7 @@ automatycznie. W obu trybach test dostaje tylko kandydat z shortlisty (reguła R
 | Asesorzy pokazani z nazwy (etykieta, potem e-mail konta z tej samej firmy) | ZROBIONE | PR #500, #513 |
 | Jawne braki dowodów w raporcie i CSV sesji | ZROBIONE | PR #508 |
 | Testy równoczesnej pracy asesorów | ZROBIONE | PR #512 |
-| Powiązanie z kontami firm, uprawnieniami i kupionym pakietem | W TOKU (konta i uprawnienia zrobione; zamrożenie płatności zdjęte 19.11.2026 — pakiet do podpięcia) | PR #503; issue #338, #274, #283 |
+| Powiązanie z kontami firm, uprawnieniami i kupionym pakietem | W TOKU (konta i uprawnienia zrobione; sesję tworzy i otwiera tylko firma z opłaconym pakietem ASSESSMENT CENTER — pilnowane w bazie; zostaje zakup pakietu AC przez Stripe w R7) | PR #503, #554; issue #338, #274, #283 |
 
 ### R4. Oferta na stronie (etap 2)
 
