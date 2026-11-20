@@ -96,7 +96,7 @@ Zamrożenie ścieżki płatności zdjęte 19.11.2026 (`docs/DECYZJE.md`). Ceny w
 | Krok | Status | Dowód |
 |---|---|---|
 | W1 + W2 — audyt źródeł cennika i katalog cen w bazie | ZROBIONE | PR #265 |
-| W2b — suwak liczby CV co 5 | W TOKU (część 2/2 zrobiona za flagą PRICING_CV_SLIDER_ENABLED, domyślnie wyłączoną; zostaje: walidacja liczby CV po stronie serwera przy zamówieniu — nie weszła do W3 (#557), do zrobienia razem z formularzem zamówienia z suwakiem) | PR #286 (część 1), część 2: PR #552 |
+| W2b — suwak liczby CV co 5 | ZROBIONE (za flagą PRICING_CV_SLIDER_ENABLED, domyślnie wyłączoną; serwer przy zamówieniu sprawdza liczbę CV: co 5, w granicach pakietu, zgodna z liczbą pakietów, inaczej odmowa z polskim komunikatem; formularz zakupu wysyła na razie liczbę pakietów — podpięcie liczby CV z suwaka to drobna poprawka formularza) | PR #286 (część 1), część 2: PR #552, walidacja na serwerze: PR #574 |
 | W3, W4 — publiczny cennik z katalogu, za wyłączoną flagą | ZROBIONE (W3 i W4 za wyłączonymi flagami PRICING_PAID_OPTIONS_ENABLED i PRICING_PUBLIC_CATALOG_ENABLED; włączenie flag — decyzja właściciela, TAK/NIE z liczbami przed i po) | W3: PR #557, W4: PR #559 |
 
 ### R6. Voicebot — równolegle z R1–R3 (od 18.11.2026)
