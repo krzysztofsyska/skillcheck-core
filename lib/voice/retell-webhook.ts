@@ -41,6 +41,12 @@ export type RetellWebhookResult =
       outcome: RetellCallOutcome | null;
       /** Only on call_ended; null when the payload carries no transcript. */
       transcript: readonly RetellUtterance[] | null;
+      /**
+       * R7: the provider's final cost of the call in USD cents (`call_cost.combined_cost`),
+       * read only from call_analyzed, the last event after the call. Null when absent or
+       * malformed: the call then keeps its full reservation in the monthly cost cap.
+       */
+      costUsdCents: number | null;
     }>;
 
 export class RetellWebhookError extends Error {
@@ -147,6 +153,7 @@ export function readRetellWebhook(
   let outcome: RetellCallOutcome | null = null;
   let occurredAt: string | undefined;
   let transcript: readonly RetellUtterance[] | null = null;
+  let costUsdCents: number | null = null;
   if (event === "call_started") {
     status = "connected";
     occurredAt = iso(call.start_timestamp);
@@ -159,11 +166,16 @@ export function readRetellWebhook(
     if (event === "call_ended") {
       status = outcome === "completed" || outcome === "dnc_requested" ? "completed" : "failed";
       transcript = minimizeTranscript(call.transcript_object);
+    } else {
+      const cost = isObject(call.call_cost) ? call.call_cost.combined_cost : undefined;
+      // Only the total survives; product breakdowns and unit prices are dropped.
+      if (typeof cost === "number" && Number.isFinite(cost) && cost >= 0) costUsdCents = cost;
     }
   }
   if (!occurredAt) return rejected();
   return Object.freeze({
     kind: "call", event, receiptId, providerCallId: call.call_id, occurredAt, status, outcome, transcript,
+    costUsdCents,
   });
 }
 
