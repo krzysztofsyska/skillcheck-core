@@ -11,6 +11,17 @@ export interface PaymentSqlClient {
 }
 export interface PaymentSqlPool { connect(): Promise<PaymentSqlClient> }
 export type CheckoutOffer = PaymentOffer & Readonly<{ termsText: string }>;
+/** R7: optional second order source in the SAME database transaction (the Stripe
+ * WERYFIKACJA / ASSESSMENT CENTER orders, lib/sc19-stripe-packages.ts). Without it
+ * this store behaves exactly as before. */
+export type PaymentStoreExtension = Readonly<{
+  /** Wraps the transaction's operations; `lockCompany` is the store's company lock. */
+  tx(base: PaymentTransaction, client: PaymentSqlClient, lockCompany: (companyId: string) => Promise<void>): PaymentTransaction;
+  /** An order of this source, already scoped to the company, or null. */
+  readOrder(client: PaymentSqlClient, companyId: string, orderId: string): Promise<PaymentOrder | null>;
+  /** Extra offers for an authorized, verified company. */
+  offers(client: PaymentSqlClient): Promise<CheckoutOffer[]>;
+}>;
 const fail = (code: string): never => { throw new Sc19PaymentError(code); };
 function orderRow(r: Record<string, unknown>): PaymentOrder {
   return {
@@ -28,7 +39,7 @@ function offerRow(r: Record<string, unknown>): CheckoutOffer {
     approved: r.approved === true, amountMinor: Number(r.amount_minor), currency: 'PLN', credits: Number(r.credits),
     termsRevision: String(r.terms_revision), termsText: String(r.terms_text), validUntilMs: Number(r.valid_until_ms) };
 }
-export function createPostgresPaymentStore(pool: PaymentSqlPool): PaymentStore & {
+export function createPostgresPaymentStore(pool: PaymentSqlPool, extension?: PaymentStoreExtension): PaymentStore & {
   readOrder(companyId: string, userId: string, orderId: string): Promise<PaymentOrder | null>;
   listOffers(companyId: string, userId: string): Promise<CheckoutOffer[]>;
 } {
@@ -44,7 +55,7 @@ export function createPostgresPaymentStore(pool: PaymentSqlPool): PaymentStore &
           const r = await c.query('select id from public.companies where id=$1 for update', [companyId]);
           if (!r.rows.length) fail('SC19_PAYMENT_FORBIDDEN');
         };
-        const tx: PaymentTransaction = {
+        const base: PaymentTransaction = {
           async companyAccess(companyId, userId) {
             await lockCompany(companyId);
             const owner = await c.query('select id from public.companies where id=$1 and owner_id=$2', [companyId,userId]);
@@ -122,6 +133,7 @@ export function createPostgresPaymentStore(pool: PaymentSqlPool): PaymentStore &
             return null;
           },
         };
+        const tx = extension ? extension.tx(base, c, lockCompany) : base;
         const result = await work(tx,c);
         await c.query('commit');
         return result;
@@ -130,7 +142,8 @@ export function createPostgresPaymentStore(pool: PaymentSqlPool): PaymentStore &
         const code = (error as { code?: string }).code;
         const requestRace = code === '23505' && [
           'sc19_payment_orders_company_id_request_id_key', 'sc19_payment_one_unresolved',
-          'sc19_payment_requests_pkey',
+          'sc19_payment_requests_pkey', 'package_orders_company_id_request_id_key', 'package_one_unresolved',
+          'package_requests_pkey',
         ].includes((error as { constraint?: string }).constraint ?? '');
         if ((!['40001','40P01'].includes(code ?? '') && !requestRace) || attempt >= 5) throw error;
       } finally { c.release(); }
@@ -149,14 +162,15 @@ export function createPostgresPaymentStore(pool: PaymentSqlPool): PaymentStore &
       await authorized(tx,companyId,userId);
       // Scope the SELECT before returning any order, including existence information.
       const r = await c.query('select * from private.sc19_payment_orders where id=$1 and company_id=$2',[id,companyId]);
-      return r.rows[0] ? orderRow(r.rows[0]) : null;
+      if (r.rows[0]) return orderRow(r.rows[0]);
+      return extension ? extension.readOrder(c,companyId,id) : null;
     }),
     listOffers: (companyId,userId) => transaction(async (tx,c) => {
       const a = await authorized(tx,companyId,userId);
       if (!a.verified) fail('SC19_PAYMENT_FORBIDDEN');
       const r = await c.query(`select * from private.sc19_payment_offers
         where approved and active and valid_until_ms>$1 order by created_at desc limit 20`,[Date.now()]);
-      return r.rows.map(offerRow);
+      return [...r.rows.map(offerRow), ...(extension ? await extension.offers(c) : [])];
     }),
   };
 }

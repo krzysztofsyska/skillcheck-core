@@ -30,7 +30,7 @@ export default async function CheckoutPage({params,searchParams}: {params: Promi
     <Link href={backToRecruitment ? `/dashboard/${companyId}/recruitments/${recruitmentId}` : `/dashboard/${companyId}`}>
       ← {backToRecruitment ? 'Wróć do rekrutacji' : 'Panel firmy'}
     </Link>
-    <h1>Pakiet PRESELEKCJA</h1>
+    <h1>{stripe ? 'Zakup pakietu' : 'Pakiet PRESELEKCJA'}</h1>
     {!enabled && returning ? <Checkout companyId={companyId} recruitmentId={backToRecruitment ? recruitmentId : undefined} sandbox={sandbox} statusOnly provider={stripe ? 'stripe' : 'p24'}/> : !enabled ? <p className="notice" role="status">Uruchomienie pakietów FREE i PRESELEKCJA jest przygotowywane. Zakup nie jest jeszcze dostępny.</p> : <>
       <p>Jednorazowy zakup analiz CV. Wyniki wymagają oceny rekrutera.</p>
       {company.owner_id===user.id ? <Checkout companyId={companyId} recruitmentId={backToRecruitment ? recruitmentId : undefined} sandbox={sandbox}

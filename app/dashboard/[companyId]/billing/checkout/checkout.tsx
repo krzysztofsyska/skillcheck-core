@@ -1,8 +1,8 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { sc19OfferAmounts } from '../../../../../lib/sc19-offer-amounts';
-import { CV_POOL_STEP, MAX_PACKAGES, STRIPE_CATALOG, packagesForPool } from '../../../../../lib/stripe-catalog';
-type Offer={id:string;revision:string;amountMinor:number;currency:string;credits:number;
+import { CV_POOL_STEP, MAX_PACKAGES, STRIPE_CATALOG, isStripePackageCode, packagesForPool, type StripePackageCode } from '../../../../../lib/stripe-catalog';
+type Offer={id:string;revision:string;packageCode?:string;amountMinor:number;currency:string;credits:number;
   termsRevision:string;termsText:string;validUntilMs:number;
   netMinor?:number|null;vatMinor?:number|null;vatBasisPoints?:number|null};
 const pln=(v:number)=>new Intl.NumberFormat('pl-PL',{style:'currency',currency:'PLN'}).format(v/100);
@@ -33,8 +33,15 @@ const sessionExists='Płatność dla tego zamówienia została już rozpoczęta 
 // R7: the Stripe hosted page. Methods offered there depend on the Stripe account;
 // the list names what the account is set up for, not a promise of each one.
 const stripeText='Płatność online obsługuje Stripe (karta, BLIK, Przelewy24, Apple Pay, Google Pay). Na stronie płatności podasz dane firmy do faktury, w tym NIP. Pakiet przyznajemy automatycznie po potwierdzeniu płatności przez Stripe, zwykle w ciągu kilku minut. Zasady reklamacji i odstąpienia opisuje Regulamin (§ 10–11).';
-const stripeTestNotice='Płatność testowa Stripe: żadne pieniądze nie zostaną pobrane. Analizy CV zostaną jednak przyznane na tym koncie tak samo jak po zwykłym zakupie.';
-const soonPackages=[STRIPE_CATALOG.WERYFIKACJA,STRIPE_CATALOG.ASSESSMENT_CENTER];
+const stripeTestNotice='Płatność testowa Stripe: żadne pieniądze nie zostaną pobrane. Pakiet i analizy CV zostaną jednak przyznane na tym koncie tak samo jak po zwykłym zakupie.';
+// R7: what each package adds over the CV analyses (docs/cennik-2026-11-02.md). No voicebot.
+const packageExtras:Record<StripePackageCode,string>={PRESELEKCJA:'',
+  WERYFIKACJA:'testy kompetencji dla kandydatów z shortlisty i rozszerzony raport',
+  ASSESSMENT_CENTER:'testy kompetencji, zadania praktyczne i sesja Assessment Center dla finalistów (5–6 osób)'};
+/** Packages not offered right now (not on sale, or no migration yet): shown as „wkrótce”. */
+const soonPackages=(offers:Offer[])=>[STRIPE_CATALOG.WERYFIKACJA,STRIPE_CATALOG.ASSESSMENT_CENTER]
+  .filter(p=>!offers.some(o=>offerPackage(o)===p.code));
+const offerPackage=(o:{packageCode?:unknown}|undefined):StripePackageCode=>o&&isStripePackageCode(o.packageCode)?o.packageCode:'PRESELEKCJA';
 const uuid = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
 const contextKey = (companyId: string, orderId: string) => `sc19:recruitment:${companyId.toLowerCase()}:${orderId.toLowerCase()}`;
 export default function Checkout({companyId,recruitmentId,sandbox=false,statusOnly=false,provider='p24',testMode=false}: {companyId:string;recruitmentId?:string;sandbox?:boolean;statusOnly?:boolean;provider?:'p24'|'stripe';testMode?:boolean}) {
@@ -51,7 +58,9 @@ export default function Checkout({companyId,recruitmentId,sandbox=false,statusOn
   const [requestIds]=useState(()=>new Map<string,string>());
   const [returnedRecruitment,setReturnedRecruitment]=useState<string|null>(null);
   const selectedOffer=offers.find(o=>o.id===selected);
-  const packages=stripe?packagesForPool(pool):1;
+  const code=offerPackage(selectedOffer);
+  // PRESELEKCJA: whole packages from the pool; WERYFIKACJA and ASSESSMENT CENTER: one package.
+  const packages=stripe?(code==='PRESELEKCJA'?packagesForPool(pool):1):1;
   const offer=stripe&&selectedOffer&&packages?{...selectedOffer,amountMinor:selectedOffer.amountMinor*packages,credits:selectedOffer.credits*packages,
     netMinor:null,vatMinor:null}:selectedOffer;
   const amounts=offer&&breakdown(offer);
@@ -116,10 +125,12 @@ export default function Checkout({companyId,recruitmentId,sandbox=false,statusOn
       if(!r.ok)throw Error(); const data=await r.json();
       // The paid order's own package count (its CV pool / 60), not the form's current
       // value: the request key of THAT purchase is the one to clear.
-      const paidPackages=stripe&&Number.isSafeInteger(data.credits/STRIPE_CATALOG.PRESELEKCJA.cvCredits)
-        ?data.credits/STRIPE_CATALOG.PRESELEKCJA.cvCredits:null;
+      const paidCode=offerPackage(data);
+      const paidPackages=stripe&&Number.isSafeInteger(data.credits/STRIPE_CATALOG[paidCode].cvCredits)
+        ?data.credits/STRIPE_CATALOG[paidCode].cvCredits:null;
       setPaidOrder(data.status==='paid'?{offerId:data.offerId,termsRevision:data.termsRevision,packages:paidPackages}:null);
-      setMessage(data.status==='paid' ? `Płatność potwierdzona. Przyznano ${data.credits} analiz CV.` :
+      setMessage(data.status==='paid' ? (paidCode==='PRESELEKCJA' ? `Płatność potwierdzona. Przyznano ${data.credits} analiz CV.`
+        : `Płatność potwierdzona. Przyznano pakiet ${STRIPE_CATALOG[paidCode].name} i ${data.credits} analiz CV.`) :
         'Czekamy na potwierdzenie płatności. Kredyty zostaną przyznane po jej weryfikacji.');
     } catch {setMessage('Nie udało się sprawdzić statusu. Spróbuj ponownie.');}
     finally {setBusy(false);}
@@ -154,7 +165,7 @@ export default function Checkout({companyId,recruitmentId,sandbox=false,statusOn
       requestId ??= crypto.randomUUID();requestIds.set(key,requestId);
       try {sessionStorage.setItem(key,requestId);} catch { /* optional */ }
       const response=await fetch('/api/billing/checkout',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify(stripe?{companyId,offerId:offer.id,termsRevision:offer.termsRevision,requestId,packages,packageCode:'PRESELEKCJA'}
+        body:JSON.stringify(stripe?{companyId,offerId:offer.id,termsRevision:offer.termsRevision,requestId,packages,packageCode:code}
           :{companyId,offerId:offer.id,termsRevision:offer.termsRevision,requestId})});
       // A killed invocation or a platform error answers with HTML, not JSON. Bare
       // `response.json()` threw here and every failure — including our own error
@@ -213,16 +224,17 @@ export default function Checkout({companyId,recruitmentId,sandbox=false,statusOn
     <p>Pakiet FREE nie wymaga płatności i nie korzysta z tego formularza.</p>
     {loading ? <p role="status">Wczytuję ofertę…</p> : offers.length>0 ? <>
       <label>Wariant <select value={selected} disabled={busy} onChange={e=>{setSelected(e.target.value);setAccepted(false);}}>
-        {offers.map(o=><option key={o.id} value={o.id}>{o.credits} analiz CV — {pln(o.amountMinor)} brutto</option>)}
+        {offers.map(o=><option key={o.id} value={o.id}>{stripe?`${STRIPE_CATALOG[offerPackage(o)].name}: `:''}{o.credits} analiz CV — {pln(o.amountMinor)} brutto</option>)}
       </select></label>
-      {stripe&&selectedOffer&&<label>Pula CV (co {CV_POOL_STEP}) <input type="number" min={CV_POOL_STEP} step={CV_POOL_STEP}
+      {stripe&&selectedOffer&&code==='PRESELEKCJA'&&<label>Pula CV (co {CV_POOL_STEP}) <input type="number" min={CV_POOL_STEP} step={CV_POOL_STEP}
         max={MAX_PACKAGES*STRIPE_CATALOG.PRESELEKCJA.cvCredits} value={pool} disabled={busy}
         onChange={e=>{setPool(Number(e.target.value));setAccepted(false);}}/>
         <small>{packages ? `PRESELEKCJA sprzedajemy w całych pakietach po ${STRIPE_CATALOG.PRESELEKCJA.cvCredits} CV: ${packages} ${packages===1?'pakiet':'pakiety'} = ${packages*STRIPE_CATALOG.PRESELEKCJA.cvCredits} analiz CV.`
           : `Podaj wielokrotność ${CV_POOL_STEP}, od ${CV_POOL_STEP} do ${MAX_PACKAGES*STRIPE_CATALOG.PRESELEKCJA.cvCredits} CV.`}</small></label>}
-      {offer&&<><h2>{pln(offer.amountMinor)} brutto</h2><p>{offer.credits} analiz CV • jednorazowo • analizy ważne 3 miesiące od przyznania</p>
+      {offer&&<><h2>{pln(offer.amountMinor)} brutto</h2><p>{offer.credits} analiz CV{packageExtras[code]?` • ${packageExtras[code]}`:''} • jednorazowo • analizy ważne 3 miesiące od przyznania</p>
         <table><caption>Podsumowanie zamówienia</caption><tbody>
-          <tr><th scope="row">Pakiet</th><td>PRESELEKCJA</td></tr>
+          <tr><th scope="row">Pakiet</th><td>{STRIPE_CATALOG[code].name}</td></tr>
+          {packageExtras[code]&&<tr><th scope="row">W pakiecie</th><td>{packageExtras[code]}</td></tr>}
           <tr><th scope="row">Liczba analiz CV</th><td>{offer.credits}</td></tr>
           {amounts&&<tr><th scope="row">Cena netto</th><td>{pln(amounts.netMinor)}</td></tr>}
           {amounts&&<tr><th scope="row">VAT{typeof amounts.vatBasisPoints==='number'?` ${amounts.vatBasisPoints/100}%`:''}</th><td>{pln(amounts.vatMinor)}</td></tr>}
@@ -236,7 +248,7 @@ export default function Checkout({companyId,recruitmentId,sandbox=false,statusOn
         <button type="button" disabled={!checkoutAvailable||!accepted||busy||!!paidOrder||(stripe&&!packages)} onClick={buy}>
           {busy?'Przetwarzam…':checkoutAvailable?`Zamawiam i płacę ${pln(offer.amountMinor)}`:`Zamawiam i płacę ${pln(offer.amountMinor)} — wkrótce`}</button></>}
     </> : !message&&<p>Brak zatwierdzonej oferty. Zakup jest obecnie niedostępny.</p>}
-    {stripe&&<><h2>Wkrótce</h2><ul>{soonPackages.map(p=><li key={p.code}>{p.name} — {pln(p.grossMinor)} brutto za {p.cvCredits} CV — wkrótce</li>)}</ul></>}
+    {stripe&&soonPackages(offers).length>0&&<><h2>Wkrótce</h2><ul>{soonPackages(offers).map(p=><li key={p.code}>{p.name} — {pln(p.grossMinor)} brutto za {p.cvCredits} CV — wkrótce</li>)}</ul></>}
     {message&&<p role="status" aria-live="polite">{message}</p>}
     <button type="button" disabled={busy||loading} onClick={()=>{setMessage('');return loadOffers();}}>Odśwież oferty</button>
     {paidOrder&&<button type="button" disabled={busy} onClick={nextPurchase}>Kup kolejny pakiet</button>}

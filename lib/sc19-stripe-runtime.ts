@@ -18,6 +18,7 @@ import type { PaymentOrder, PaymentMode } from './sc19-payments.ts';
 import { Sc19PaymentError } from './sc19-payments.ts';
 import { createStripeProvider, STRIPE_CHECKOUT_ORIGIN, type StripeCustomerStore } from './sc19-stripe-provider.ts';
 import type { Sc19StripeConfig } from './sc19-stripe-config.ts';
+import { stripePackageExtension } from './sc19-stripe-packages.ts';
 
 let pool: Pool | undefined;
 
@@ -85,6 +86,8 @@ export async function stripeRuntime(config: Sc19StripeConfig) {
     catch (error) { console.error('SC19_STRIPE_DB_CONNECT'); throw error; }
   } }, provider, scope, appOrigin: config.appOrigin, signatureHeader: 'stripe-signature',
   checkoutOrigins: [STRIPE_CHECKOUT_ORIGIN],
+  // R7: WERYFIKACJA and ASSESSMENT CENTER orders (sc19_stripe.package_orders), Stripe only.
+  storeExtension: stripePackageExtension,
   // Live payments stay closed (AGENTS.md, payment path): a live key never opens a checkout.
   liveApproved: false,
   enabled: process.env.SC19_PACKAGES_ENABLED === 'true',
