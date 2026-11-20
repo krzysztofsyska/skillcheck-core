@@ -62,3 +62,10 @@ export function formatPln(grossMinor: number): string {
 export const grossLabel = (grossMinor: number): string => `${formatPln(grossMinor)} zł brutto`;
 /** „0 zł” (FREE), jak dotychczas na stronie. */
 export const freeLabel = (grossMinor: number): string => `${formatPln(grossMinor)} zł`;
+
+/**
+ * Replaces the static amount quoted inside a terms text (e.g. „nie jest wliczone w <kwota> zł”) with the
+ * catalog amount. `staticLabel` is the static „<kwota> zł brutto” label of the same offer.
+ */
+export const substituteQuotedPrice = (text: string, staticLabel: string, grossMinor: number): string =>
+  text.split(staticLabel.replace(/ brutto$/, '')).join(`${formatPln(grossMinor)} zł`);

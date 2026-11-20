@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire, Module } from 'node:module';
 import ts from 'typescript';
 import {
-  formatPln, freeLabel, grossLabel, isPublicCatalogEnabled, publicPricesFromRows,
+  formatPln, freeLabel, grossLabel, isPublicCatalogEnabled, publicPricesFromRows, substituteQuotedPrice,
 } from '../lib/pricing/public-catalog.ts';
 import { preselekcjaOffer, freeOffer } from '../lib/preselekcja-offer.ts';
 
@@ -133,6 +133,7 @@ test('strona: flaga wyłączona = ceny dotychczasowe, jedno wywołanie loadera, 
   assert.match(cmp, /prices \? freeLabel\(prices\.FREE\) : staticFreePrice/);
   assert.match(cmp, /prices \? grossLabel\(prices\.PRESELEKCJA\) : staticPreselekcjaPrice/);
   assert.match(cmp, /futurePrice\(stage\.name, stage\.price\)/);
+  assert.match(cmp, /\{futureResult\(stage\)\}/);
   for (const file of ['lib/pricing/public-catalog.ts', 'lib/pricing/public-catalog-server.ts']) {
     assert.doesNotMatch(read(file).replace(/\/\*[\s\S]*?\*\//g, ''), /\b(30000|61500|149900|615|1 499)\b/, file);
   }
@@ -142,4 +143,18 @@ test('voicebot nie pojawia się w kodzie nowego modułu', () => {
   for (const file of ['lib/pricing/public-catalog.ts', 'lib/pricing/public-catalog-server.ts']) {
     assert.doesNotMatch(read(file), /voicebot|rozmow[ay] z botem/i);
   }
+});
+
+test('warunki ASSESSMENT CENTER: z flagą kwota w tekście = cena z katalogu, bez flagi bez zmian', () => {
+  const future = read('app/components/marketing/future-offers.ts');
+  const staticPrice = /name: "ASSESSMENT CENTER"[\s\S]*?price: "([^"]+)"/.exec(future)[1];
+  const result = /name: "ASSESSMENT CENTER"[\s\S]*?result: "([^"]+)"/.exec(future)[1];
+  assert.ok(result.includes(staticPrice.replace(/ brutto$/, '')));
+  const changed = substituteQuotedPrice(result, staticPrice, 159900);
+  assert.ok(changed.includes('nie jest wliczone w 1 599 zł'));
+  assert.ok(!changed.includes('1 499'));
+  // ta sama kwota = tekst identyczny
+  assert.equal(substituteQuotedPrice(result, staticPrice, 149900), result);
+  const cmp = read('app/components/marketing/package-comparison.tsx');
+  assert.match(cmp, /if \(!prices \|\| stage\.name !== "ASSESSMENT CENTER"\) return stage\.result;/);
 });
