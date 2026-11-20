@@ -44,7 +44,9 @@ export interface PaymentTransaction {
   /** Lock the offer and enforce immutable economic revisions in persistent storage. */
   offer(id: string): Promise<PaymentOffer | null>;
   orderByRequest(companyId: string, requestId: string): Promise<PaymentOrder | null>;
-  /** At most one unresolved purchase per company, across offers and scopes. */
+  /** At most one unresolved purchase per company, across offers and scopes. An
+   * unpaid order of a retired provider (Przelewy24, whose settlement was removed)
+   * can never be paid and is not returned; it stays stored and never grants. */
   unresolvedOrder(companyId: string): Promise<PaymentOrder | null>;
   /** Immutable request alias, committed atomically with selecting/creating the order. */
   bindRequest(companyId: string, requestId: string, orderId: string): Promise<void>;

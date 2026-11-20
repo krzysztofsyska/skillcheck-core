@@ -535,7 +535,11 @@ test('form encoding and source hygiene: no key in code, no Stripe invoices, P24 
   assert.match(sql, /mode = 'test' and provider = 'stripe'/);
   const packages = readFileSync(new URL('../supabase/migrations/20261121130000_r7_stripe_packages.sql', import.meta.url), 'utf8')
     .replace(/--[^\n]*/g, '').replace(/\$\$[\s\S]*?\$\$/g, '');
-  assert.doesNotMatch(packages, /\b(drop|truncate|delete\s+from|update\s+\w|rename|alter\s+column)\b/i);
+  // The ONE drop allowed: the one-unresolved-order index, rebuilt at once under the
+  // same name without the retired Przelewy24 provider (Codex P2, PR #566). No data changes.
+  const rebuild = /drop index if exists private\.sc19_payment_one_unresolved;\s*create unique index sc19_payment_one_unresolved on private\.sc19_payment_orders\(company_id\)\s*where status='awaiting_payment' and provider<>'przelewy24';/;
+  assert.match(packages, rebuild);
+  assert.doesNotMatch(packages.replace(rebuild, ''), /\b(drop|truncate|delete\s+from|update\s+\w|rename|alter\s+column)\b/i);
   assert.match(packages, /mode = 'test' and provider = 'stripe'/);
   assert.doesNotMatch(packages, /\bto\s+(anon|authenticated)\b/i);
 });

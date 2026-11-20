@@ -9,7 +9,17 @@ do $guard$
 begin
  if to_regclass('sc19_stripe.package_orders') is not null and exists(select 1 from sc19_stripe.package_orders) then
   raise exception 'r7_stripe_packages_rollback_refused_orders_exist' using errcode='55000';end if;
+ -- The company-wide index cannot be restored while a company holds a stale
+ -- Przelewy24 order next to another unresolved order; orders are never changed here.
+ if exists(select 1 from private.sc19_payment_orders where status='awaiting_payment'
+   group by company_id having count(*)>1) then
+  raise exception 'r7_stripe_packages_rollback_refused_unresolved_orders' using errcode='55000';end if;
 end $guard$;
+
+-- Restore the company-wide one-unresolved-order index of the SC-019 migration.
+drop index if exists private.sc19_payment_one_unresolved;
+create unique index sc19_payment_one_unresolved on private.sc19_payment_orders(company_id)
+ where status='awaiting_payment';
 
 -- Restore the buyer lookup of 20261121110000_r7_stripe_checkout.sql (PRESELEKCJA
 -- Stripe orders only) BEFORE the package table goes: a SQL function body is not

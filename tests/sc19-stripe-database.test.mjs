@@ -360,3 +360,102 @@ test('R7 packages: paid test-mode WERYFIKACJA / ASSESSMENT CENTER grant once thr
   assert.equal((await db.query(`select has_function_privilege('anon','sc19_stripe.buyer(uuid)','execute') r`)).rows[0].r, false);
   assert.equal((await db.query('select private.erasure_schema_signature() s')).rows[0].s, signature);
 });
+
+// Codex P2 (PR #566): a Przelewy24 TEST order left unpaid ('awaiting_payment')
+// before the switch to Stripe must not block a Stripe purchase. Przelewy24
+// settlement no longer exists, so such an order can never be paid; it stays
+// exactly as it is (never deleted or changed) and never grants anything.
+test('R7: a stale unpaid Przelewy24 order neither blocks a Stripe purchase nor grants anything',
+  { skip: !url && 'SC19_TEST_DATABASE_URL required' }, async t => {
+  const { createSc19Payments } = await import('../lib/sc19-payments.ts');
+  const { createPostgresPaymentStore } = await import('../lib/sc19-payment-postgres.ts');
+  const { stripePackageExtension, STRIPE_PACKAGE_OFFERS } = await import('../lib/sc19-stripe-packages.ts');
+  const u = new URL(url);
+  if (!['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname)) throw Error('Disposable loopback database required');
+  const root = new pg.Client({ connectionString: u.href }); await root.connect();
+  const name = 'r7stalep24_' + randomBytes(6).toString('hex');
+  await root.query(`create database "${name}"`); u.pathname = '/' + name;
+  const db = new pg.Client({ connectionString: u.href }); await db.connect();
+  const pool = new pg.Pool({ connectionString: u.href, max: 3 });
+  t.after(async () => { await pool.end(); await db.end(); await root.query(`drop database "${name}"`); await root.end(); });
+  await db.query(fullFixture);
+  await db.query(migration);
+  const A = '00000000-0000-4000-8000-000000000001', OWNER = '00000000-0000-4000-8000-000000000002';
+  // The stale Przelewy24 order, with a bound sandbox session, as the old adapter left it.
+  const stale = (await db.query(`insert into private.sc19_payment_orders
+    (id,company_id,buyer_id,request_id,offer_id,offer_revision,terms_revision,amount_minor,currency,credits,provider,account,mode,status,
+     session_id,checkout_url,checkout_deadline_ms)
+    values (gen_random_uuid(),$1,$2,gen_random_uuid(),'preselekcja-60-2026-11-r3','preselekcja-60-v3','preselekcja-terms-2026-11-v3',
+     30000,'PLN',60,'przelewy24','sandbox-merchant','test','awaiting_payment','p24_stale_token',
+     'https://sandbox.przelewy24.pl/trnRequest/p24_stale_token',1) returning id`, [A, OWNER])).rows[0].id;
+  const rolePool = { async connect() { const c = await pool.connect(); await c.query('set role sc19_p24_checkout'); return c; } };
+  const scope = { provider: 'stripe', account: 'ktig-consulting', mode: 'test' };
+  let paymentId = 'pi_fixturestale1';
+  const provider = {
+    async createCheckout(order) {
+      const sid = `cs_test_${order.id.replace(/-/g, '')}`;
+      return { orderId: order.id, sessionId: sid, url: `https://checkout.stripe.com/c/pay/${sid}`, scope,
+        amountMinor: order.amountMinor, currency: 'PLN', paymentKind: 'one_time' };
+    },
+    async lookupCheckout() { return null; },
+    async verifyAndRetrieve(raw) {
+      const order = JSON.parse(new TextDecoder().decode(raw));
+      return { eventId: 'evt_stale' + order.n, orderId: order.id, sessionId: order.sessionId, paymentId, scope,
+        amountMinor: order.amountMinor, currency: 'PLN', status: 'paid' };
+    },
+  };
+  const service = createSc19Payments({ store: createPostgresPaymentStore(rolePool, stripePackageExtension), provider, scope,
+    checkoutOrigins: ['https://checkout.stripe.com'], enabled: true, liveApproved: false, authenticate: async () => ({ userId: OWNER }) });
+  const req = n => `00000000-0000-4000-8000-0000000002${String(n).padStart(2, '0')}`;
+  const deliver = (order, n) => service.notification(new TextEncoder().encode(JSON.stringify({ ...order, n })), 'sig');
+  const wer = STRIPE_PACKAGE_OFFERS.find(o => o.plan === 'WERYFIKACJA');
+  const preselekcja = n => service.checkout({ companyId: A, offerId: 'preselekcja-60-2026-11-r3',
+    termsRevision: 'preselekcja-terms-2026-11-v3', requestId: req(n), packageCode: 'PRESELEKCJA' });
+
+  // Pre-migration schema (company-wide index): the stale order still answers
+  // „purchase pending”, never a unique-index failure.
+  await assert.rejects(preselekcja(9), e => e.code === 'SC19_PAYMENT_PURCHASE_PENDING');
+  const signature = (await db.query('select private.erasure_schema_signature() s')).rows[0].s;
+  await db.query(packagesMigration);
+  assert.equal((await db.query('select private.erasure_schema_signature() s')).rows[0].s, signature, 'erasure signature unchanged');
+
+  // A package purchase (separate order table) opens next to the stale order.
+  const w = await service.checkout({ companyId: A, offerId: wer.id, termsRevision: wer.termsRevision, requestId: req(1), packageCode: 'WERYFIKACJA' });
+  assert.equal(w.amountMinor, 61500);
+  // Still at most one unresolved Stripe purchase per company, across both order tables.
+  await assert.rejects(preselekcja(2), e => e.code === 'SC19_PAYMENT_PURCHASE_PENDING');
+  assert.equal((await deliver({ id: w.orderId, sessionId: w.sessionId, amountMinor: 61500 }, 1)).state, 'applied');
+  // PRESELEKCJA through Stripe also opens next to the stale order (same order table, same unique index).
+  paymentId = 'pi_fixturestale2';
+  const pre = await preselekcja(3);
+  assert.equal(pre.amountMinor, 30000);
+  // The database itself still allows one unresolved non-Przelewy24 order per company.
+  await assert.rejects(db.query(`insert into private.sc19_payment_orders
+    (id,company_id,buyer_id,request_id,offer_id,offer_revision,terms_revision,amount_minor,currency,credits,provider,account,mode,status,checkout_deadline_ms)
+    values (gen_random_uuid(),$1,$2,gen_random_uuid(),'preselekcja-60-2026-11-r3','x','x',30000,'PLN',60,'stripe','ktig-consulting','test','awaiting_payment',1)`,
+    [A, OWNER]), e => e.code === '23505' && e.constraint === 'sc19_payment_one_unresolved');
+  assert.equal((await deliver({ id: pre.orderId, sessionId: pre.sessionId, amountMinor: 30000 }, 2)).state, 'applied');
+  // The stale order can never be settled through Stripe, stays exactly as it was and grants nothing.
+  paymentId = 'pi_fixturestale3';
+  await assert.rejects(deliver({ id: stale, sessionId: 'p24_stale_token', amountMinor: 30000 }, 3), e => e.code === 'SC19_PAYMENT_SCOPE_MISMATCH');
+  assert.deepEqual((await db.query('select status, session_id, payment_id from private.sc19_payment_orders where id=$1', [stale])).rows,
+    [{ status: 'awaiting_payment', session_id: 'p24_stale_token', payment_id: null }]);
+  assert.equal((await db.query('select available from private.sc19_balances where company_id=$1', [A])).rows[0].available, 120);
+  assert.equal((await db.query('select count(*)::int n from private.sc19_credit_journal')).rows[0].n, 2);
+  assert.equal((await db.query('select count(*)::int n from private.sc19_payment_grants where order_id=$1', [stale])).rows[0].n, 0);
+
+  // Rollback: refused while a company holds a Przelewy24 order AND another unresolved
+  // order (the company-wide index could not be rebuilt); otherwise restores it.
+  await db.query(`alter table sc19_stripe.package_orders disable trigger package_order_immutable;
+   alter table sc19_stripe.package_requests disable trigger package_request_immutable;
+   alter table sc19_stripe.package_grants disable trigger package_grant_immutable;
+   delete from sc19_stripe.package_grants; delete from sc19_stripe.package_requests; delete from sc19_stripe.package_orders;`);
+  paymentId = 'pi_fixturestale4';
+  await preselekcja(4);
+  await assert.rejects(db.query(packagesRollback), /r7_stripe_packages_rollback_refused_unresolved_orders/);
+  await db.query('rollback').catch(() => {});
+  await db.query('delete from private.sc19_payment_orders where id=$1', [stale]);
+  await db.query(packagesRollback);
+  assert.match((await db.query(`select pg_get_indexdef('private.sc19_payment_one_unresolved'::regclass) d`)).rows[0].d,
+    /\(company_id\) WHERE \(status = 'awaiting_payment'::text\)$/);
+});

@@ -50,7 +50,8 @@
 --
 -- Code compatibility: the application code shipped with this change works on the
 -- pre-migration schema: without sc19_stripe.package_orders it offers only
--- PRESELEKCJA, exactly as before. Production: applied only through
+-- PRESELEKCJA, exactly as before (and a stale Przelewy24 order still counts as the
+-- unresolved purchase until this migration rebuilds the index). Production: applied only through
 -- db-migrate-production after the owner's approval.
 -- Rollback: supabase/rollbacks/20261121130000_r7_stripe_packages_down.sql.
 begin;
@@ -199,6 +200,21 @@ language sql stable security definer set search_path='' as $$
    where p.company_id=target_company and p.provider='stripe' and p.mode='test' and p.status='awaiting_payment'))
 $$;
 revoke all on function sc19_stripe.buyer(uuid) from public, anon, authenticated;
+
+-- STALE PRZELEWY24 ORDERS (Codex P2, PR #566). The Przelewy24 adapter and its
+-- settlement were removed (owner decision 19.11.2026, PR #562). A Przelewy24 TEST
+-- order still 'awaiting_payment' can therefore never be paid, yet the company-wide
+-- index below kept it as the company's one unresolved purchase, so that company
+-- could never buy through Stripe. The index is rebuilt with the same name and the
+-- same rule (one unresolved order per company) for every provider EXCEPT the
+-- retired 'przelewy24'. No order row is changed or deleted, and such an order still
+-- grants nothing: settlement checks the order's provider/account/mode against the
+-- Stripe scope (SC19_PAYMENT_SCOPE_MISMATCH). The application skips the same
+-- provider (lib/sc19-payment-postgres.ts, RETIRED_PAYMENT_PROVIDERS). Indexes are
+-- not part of private.erasure_schema_signature() (checked in the postflight).
+drop index if exists private.sc19_payment_one_unresolved;
+create unique index sc19_payment_one_unresolved on private.sc19_payment_orders(company_id)
+ where status='awaiting_payment' and provider<>'przelewy24';
 
 do $roles$
 declare r text;

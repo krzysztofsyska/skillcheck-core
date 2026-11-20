@@ -21,6 +21,7 @@
 import type { PaymentOrder, PaymentTransaction } from './sc19-payments.ts';
 import { Sc19PaymentError, orderPackage } from './sc19-payments.ts';
 import type { CheckoutOffer, PaymentSqlClient, PaymentStoreExtension } from './sc19-payment-postgres.ts';
+import { RETIRED_PAYMENT_PROVIDERS } from './sc19-payment-postgres.ts';
 import { STRIPE_CATALOG } from './stripe-catalog.ts';
 
 const fail = (code: string): never => { throw new Sc19PaymentError(code); };
@@ -137,7 +138,9 @@ export const stripePackageExtension: PaymentStoreExtension = Object.freeze({
           const pending = await c.query('select private.sc19_has_pending_catalog_order($1) as pending', [o.companyId]);
           if (pending.rows[0]?.pending === true) return fail('SC19_PAYMENT_REQUEST_CONFLICT');
         }
-        const open = await c.query("select 1 from private.sc19_payment_orders where company_id=$1 and status='awaiting_payment'", [o.companyId]);
+        // A retired provider's unpaid order (Przelewy24) can never be paid and does not count.
+        const open = await c.query(`select 1 from private.sc19_payment_orders where company_id=$1 and status='awaiting_payment'
+          and provider<>all($2::text[])`, [o.companyId, RETIRED_PAYMENT_PROVIDERS]);
         if (open.rows.length) return fail('SC19_PAYMENT_REQUEST_CONFLICT');
         await c.query(`insert into sc19_stripe.package_orders
           (id,company_id,buyer_id,request_id,package_code,offer_id,offer_revision,terms_revision,amount_minor,currency,credits,

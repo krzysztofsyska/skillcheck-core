@@ -23,6 +23,12 @@ export type PaymentStoreExtension = Readonly<{
   offers(client: PaymentSqlClient): Promise<CheckoutOffer[]>;
 }>;
 const fail = (code: string): never => { throw new Sc19PaymentError(code); };
+/** Providers whose settlement code was removed (Przelewy24, owner decision
+ * 19.11.2026). Their unpaid TEST orders can never be paid or granted, so they no
+ * longer count as the company's unresolved purchase; the rows stay unchanged. The
+ * database index sc19_payment_one_unresolved excludes the same provider
+ * (migration 20261121130000_r7_stripe_packages.sql). */
+export const RETIRED_PAYMENT_PROVIDERS: readonly string[] = Object.freeze(['przelewy24']);
 function orderRow(r: Record<string, unknown>): PaymentOrder {
   return {
     id: String(r.id), companyId: String(r.company_id), buyerId: String(r.buyer_id), requestId: String(r.request_id),
@@ -75,8 +81,13 @@ export function createPostgresPaymentStore(pool: PaymentSqlPool, extension?: Pay
           },
           async unresolvedOrder(companyId) {
             await lockCompany(companyId);
+            // A retired provider's order is skipped only once the database index skips it
+            // too (same migration as sc19_stripe.package_orders); before that it still
+            // answers SC19_PAYMENT_PURCHASE_PENDING instead of a unique-index failure.
             const r = await c.query(`select * from private.sc19_payment_orders
-              where company_id=$1 and status='awaiting_payment' for update`,[companyId]);
+              where company_id=$1 and status='awaiting_payment'
+                and (provider<>all($2::text[]) or to_regclass('sc19_stripe.package_orders') is null) for update`,
+            [companyId,RETIRED_PAYMENT_PROVIDERS]);
             return r.rows[0] ? orderRow(r.rows[0]) : null;
           },
           async bindRequest(companyId, requestId, orderId) {
