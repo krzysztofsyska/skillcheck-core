@@ -1,5 +1,5 @@
 // R6-2 (packages): a company with a package gets its voice interview pool
-// automatically (20261121100000_r6_voice_package_pools.sql and
+// automatically (20261120210000_r6_voice_package_pools.sql and
 // lib/voice/package-pools.ts) on the full checked-in chain:
 //  - FREE gives 1 interview; PRESELEKCJA, WERYFIKACJA and ASSESSMENT CENTER 10
 //    each (owner 20.11.2026); an unknown package, an add-on, a pending or a
@@ -27,7 +27,7 @@ const syncFn = 'private.sc19_voice_sync_package_pools(uuid)';
 const topupFn = 'private.sc19_voice_grant_topup(uuid,uuid,integer,timestamptz)';
 const functions = [syncFn, topupFn, 'private.sc19_voice_package_events(uuid)', 'private.sc19_voice_package_reference(uuid,text,text)',
   'private.sc19_voice_package_allowance(text)', 'private.sc19_voice_package_window()'];
-const migration = '20261121100000_r6_voice_package_pools.sql';
+const migration = '20261120210000_r6_voice_package_pools.sql';
 
 test('R6-2 packages: FREE 1, paid 10, idempotent, tenant-isolated, owner-only', async t => {
   const env = await bootMigrationDatabase(t);
@@ -208,6 +208,33 @@ test('R6-2 packages: FREE 1, paid 10, idempotent, tenant-isolated, owner-only', 
     assert.equal(await salesState(), afterPayment);
   });
 
+  await t.test('a catalog order settled by the real settlement function is one package with its own code', async () => {
+    const operator = users.owner;
+    await db.query('insert into public.platform_operators(user_id) values($1) on conflict do nothing', [operator]);
+    const settle = async (order, gross = 100) => {
+      await db.query("select set_config('request.jwt.claim.sub',$1,false)", [operator]);
+      try { await db.query("select public.sc19_settle_catalog_order($1,$2,$3,'PLN')", [order, `synthetic-real-${randomUUID()}`, gross]); }
+      finally { await db.query("select set_config('request.jwt.claim.sub','',false)"); }
+    };
+    // With CV credits (journal row + order) and without (order only): one pool each, with the order's own code.
+    const withCv = await fresh();
+    await settle(await catalogOrder(withCv.companyId, 'package', 'PRESELEKCJA', 'pending'));
+    const noCv = await fresh();
+    const order = await one(`insert into sc19_commerce.orders(company_id,buyer_id,request_id,version_id,kind,code,package_code,
+      quantity,gross_minor,cv_credits,service_code,service_units,terms_revision,terms_text)
+      values($1,$2,$3,$4,'package','ASSESSMENT_CENTER','ASSESSMENT_CENTER',1,100,0,null,0,'catalog-orders-v1','synthetic') returning id as v`,
+    [noCv.companyId, users.owner, randomUUID(), version]);
+    await settle(order);
+    assert.equal(await one("select count(*)::int as v from private.sc19_credit_journal where company_id=$1 and reason='paid_grant'", [withCv.companyId]), 1,
+      'the real settlement wrote a CV journal row');
+    for (const [f, code] of [[withCv, 'PRESELEKCJA'], [noCv, 'ASSESSMENT_CENTER']]) {
+      assert.deepEqual((await db.query('select package_code from private.sc19_voice_package_events($1)', [f.companyId])).rows, [{ package_code: code }]);
+      assert.deepEqual(await sync(f.companyId), { package_pools: 1, created: 1 });
+      assert.deepEqual(await sync(f.companyId), { package_pools: 1, created: 0 });
+      assert.deepEqual((await pools(f.companyId)).map(p => p.total), [10]);
+    }
+  });
+
   await t.test('prepared top-up: once per purchase, only with a package, never callable by API roles', async () => {
     const topup = (company, purchase, n = 5, days = 90) => db.query(
       `select * from private.sc19_voice_grant_topup($1,$2,$3,clock_timestamp()+make_interval(days=>$4))`, [company, purchase, n, days]);
@@ -224,10 +251,16 @@ test('R6-2 packages: FREE 1, paid 10, idempotent, tenant-isolated, owner-only', 
       [buyer.companyId, purchase, first.entitlement_id])).rows[0];
     assert.deepEqual(again, { entitlement_id: first.entitlement_id, replayed: true });
     await assert.rejects(topup(buyer.companyId, purchase, 6, 90));
-    // The same purchase reference for another company is a different, separate pool.
+    // One purchase is one pool: the same purchase reference for another company is refused.
     await trial(none.companyId);
-    const otherCompany = (await topup(none.companyId, purchase, 2, 30)).rows[0];
-    assert.notEqual(otherCompany.entitlement_id, first.entitlement_id);
+    await rejects(topup(none.companyId, purchase, 5, 90), '23505', 'voice_grant_reference_conflict');
+    assert.equal((await pools(none.companyId)).length, 0);
+    // A retry with a recomputed expiry is a different term and is refused (the caller persists what it sold).
+    await rejects(topup(buyer.companyId, purchase, 5, 91), '23505');
+    // A company whose only package is past its window cannot top up.
+    const stale = await fresh();
+    await trial(stale.companyId, new Date(Date.now() - 800 * 86400000).toISOString());
+    await rejects(topup(stale.companyId, randomUUID()), 'PT422', 'voice_topup_package_required');
     for (const bad of [[null, purchase], [buyer.companyId, null]]) await rejects(topup(bad[0], bad[1]), '22023');
     await rejects(topup(buyer.companyId, randomUUID(), 0), '22023');
     await rejects(topup(buyer.companyId, randomUUID(), 1001), '22023');
@@ -278,7 +311,7 @@ test('R6-2 packages: FREE 1, paid 10, idempotent, tenant-isolated, owner-only', 
 
   await t.test('rollback removes only the functions; pools and signature stay', async () => {
     const rows = await one('select count(*)::int as v from private.sc19_voice_entitlements');
-    await db.query(await readFile(new URL('../supabase/rollbacks/20261121100000_r6_voice_package_pools_down.sql', import.meta.url), 'utf8'));
+    await db.query(await readFile(new URL('../supabase/rollbacks/20261120210000_r6_voice_package_pools_down.sql', import.meta.url), 'utf8'));
     for (const fn of functions) assert.equal(await one('select to_regprocedure($1) is null as v', [fn]), true, fn);
     assert.equal(await one('select to_regprocedure($1) is not null as v',
       ['private.sc19_voice_grant_interviews(uuid,text,integer,uuid,timestamptz,uuid,timestamptz)']), true, 'operator grant stays');

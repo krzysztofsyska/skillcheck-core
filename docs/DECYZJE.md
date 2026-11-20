@@ -16,16 +16,31 @@
 ## 20.11.2026
 
 **Voicebot w pakietach: pula rozmów i dokupowanie (polecenie właściciela dla PR #553, ok. 09:55).**
-Cytat z polecenia właściciela:
-„Voicebot będzie częścią pakietów SkillCheck: FREE 1 próbna rozmowa, PRESELEKCJA 10 rozmów,
-WERYFIKACJA 10 rozmów, ASSESSMENT CENTER 10 rozmów. Po wykorzystaniu przyznanej puli klient będzie
-mógł dokupić kolejne rozmowy. Cena, wielkość dodatkowej puli i sposób jej zakupu zostaną ustalone
-później. Nie wprowadzaj własnych założeń handlowych. Limity analiz CV pozostają bez zmian: FREE — 5
-analiz CV. PRESELEKCJA — 60 analiz CV za 300 zł brutto. Limity rozmów i analiz CV są odrębnymi
-uprawnieniami.”
-„Voicebot pozostaje niewidoczny dla klientów do czasu skonfigurowania i zatwierdzenia uruchomienia.”
-(Uwaga: w oryginale pakiety i limity CV były w tabeli i na liście; tu zapisane w jednym wierszu bez
-zmiany słów.)
+Cytat z polecenia właściciela (układ tabeli i listy zachowany):
+
+> Voicebot będzie częścią pakietów SkillCheck:
+>
+> | Pakiet | Rozmowy voicebota w cenie |
+> |---|---|
+> | FREE | 1 próbna rozmowa |
+> | PRESELEKCJA | 10 rozmów |
+> | WERYFIKACJA | 10 rozmów |
+> | ASSESSMENT CENTER | 10 rozmów |
+>
+> Po wykorzystaniu przyznanej puli klient będzie mógł dokupić kolejne rozmowy.
+>
+> Cena, wielkość dodatkowej puli i sposób jej zakupu zostaną ustalone później. Nie wprowadzaj
+> własnych założeń handlowych.
+>
+> Limity analiz CV pozostają bez zmian:
+>
+> * FREE — 5 analiz CV.
+> * PRESELEKCJA — 60 analiz CV za 300 zł brutto.
+>
+> Limity rozmów i analiz CV są odrębnymi uprawnieniami.
+
+oraz: „Voicebot pozostaje niewidoczny dla klientów do czasu skonfigurowania i zatwierdzenia
+uruchomienia.”
 
 **Korekta w PR #553, 08:51 (komentarz właściciela).** „Właściciel wyjaśnił, że wcześniej pomylił
 limity **analiz CV** z limitami **rozmów voicebota**. Cofnięcie całej koncepcji z poprzedniego

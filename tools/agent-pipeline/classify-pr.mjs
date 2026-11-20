@@ -21,7 +21,8 @@ export function classify({ files, body, base, headRef }) {
   // Ambiguity fails closed, naming the field and both values.
   if (conflicts.length > 0) return { ok: false, errors: conflicts };
   const missing = REQUIRED.filter(field => !metadata[field]);
-  if (missing.length > 0) return { ok: false, errors: missing.map(field => `Missing PR metadata field: ${field}`) };
+  if (missing.length > 0) return { ok: false, errors: missing.map(field =>
+    `Missing PR metadata field: ${field} (write "${field}: <value>" on its own line, plain text, no markdown such as **${field}:**)`) };
 
   let frontend = false;
   let backend = false;

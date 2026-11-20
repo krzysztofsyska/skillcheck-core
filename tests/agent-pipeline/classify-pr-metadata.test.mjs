@@ -1,7 +1,8 @@
-// Agent Gates (#553 root cause): the PR metadata parser used to keep the LAST
-// copy of a repeated field and compare LEVEL as raw text, so a body whose header
-// said `LEVEL: L3` could fail with an unexplained "require LEVEL: L3", or pass
-// with a different value than the one at the top. The gate is not loosened:
+// Agent Gates (#553): the two failures on c609531 (08:28 "Missing PR metadata
+// field: LEVEL", 08:32 "require LEVEL: L3") came from how the PR body was
+// written (formatting of the LEVEL line), not from the code. The parser gave no
+// hint which value it read, kept the LAST copy of a repeated field and compared
+// LEVEL as raw text. Hardening + diagnostics; the gate is not loosened:
 // an L3 change still needs exactly `LEVEL: L3`; ambiguity now fails closed with
 // the value that was read.
 import test from 'node:test';
@@ -56,6 +57,11 @@ test('informational fields may repeat (header + handoff); the first value is kep
 });
 
 test('missing fields are still reported one by one', () => {
-  assert.deepEqual(run('TASK: x').errors.sort(), ['LEVEL', 'OWNER_APPROVAL', 'PRODUCTION_APPROVAL', 'PROMOTION', 'REVIEW_VERDICT', 'SCOPE']
+  const errors = run('TASK: x').errors;
+  assert.deepEqual(errors.map(e => e.split(' (')[0]).sort(), ['LEVEL', 'OWNER_APPROVAL', 'PRODUCTION_APPROVAL', 'PROMOTION', 'REVIEW_VERDICT', 'SCOPE']
     .map(f => `Missing PR metadata field: ${f}`).sort());
+  // A markdown-bold field (the likely 08:28 case) is not read, and the error says how to write it.
+  const bold = run(header().replace('LEVEL: L3', '**LEVEL:** L3'));
+  assert.equal(bold.ok, false);
+  assert.match(bold.errors.join('\n'), /Missing PR metadata field: LEVEL \(write "LEVEL: <value>" on its own line, plain text, no markdown/);
 });

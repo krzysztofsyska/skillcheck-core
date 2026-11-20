@@ -21,6 +21,12 @@
 --                 order decides (one package, with its real code), and a pending
 --                 or cancelled order gives nothing.
 --
+-- Verification evidence: the pool design (R19) requires a verified grant
+-- record. For a package pool that record IS the package row above (a FREE
+-- activation or a settled payment), referenced by a derived, domain-separated
+-- evidence UUID; no other, separate verification is added. A company without
+-- such a row gets no pool.
+--
 -- Idempotent: every package has one derived, domain-separated grant reference,
 -- and the existing unique(grant_reference) of the pool is the final guard. FREE
 -- uses the trial reference of the operator grant, so FREE and an operator trial
@@ -98,8 +104,8 @@ language sql stable security definer set search_path='' as $$
  select 'paid:'||coalesce(j.reference,'journal:'||j.id::text), 'PRESELEKCJA'::text, j.created_at
   from private.sc19_credit_journal j
   where j.company_id=target_company and j.reason='paid_grant' and j.delta>0
-   and not exists(select 1 from sc19_commerce.orders o
-    where j.reference is not null and 'settlement:'||o.settlement_reference=j.reference)
+   and not (j.reference like 'settlement:%' and exists(select 1 from sc19_commerce.orders o
+    where o.settlement_reference=substr(j.reference,12)))
  union all
  select 'paid:settlement:'||o.settlement_reference, o.package_code, o.settled_at from sc19_commerce.orders o
   where o.company_id=target_company and o.status='paid' and o.kind='package' and o.package_code<>'FREE'
@@ -162,14 +168,23 @@ $$;
 -- no price, no checkout, no payment, no order kind. A future, separately
 -- approved purchase flow passes its own settled purchase reference, the number
 -- of interviews and the validity it sold; this function only turns that into a
--- pool, once per purchase (derived reference + unique(grant_reference)); a
--- replay with the same terms returns the same pool, other terms are refused by
--- the operator grant. Only a company that really has a package can top up.
+-- pool. Rules:
+--  * one purchase = one pool, ever, for one company: the grant reference is
+--    derived from the purchase reference ONLY (domain-separated), so the same
+--    purchase passed for another company is refused (23505), like a settlement
+--    reference in sc19_settle_catalog_order;
+--  * a replay is accepted only with identical terms: the caller must persist
+--    the number and the exact expiry it sold and pass them again (a recomputed
+--    "now()+N days" is a different term and is refused);
+--  * only a company that has a package whose pool window is still open (the
+--    same rule the package sync uses) can top up. Whether a top-up should also
+--    be possible later, and for how long it is valid, is for the future
+--    purchase decision.
 create function private.sc19_voice_grant_topup(
  target_company uuid, purchase_reference uuid, interviews integer, pool_expires_at timestamptz
 ) returns table(entitlement_id uuid, replayed boolean)
 language plpgsql volatile security definer set search_path='' as $$
-declare reference uuid;
+declare reference uuid; evidence uuid;
 begin
  if target_company is null or purchase_reference is null or interviews is null or pool_expires_at is null
   or interviews not between 1 and 1000 then
@@ -177,13 +192,15 @@ begin
  perform 1 from public.companies c where c.id=target_company;
  if not found then raise exception 'voice_grant_company_unknown' using errcode='PT404';end if;
  if not exists(select 1 from private.sc19_voice_package_events(target_company) e
-   where private.sc19_voice_package_allowance(e.package_code)>0) then
+   where private.sc19_voice_package_allowance(e.package_code)>0
+    and pg_catalog.date_trunc('second',e.occurred_at)+private.sc19_voice_package_window()>clock_timestamp()) then
   raise exception 'voice_topup_package_required' using errcode='PT422';end if;
- reference:=private.sc19_voice_package_reference(target_company,'topup:'||purchase_reference::text,'grant');
+ reference:=substr(encode(pg_catalog.sha256(pg_catalog.convert_to(
+  'skillcheck:sc19-voice-pool:topup_grant:v1:'||purchase_reference::text,'UTF8')),'hex'),1,32)::uuid;
+ evidence:=substr(encode(pg_catalog.sha256(pg_catalog.convert_to(
+  'skillcheck:sc19-voice-pool:topup_evidence:v1:'||purchase_reference::text,'UTF8')),'hex'),1,32)::uuid;
  return query select g.entitlement_id,g.replayed from private.sc19_voice_grant_interviews(
-  target_company,'operator_manual',interviews,reference,pool_expires_at,
-  private.sc19_voice_package_reference(target_company,'topup:'||purchase_reference::text,'evidence'),
-  pool_expires_at) g;
+  target_company,'operator_manual',interviews,reference,pool_expires_at,evidence,pool_expires_at) g;
 end;
 $$;
 

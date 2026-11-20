@@ -9,6 +9,9 @@
  * then names the pool the next interview should use: an eligible pool of THIS
  * company with a free unit, the one that ends first. The caller passes that id
  * as `entitlementId` to prepareOfflineVoiceDraft, which locks and rechecks it.
+ * If another order takes that pool's last unit in between, the order is refused
+ * (QUOTA_EXHAUSTED) even when another pool still has units: the caller may call
+ * this helper once more and retry with the fresh pick.
  *
  * The caller supplies a trusted server connection; the company id comes from
  * the authenticated server session, never from a browser. No provider, no
