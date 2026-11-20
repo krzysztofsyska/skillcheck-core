@@ -154,6 +154,12 @@ test('R6 #542: voice transcript reader is tenant-scoped, minimal, retention-awar
   await h.asAdmin();
   await db.query('insert into private.voice_plan_template_catalog(version,manifest_digest,active) values($1,$2,true)',
     ['skillcheck-voice-plan-v1', trustedVoiceTemplateDigest('skillcheck-voice-plan-v1')]);
+  // R7 monthly voice cost cap (default 5000 grosze, 1500 per call) is not under test here: this fixture
+  // dispatches more calls in one month than the default cap allows, so the test DB owner raises the cap.
+  // The migration default is untouched; the cap itself is covered by voice-cost-cap-database.test.mjs.
+  await db.query(`do $cap$ begin
+    if to_regclass('voice_budget.settings') is not null then
+      update voice_budget.settings set monthly_cap_grosze=1000000 where singleton; end if; end $cap$`);
   const a = await ready();
   const b = await ready(a);          // same company, another application
   const a2 = await ready(a), a3 = await ready(a);
