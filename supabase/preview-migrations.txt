@@ -110,3 +110,5 @@
 20261120150000_r6_voice_retention.sql
 # R6 #542: read-only voice transcript reader for the recruiter (Preview page only): public.read_voice_interview_transcripts for one application, owner or recruiter of the company, completed calls only, minimal columns ({speaker,text} rows), transcripts past the 90-day retention shown as erased, every read logged in report_audit.voice_transcript_reads (no conversation text). Erasure signature unchanged, transcripts table stays closed to API roles, nothing sent, test data only.
 20261120180000_r6_voice_transcript_reader.sql
+# R6-2 (packages): a company with a package gets its voice interview pool automatically (FREE 1 interview, every paid package 10) through the owner-only, idempotent private.sc19_voice_sync_package_pools; package data is only read. Functions only, erasure signature unchanged, nothing granted to API roles, not visible to customers, nothing sent, test data only.
+20261121100000_r6_voice_package_pools.sql
