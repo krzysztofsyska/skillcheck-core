@@ -103,7 +103,10 @@ Zamrożenie ścieżki płatności zdjęte 19.11.2026 (`docs/DECYZJE.md`). Ceny w
 
 Docelowo w każdym pakiecie: FREE 1 próbna rozmowa, PRESELEKCJA 10, WERYFIKACJA 10, ASSESSMENT CENTER 10;
 po wykorzystaniu puli klient będzie mógł dokupić kolejne rozmowy — cena, wielkość dodatkowej puli,
-ważność i sposób zakupu NIEUSTALONE (decyzja 20.11.2026, `docs/DECYZJE.md`). Limity rozmów i analiz
+ważność i sposób zakupu NIEUSTALONE (decyzja 20.11.2026, `docs/DECYZJE.md`). Pula z pakietu jest ważna
+3 miesiące, jak pakiet CV. Limit kosztu 50 zł/mies. zostaje na czas testów; przed pokazaniem
+voicebota klientom wraca do decyzji właściciela (przy 15 zł rezerwacji na rozmowę to ok. 3 rozmowy
+miesięcznie łącznie, a pakiet ma 10). Limity rozmów i analiz
 CV są odrębne; limity CV bez zmian. Do czasu, aż działa i właściciel zatwierdzi uruchomienie,
 niewidoczny dla klientów.
 Od 18.11.2026 prowadzony równolegle z R1–R3 (decyzja w `docs/DECYZJE.md`). Część dotykająca
@@ -113,7 +116,7 @@ miesięcznie, z limitem pilnowanym w aplikacji (decyzja 19.11.2026, `docs/DECYZJ
 | Krok | Status | Dowód |
 |---|---|---|
 | Architektura i MVP rozmowy (dawne SC-011, SC-012) | W TOKU (sprawdzone 18.11.2026) | audyt PR #526, `docs/checks/r6-voice-audit-2026-11-18.md`: fundamenty działają tylko na sztucznym dostawcy i bazie testowej; brakuje migracji, webhooka, połączenia z Retell i ekranu (R6-1a…1e). R6-1a/1b: PR #527; R6-1b cz. 2: PR #530; R6-1c: PR #529; R6-1d: PR #528; R6-1c cz. 2: PR #531; R6-1c cz. 3: PR #533; R6-1c cz. 4: PR #534; R6-1c cz. 5: PR #535; R6-1c cz. 6: PR #536; R6-1c cz. 7: PR #539; R6-1c cz. 8: PR #540; transkrypt w podglądzie (#542): PR #543 |
-| Podpięcie do limitów pakietów (FREE 1; PRESELEKCJA, WERYFIKACJA, AC po 10) | W TOKU (przyznanie puli przez operatora gotowe; sprawdzanie limitu, rezerwacja, rozliczenie i zwrot nieodbytej rozmowy gotowe i potwierdzone testem bazy, także przy równoległych zleceniach; pula z pakietu przyznawana automatycznie osobno dla każdego pakietu, bez podwójnego przyznania, oraz przygotowane, nieużywane miejsce na dokupione rozmowy — w PR #553 (Draft, do przeglądu); zostaje: ważność puli (teraz techniczne 365 dni, czeka na decyzję właściciela), wywołanie przy zlecaniu rozmowy z ekranu rekrutera, gdy ten ekran powstanie, oraz zakup dodatkowych rozmów po decyzji o cenie) | PR #532, PR #544, PR #553 |
+| Podpięcie do limitów pakietów (FREE 1; PRESELEKCJA, WERYFIKACJA, AC po 10) | W TOKU (przyznanie puli przez operatora gotowe; sprawdzanie limitu, rezerwacja, rozliczenie i zwrot nieodbytej rozmowy gotowe i potwierdzone testem bazy, także przy równoległych zleceniach; pula z pakietu przyznawana automatycznie osobno dla każdego pakietu, bez podwójnego przyznania, oraz przygotowane, nieużywane miejsce na dokupione rozmowy — ważność puli 3 miesiące jak pakiet CV (decyzja 20.11.2026, 18:31) — w PR #553 (scalenie do `integration` zatwierdzone przez właściciela 20.11.2026, 18:31, po przeglądzie); zostaje: wywołanie przy zlecaniu rozmowy z ekranu rekrutera, gdy ten ekran powstanie, oraz zakup dodatkowych rozmów po decyzji o cenie) | PR #532, PR #544, PR #553 |
 
 ### R7. Płatności Stripe w tym repozytorium (od 19.11.2026)
 

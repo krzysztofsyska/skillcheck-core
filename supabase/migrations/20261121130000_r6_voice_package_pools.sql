@@ -33,9 +33,9 @@
 -- never add up to two interviews. Retries and parallel calls never grant twice.
 --
 -- Window: a package pool ends private.sc19_voice_package_window() after the
--- package (the pool design requires an end date, at most 366 days ahead). This is
--- a TECHNICAL placeholder of 365 days, kept in that single function until the
--- owner decides the validity; a package older than that gives no pool.
+-- package: 3 months, like the CV package (owner decision 20.11.2026, 18:31,
+-- docs/DECYZJE.md), kept in that single function; a package older than that
+-- gives no pool.
 --
 -- Reservation, settlement and refund of a unit are NOT redefined here: the
 -- R19/R20/R21 pool already reserves a unit when an interview is ordered, uses it
@@ -84,10 +84,10 @@ returns integer language sql immutable security definer set search_path='' as $$
   else 0 end
 $$;
 
--- Technical validity of a package pool (placeholder until the owner decides).
+-- Validity of a package pool: 3 months, like the CV package (owner, 20.11.2026).
 create function private.sc19_voice_package_window()
 returns interval language sql immutable security definer set search_path='' as $$
- select interval '365 days'
+ select interval '3 months'
 $$;
 
 -- The packages of ONE company: one row per package, read-only.

@@ -15,6 +15,15 @@
 
 ## 20.11.2026
 
+**Pula rozmów voicebota: scalenie, ważność, limit kosztu (odpowiedź właściciela w czacie, 18:31).**
+Pytania sesji Claude w poprzedniej wiadomości czatu (TAK/NIE, każde z rekomendacją TAK):
+1) czy scalić pulę rozmów z pakietów (PR #553) do wersji testowej (`integration`);
+2) czy rozmowy z pakietu mają być ważne 3 miesiące, tak jak pakiet CV;
+3) czy zostawić limit 50 zł miesięcznie na czas testów i wrócić do niego po pierwszych próbnych
+   rozmowach (przy 15 zł rezerwacji na rozmowę to w najgorszym razie ok. 3 rozmowy miesięcznie
+   łącznie, a pakiet ma 10 — do decyzji przed pokazaniem voicebota klientom).
+Cytat odpowiedzi właściciela: „1 tak, 2 tak, 3 tak”.
+
 **Voicebot w pakietach: pula rozmów i dokupowanie (polecenie właściciela dla PR #553, ok. 09:55).**
 Cytat z polecenia właściciela (układ tabeli i listy zachowany):
 

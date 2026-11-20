@@ -274,13 +274,20 @@ test('R6-2 packages: FREE 1, paid 10, idempotent, tenant-isolated, owner-only', 
     await h.asAdmin();
   });
 
-  await t.test('a package older than its technical window gives no pool', async () => {
-    assert.equal(await one("select private.sc19_voice_package_window()=interval '365 days' as v"), true);
+  await t.test('a package pool is valid 3 months (owner 20.11.2026); an older package gives no pool', async () => {
+    assert.equal(await one("select private.sc19_voice_package_window()=interval '3 months' as v"), true);
     const d = await h.seed(users.viewer);
     await h.asAdmin();
-    await trial(d.companyId, new Date(Date.now() - 366 * 86400000).toISOString());
+    await trial(d.companyId, new Date(Date.now() - 100 * 86400000).toISOString());
     assert.deepEqual(await sync(d.companyId), { package_pools: 0, created: 0 });
     assert.equal((await pools(d.companyId)).length, 0);
+    // A package bought 2 months ago still gives a pool, ending 3 months after the package.
+    const recent = await fresh();
+    const boughtAt = await one("select date_trunc('second',clock_timestamp()-interval '2 months') as v");
+    await trial(recent.companyId, boughtAt.toISOString());
+    assert.deepEqual(await sync(recent.companyId), { package_pools: 1, created: 1 });
+    assert.equal(await one(`select expires_at=date_trunc('second',$2::timestamptz)+interval '3 months' as v
+      from private.sc19_voice_entitlements where company_id=$1`, [recent.companyId, boughtAt]), true);
   });
 
   await t.test('trusted server helper: syncs, picks the pool that ends first, refuses anything else', async () => {
@@ -294,7 +301,7 @@ test('R6-2 packages: FREE 1, paid 10, idempotent, tenant-isolated, owner-only', 
     assert.equal(picked.entitlementId, await one('select id as v from private.sc19_voice_entitlements where company_id=$1', [e.companyId]));
     const again = await ensurePackageVoicePool(db, e.companyId);
     assert.deepEqual(again, { ...picked, created: 0 });
-    // Company A: the FREE pool (ends 365 days after the trial) is picked before later packages.
+    // Company A: the FREE pool (ends 3 months after the trial) is picked before later packages.
     const forA = await ensurePackageVoicePool(db, a.companyId);
     assert.equal(forA.available, 30);
     assert.equal(forA.entitlementId, await one(`select id as v from private.sc19_voice_entitlements
