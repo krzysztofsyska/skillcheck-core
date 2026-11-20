@@ -81,7 +81,7 @@ const isRefusal = (value: object): value is Sc19GateRefusal => 'reason' in value
  *
  * On refusal it names the PARTS that disagree — protocol, username, password,
  * host, port, path, query — and never a part's value. */
-function restrictedDatabaseUrl(value: string | undefined, expectedRole: string, expectedRef: string) {
+export function restrictedDatabaseUrl(value: string | undefined, expectedRole: string, expectedRef: string) {
   if (!value) return { url: null, shape: value === '' ? 'empty' : 'missing' };
   let db: URL;
   try { db = new URL(value); } catch { return { url: null, shape: `not_a_url,length:${value.length}` }; }
