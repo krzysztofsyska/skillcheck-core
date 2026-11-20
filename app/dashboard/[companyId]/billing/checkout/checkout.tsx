@@ -37,7 +37,14 @@ const contextKey = (companyId: string, orderId: string) => `sc19:recruitment:${c
 // R7: Stripe is the only payment provider (owner decision 19.11.2026); the return
 // from the Stripe hosted page carries the order id in `?stripe=<uuid>`.
 const returnParam='stripe';
-export default function Checkout({companyId,recruitmentId,statusOnly=false,testMode=false}: {companyId:string;recruitmentId?:string;statusOnly?:boolean;testMode?:boolean}) {
+const cvCountInvalid='Wybrana pula CV nie jest dozwolona. Wybierz pulę CV ponownie.';
+/** R5 W2b: the server's Polish sentence for a refused CV count (fixed wording and
+ * numbers only). Rendered as text, never as HTML; anything else falls back. */
+const cvCountMessage=(value:unknown)=>typeof value==='string'&&value.length>0&&value.length<=300?value:cvCountInvalid;
+export default function Checkout({companyId,recruitmentId,statusOnly=false,testMode=false,cvPoolEnabled=false}: {companyId:string;recruitmentId?:string;statusOnly?:boolean;testMode?:boolean;
+  /** R5 W2b: PRICING_CV_SLIDER_ENABLED. On: the PRESELEKCJA order also sends the
+   * chosen CV pool (`cvCount`) and the server checks it. Off: request unchanged. */
+  cvPoolEnabled?:boolean}) {
   // PRESELEKCJA is sold in whole packages of 60 CV; the slider picks a pool (co 5)
   // and the server recomputes the amount from the package count.
   const [pool,setPool]=useState(STRIPE_CATALOG.PRESELEKCJA.cvCredits);
@@ -153,8 +160,12 @@ export default function Checkout({companyId,recruitmentId,statusOnly=false,testM
       try {requestId ??= sessionStorage.getItem(key) ?? undefined;} catch { /* optional */ }
       requestId ??= crypto.randomUUID();requestIds.set(key,requestId);
       try {sessionStorage.setItem(key,requestId);} catch { /* optional */ }
+      // R5 W2b: with the slider flag on, the PRESELEKCJA pool goes with the order.
+      // The server derives the packages from it and refuses a mismatch; it never
+      // sets the price. Other packages have no slider, so nothing extra is sent.
+      const cvCount=cvPoolEnabled&&code==='PRESELEKCJA'?{cvCount:pool}:{};
       const response=await fetch('/api/billing/checkout',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({companyId,offerId:offer.id,termsRevision:offer.termsRevision,requestId,packages,packageCode:code})});
+        body:JSON.stringify({companyId,offerId:offer.id,termsRevision:offer.termsRevision,requestId,packages,packageCode:code,...cvCount})});
       // A killed invocation or a platform error answers with HTML, not JSON. Bare
       // `response.json()` threw here and every failure — including our own error
       // codes — fell into the generic catch below, which is why a broken checkout
@@ -170,6 +181,9 @@ export default function Checkout({companyId,recruitmentId,statusOnly=false,testM
         }
         if(data.error==='SC19_PAYMENTS_DISABLED'){
           setCheckoutAvailable(false);setMessage(paymentsPending);return;
+        }
+        if(cvPoolEnabled&&data.error==='SC19_PAYMENT_CV_COUNT_INVALID'){
+          setAccepted(false);setMessage(cvCountMessage(data.message));return;
         }
         // The order exists but its payment session can no longer be opened or
         // confirmed automatically. Retrying cannot help and the next purchase stays
