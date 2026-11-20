@@ -35,7 +35,7 @@
     "test:assessments": "node --test tests/assessment.test.mjs tests/exercise-context-identity.test.mjs tests/exercise-definition.test.mjs tests/exercise-ai.test.mjs tests/individual-questions.test.mjs tests/voice-plan-preview.test.mjs tests/exercise-ai-review-ui.test.mjs tests/exercise-ai-generation.test.mjs tests/exercise-ai-generation-ui.test.mjs tests/exercise-ai-gateway.test.mjs tests/exercise-ai-database.test.mjs tests/exercise-database.test.mjs tests/exercise-observation.test.mjs tests/exercise-observation-database.test.mjs tests/competency-test.test.mjs tests/assessment-center-evaluation.test.mjs tests/assessment-center-report.test.mjs tests/assessment-center-pair.test.mjs tests/ac-session.test.mjs tests/ac-session-export.test.mjs tests/ac-package.test.mjs",
     "test:auth-http": "node --test tests/auth-mail-http.test.mjs",
     "test:marketing": "node --test tests/marketing-http.test.mjs",
-    "test:pricing-cv-pool": "node --test tests/pricing-cv-pool.test.mjs tests/pricing-cv-pool-module.test.mjs",
+    "test:pricing-cv-pool": "node --test tests/pricing-cv-pool.test.mjs tests/pricing-cv-pool-module.test.mjs tests/pricing-cv-pool-slider.test.mjs",
     "test:pricing-catalog": "node --test tests/pricing-catalog.test.mjs",
     "test:stripe": "node --experimental-strip-types --test tests/sc19-stripe.test.mjs",
     "test:migration-pairs": "node --test tests/migration-rollback-pairs.test.mjs",

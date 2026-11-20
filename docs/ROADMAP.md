@@ -96,7 +96,7 @@ Zamrożenie ścieżki płatności zdjęte 19.11.2026 (`docs/DECYZJE.md`). Ceny w
 | Krok | Status | Dowód |
 |---|---|---|
 | W1 + W2 — audyt źródeł cennika i katalog cen w bazie | ZROBIONE | PR #265 |
-| W2b — suwak liczby CV co 5 | W TOKU (część 1/2) | PR #286 |
+| W2b — suwak liczby CV co 5 | W TOKU (część 2/2: suwak za flagą PRICING_CV_SLIDER_ENABLED, domyślnie wyłączoną) | PR #286 (część 1), część 2: PR #552 |
 | W3, W4 — publiczny cennik z katalogu, za wyłączoną flagą | DO ZROBIENIA | — |
 
 ### R6. Voicebot — równolegle z R1–R3 (od 18.11.2026)
