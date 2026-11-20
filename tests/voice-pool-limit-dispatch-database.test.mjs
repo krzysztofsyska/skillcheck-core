@@ -295,7 +295,14 @@ test('R6-2: ordering a voice interview checks the package-free pool', async t =>
     assert.deepEqual(await quota(last), { total: 1, used: 0, reserved: 1 });
   });
 
-  await t.test('package pool (PRESELEKCJA = 10): last unit, refusal, refund, parallel orders, other company', async () => {
+  await t.test('package pool (PRESELEKCJA = 10): last unit, refusal, refund, parallel orders, other company', async st => {
+    // This test is about the interview pool, not the monthly cost cap (R7, its own
+    // tests): synthetic DB only, the cap is lifted so its 50 zł default does not stop
+    // the dispatches below. The cap is restored at the end.
+    await h.asAdmin();
+    const cap = (await db.query('select monthly_cap_grosze from voice_budget.settings where singleton')).rows[0].monthly_cap_grosze;
+    await db.query('update voice_budget.settings set monthly_cap_grosze=1000000 where singleton');
+    st.after(async () => { await h.asAdmin(); await db.query('update voice_budget.settings set monthly_cap_grosze=$1 where singleton', [cap]); });
     const tenant = await company(); // every company here has a PRESELEKCJA package (sc19_grant_paid)
     const rivalTenant = await company();
     const next = async () => { await h.asAdmin(); return ensurePackageVoicePool(db, tenant.companyId); };
