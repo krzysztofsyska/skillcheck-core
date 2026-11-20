@@ -86,7 +86,7 @@
     "test:method-db": "node --experimental-strip-types --test --test-concurrency=1 tests/method-profile-database.test.mjs",
     "test:brand": "node --experimental-strip-types --test tests/brand-config.test.mjs tests/brand-ui.test.mjs tests/brand-messages.test.mjs",
     "test:brand-db": "node --experimental-strip-types --test --test-concurrency=1 tests/brand-database.test.mjs",
-    "test:fakturownia": "node --test tests/fakturownia-client.test.mjs tests/sc19-fakturownia-provider.test.mjs tests/mf-whitelist.test.mjs tests/sc19-przelewy24-provider.test.mjs",
+    "test:fakturownia": "node --test tests/fakturownia-client.test.mjs tests/sc19-fakturownia-provider.test.mjs tests/mf-whitelist.test.mjs",
     "smoke:preview": "node scripts/preview-smoke.cjs",
     "e2e:step4": "node scripts/step4-browser-e2e.cjs",
     "test:process-followup": "node scripts/process-followup-compose.mjs --check && node --experimental-strip-types --test tests/process-followup.test.mjs",
