@@ -121,7 +121,7 @@ Decyzja 19.11.2026 (`docs/DECYZJE.md`): Stripe zamiast Przelewy24, to samo konto
 | Zdjęcie `PAYMENT_PATH_FREEZE` z publikatora (`.github/workflows/auto-release.yml`) i testów polityki wydań | DO ZROBIENIA | — |
 | Zakup PRESELEKCJI, WERYFIKACJI i ASSESSMENT CENTER przez Stripe Checkout (wzór: `skillcheck-preselekcja`), ceny z `docs/cennik-2026-11-02.md`, domyślnie wyłączony do czasu kluczy | DO ZROBIENIA | — |
 | Usunięcie kodu Przelewy24 | DO ZROBIENIA | — |
-| Limit kosztu rozmów voicebota 50 zł miesięcznie w aplikacji (blokada nowych rozmów i powiadomienie właściciela) | DO ZROBIENIA | — |
+| Limit kosztu rozmów voicebota 50 zł miesięcznie w aplikacji (blokada nowych rozmów i powiadomienie właściciela) | W TOKU (blokada w bazie i alert dla właściciela w bazie; wysyłka powiadomienia do zrobienia) | PR #558 |
 
 ## Wstrzymane do pierwszej sprzedaży
 
