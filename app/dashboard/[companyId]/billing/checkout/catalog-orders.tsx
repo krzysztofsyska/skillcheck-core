@@ -18,7 +18,7 @@ export default async function CatalogOrders({client,companyId,isOwner,recruitmen
  try {quotes=catalogQuotes(options.data);orders=catalogOrders(history.data);entitlements=catalogEntitlements(balance.data);}catch{return <p role="status">Nie można teraz odczytać zamówień katalogowych.</p>;}
  const pending=orders.some(o=>o.status==='pending');
  const notices:Record<string,string>={created:'Zamówienie zapisane. Obsługa przygotuje rozliczenie; jednostki pojawią się po potwierdzeniu wpłaty.',
-  pending:'Istnieje już zamówienie oczekujące na płatność albo użyto wcześniej tego numeru żądania. Sprawdź listę poniżej i płatność Przelewy24.',
+  pending:'Istnieje już zamówienie oczekujące na płatność albo użyto wcześniej tego numeru żądania. Sprawdź listę poniżej i status płatności online.',
   changed:'Oferta lub dostępność zmieniła się. Sprawdź aktualne warunki przed ponownym zamówieniem.',
   cancelled:'Zamówienie anulowane. Nie przyznano jednostek.',failed:'Nie udało się zapisać zmiany. Odśwież stronę i spróbuj ponownie.'};
  return <section aria-label="Zamówienia pakietów i dodatków">

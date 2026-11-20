@@ -5,9 +5,7 @@ import { X509Certificate } from 'node:crypto';
 import { createSecureContext } from 'node:tls';
 import { previewPoolTls } from '../lib/sc19-payment-preview-tls.ts';
 import { PGlite } from '@electric-sql/pglite';
-import { sc19PreviewPaymentConfig, sc19ProductionSandboxPaymentConfig, sc19SandboxPaymentConfig }
-  from '../lib/sc19-payment-preview.ts';
-import { PRZELEWY24_ORIGIN } from '../lib/sc19-przelewy24-provider.ts';
+import { publicShape, restrictedDatabaseUrl } from '../lib/sc19-payment-preview.ts';
 import { createPostgresPaymentStore } from '../lib/sc19-payment-postgres.ts';
 
 const ref = 'orbyscrupgnupifzlqxp';
@@ -21,126 +19,40 @@ test('the preview payment pool verifies TLS using the two official hosted databa
     '5F:9B:77:95:1A:7A:A1:30:3F:9B:58:EE:A9:BF:A8:9E:35:8C:FD:C1:5F:97:86:FF:10:D4:93:0A:72:2C:9A:E2',
   ]);
 });
-const env = { VERCEL:'1', VERCEL_ENV:'preview', VERCEL_GIT_COMMIT_REF:'integration',
-  VERCEL_BRANCH_URL:'skillcheck-branch.vercel.app', VERCEL_URL:'skillcheck-hash.vercel.app',
-  NEXT_PUBLIC_SUPABASE_URL:`https://${ref}.supabase.co`, P24_SANDBOX:'true', P24_MERCHANT_ID:'12345',
-  P24_POS_ID:'12346', P24_CRC:'synthetic-crc', P24_API_KEY:'synthetic-test-api-key',
-  SC19_P24_PREVIEW_DATABASE_URL:`postgresql://sc19_p24_preview.${ref}:fake@aws-1-eu-west-1.pooler.supabase.com:6543/postgres` };
-test('only the integration preview, its Supabase project, dedicated login and trusted Vercel hosts can open checkout', () => {
-  assert.equal(sc19PreviewPaymentConfig(env).appOrigin, 'https://' + env.VERCEL_BRANCH_URL);
-  assert.equal(sc19PreviewPaymentConfig(env, 'https://' + env.VERCEL_URL).posId, 12346);
-  for (const overrides of [{ VERCEL_ENV:'production' }, { VERCEL:'0' }, { VERCEL_GIT_COMMIT_REF:'main' },
-    { P24_SANDBOX:'false' }, { P24_API_KEY:'' }, { P24_MERCHANT_ID:'1e4' }, { P24_POS_ID:'0' },
-    { NEXT_PUBLIC_SUPABASE_URL:'https://wsvjawuikxfzjyivxgsu.supabase.co' },
-    ...['postgres','production','?sslmode=disable','@untrusted.invalid'].map((v,i) => ({
-      SC19_P24_PREVIEW_DATABASE_URL: i===0 ? env.SC19_P24_PREVIEW_DATABASE_URL.replace('sc19_p24_preview',v) :
-        i===1 ? env.SC19_P24_PREVIEW_DATABASE_URL.replace(ref,v) : env.SC19_P24_PREVIEW_DATABASE_URL + v }))]) {
-    assert.equal(sc19PreviewPaymentConfig({...env,...overrides}), null);
+// R7: the Przelewy24 sandbox gate was removed. What stays in
+// lib/sc19-payment-preview.ts is the restricted-login check and the shape hint the
+// Stripe gate (lib/sc19-stripe-config.ts) uses; both must stay as strict as before.
+const previewUrl = `postgresql://sc19_p24_preview.${ref}:fake@aws-1-eu-west-1.pooler.supabase.com:6543/postgres`;
+test('the restricted payment login accepts only <role>.<ref> on the transaction pooler and names wrong parts, never values', () => {
+  assert.deepEqual(restrictedDatabaseUrl(previewUrl, 'sc19_p24_preview', ref), { url: previewUrl, shape: 'ok' });
+  assert.deepEqual(restrictedDatabaseUrl(undefined, 'sc19_p24_preview', ref), { url: null, shape: 'missing' });
+  assert.deepEqual(restrictedDatabaseUrl('', 'sc19_p24_preview', ref), { url: null, shape: 'empty' });
+  assert.deepEqual(restrictedDatabaseUrl('not a url secret', 'sc19_p24_preview', ref), { url: null, shape: 'not_a_url,length:16' });
+  for (const [value, wrong] of [
+    [previewUrl.replace('sc19_p24_preview', 'postgres'), 'username'],
+    [previewUrl.replace(ref, productionRef), 'username'],
+    [previewUrl + '?sslmode=disable', 'query'],
+    [previewUrl.replace(':fake@', '@'), 'password'],
+    [previewUrl.replace('aws-1-eu-west-1.pooler.supabase.com', 'untrusted.invalid'), 'host'],
+    [previewUrl.replace(':6543', ':5432'), 'port'],
+    [previewUrl.replace('/postgres', '/other'), 'path'],
+    [previewUrl.replace('postgresql:', 'postgres:'), 'protocol'],
+  ]) {
+    const result = restrictedDatabaseUrl(value, 'sc19_p24_preview', ref);
+    assert.equal(result.url, null, value);
+    assert.match(result.shape, new RegExp(`^wrong:.*${wrong}`), value);
+    assert.doesNotMatch(result.shape, /fake|untrusted|sslmode/);
   }
-  assert.equal(sc19PreviewPaymentConfig(env,'https://other.vercel.app'),null);
-  // The shared entry point must leave the preview case exactly as it was, including
-  // which of the deployment's own hosts it picks when no request origin is given.
-  assert.deepEqual(sc19SandboxPaymentConfig(env),sc19PreviewPaymentConfig(env));
-  assert.deepEqual(sc19SandboxPaymentConfig(env,'https://'+env.VERCEL_URL),
-    sc19PreviewPaymentConfig(env,'https://'+env.VERCEL_URL));
-  assert.equal(sc19SandboxPaymentConfig(env,'https://other.vercel.app'),null);
-  // A preview deployment can never reach the production branch of the gate, whatever
-  // else its variables say.
-  assert.equal(sc19ProductionSandboxPaymentConfig({...env,
-    NEXT_PUBLIC_SUPABASE_URL:`https://${productionRef}.supabase.co`,
-    NEXT_PUBLIC_SITE_URL:'https://skillcheck.pl',
-    SC19_P24_CHECKOUT_DATABASE_URL:
-      `postgresql://sc19_p24_checkout.${productionRef}:fake@aws-1-eu-west-1.pooler.supabase.com:6543/postgres`}),null);
+  // The production login is a different role on a different project.
+  assert.equal(restrictedDatabaseUrl(previewUrl, 'sc19_p24_checkout', productionRef).url, null);
 });
-
-// SC-P24-SANDBOX-PROD (owner decision, by voice, 2026-11-11): the same SANDBOX
-// checkout is served from https://skillcheck.pl so a Przelewy24 verifier can pay
-// with test money. Everything stays pinned, and LIVE stays unreachable.
-const productionEnv = { VERCEL:'1', VERCEL_ENV:'production', VERCEL_GIT_COMMIT_REF:'main',
-  VERCEL_BRANCH_URL:'skillcheck-core-main.vercel.app', VERCEL_URL:'skillcheck-core-hash.vercel.app',
-  VERCEL_PROJECT_PRODUCTION_URL:'skillcheck-core.vercel.app',
-  NEXT_PUBLIC_SITE_URL:'https://skillcheck.pl',
-  NEXT_PUBLIC_SUPABASE_URL:`https://${productionRef}.supabase.co`, P24_SANDBOX:'true',
-  P24_MERCHANT_ID:'12345', P24_POS_ID:'12346', P24_CRC:'synthetic-crc', P24_API_KEY:'synthetic-test-api-key',
-  SC19_P24_CHECKOUT_DATABASE_URL:
-    `postgresql://sc19_p24_checkout.${productionRef}:fake@aws-1-eu-west-1.pooler.supabase.com:6543/postgres` };
-test('the production sandbox checkout resolves only on the real site origin, in sandbox mode, with its own restricted login', () => {
-  for (const resolve of [sc19ProductionSandboxPaymentConfig, sc19SandboxPaymentConfig]) {
-    const config = resolve(productionEnv);
-    // The callback and return origin is the site's own address, never a deployment
-    // host and never anything a header could suggest.
-    assert.equal(config.appOrigin,'https://skillcheck.pl');
-    assert.equal(config.merchantId,12345);
-    assert.equal(config.posId,12346);
-    assert.equal(config.databaseUrl,productionEnv.SC19_P24_CHECKOUT_DATABASE_URL);
-    assert.equal(resolve(productionEnv,'https://skillcheck.pl').appOrigin,'https://skillcheck.pl');
-    assert.equal(resolve({...productionEnv,NEXT_PUBLIC_SITE_URL:'https://skillcheck.pl/'}).appOrigin,
-      'https://skillcheck.pl');
-    for (const origin of ['https://www.skillcheck.pl','https://skillcheck-core.vercel.app',
-      'https://skillcheck.pl.evil.example','http://skillcheck.pl','https://skillcheck.pl/dashboard']) {
-      assert.equal(resolve(productionEnv,origin),null,origin);
-    }
-    for (const overrides of [
-      { VERCEL:'0' }, { VERCEL:undefined },
-      { VERCEL_ENV:'preview' }, { VERCEL_ENV:'development' }, { VERCEL_ENV:undefined },
-      { VERCEL_GIT_COMMIT_REF:'integration' }, { VERCEL_GIT_COMMIT_REF:undefined },
-      { P24_SANDBOX:undefined }, { P24_SANDBOX:'false' }, { P24_SANDBOX:'TRUE' }, { P24_SANDBOX:'1' },
-      { NEXT_PUBLIC_SUPABASE_URL:`https://${ref}.supabase.co` },
-      { NEXT_PUBLIC_SUPABASE_URL:undefined },
-      { NEXT_PUBLIC_SITE_URL:undefined }, { NEXT_PUBLIC_SITE_URL:'https://www.skillcheck.pl' },
-      { NEXT_PUBLIC_SITE_URL:'https://skillcheck.pl/app' }, { NEXT_PUBLIC_SITE_URL:'http://skillcheck.pl' },
-      { P24_MERCHANT_ID:undefined }, { P24_MERCHANT_ID:'0' }, { P24_POS_ID:'1e4' },
-      { P24_CRC:'short' }, { P24_API_KEY:'too-short' }, { P24_API_KEY:undefined },
-      { SC19_P24_CHECKOUT_DATABASE_URL:undefined },
-      // The restricted login is validated exactly as the preview one is: the role
-      // name, the project ref, the pooler host, the port, the path, and no query
-      // or fragment. A preview login, the `postgres` superuser-ish account or a
-      // weakened connection string must all be refused.
-      ...['sc19_p24_preview','postgres','sc19_p24_checkout2'].map(user => ({
-        SC19_P24_CHECKOUT_DATABASE_URL:
-          productionEnv.SC19_P24_CHECKOUT_DATABASE_URL.replace('sc19_p24_checkout',user) })),
-      { SC19_P24_CHECKOUT_DATABASE_URL:
-        productionEnv.SC19_P24_CHECKOUT_DATABASE_URL.replace(productionRef,ref) },
-      { SC19_P24_CHECKOUT_DATABASE_URL:
-        productionEnv.SC19_P24_CHECKOUT_DATABASE_URL.replace(':6543',':5432') },
-      { SC19_P24_CHECKOUT_DATABASE_URL:
-        productionEnv.SC19_P24_CHECKOUT_DATABASE_URL.replace('aws-1-eu-west-1.pooler.supabase.com','db.wsvjawuikxfzjyivxgsu.supabase.co') },
-      { SC19_P24_CHECKOUT_DATABASE_URL:
-        productionEnv.SC19_P24_CHECKOUT_DATABASE_URL.replace(':fake@','@') },
-      { SC19_P24_CHECKOUT_DATABASE_URL:
-        productionEnv.SC19_P24_CHECKOUT_DATABASE_URL.replace('/postgres','/other') },
-      { SC19_P24_CHECKOUT_DATABASE_URL: productionEnv.SC19_P24_CHECKOUT_DATABASE_URL+'?sslmode=disable' },
-      { SC19_P24_CHECKOUT_DATABASE_URL: productionEnv.SC19_P24_CHECKOUT_DATABASE_URL+'#x' },
-      { SC19_P24_CHECKOUT_DATABASE_URL:
-        productionEnv.SC19_P24_CHECKOUT_DATABASE_URL.replace('postgresql://','postgres://') },
-    ]) {
-      assert.equal(resolve({...productionEnv,...overrides}),null,JSON.stringify(overrides));
-    }
-  }
-});
-
-test('nothing in the sandbox gate or its runtime can reach Przelewy24 LIVE', async () => {
-  // Without the sandbox flag there is no runtime at all, on either deployment, so
-  // the live host can never be the checkout target by omission.
-  for (const value of [undefined,'false','true ','yes']) {
-    assert.equal(sc19SandboxPaymentConfig({...productionEnv,P24_SANDBOX:value}),null);
-    assert.equal(sc19SandboxPaymentConfig({...env,P24_SANDBOX:value}),null);
-  }
-  assert.equal(PRZELEWY24_ORIGIN.test,'https://sandbox.przelewy24.pl');
-  assert.equal(PRZELEWY24_ORIGIN.live,'https://secure.przelewy24.pl');
-  // The only runtime composition in the repository pins the test mode, refuses the
-  // live approval and accepts the sandbox checkout origin only. A future live
-  // switch is a separate reviewed change; this asserts none has been half-wired.
-  const runtime = await sql('../lib/sc19-payment-preview-runtime.ts');
-  assert.match(runtime,/mode: 'test'/);
-  assert.match(runtime,/checkoutOrigins: \[PRZELEWY24_ORIGIN\.test\]/);
-  assert.match(runtime,/liveApproved: false/);
-  assert.doesNotMatch(runtime,/'live'|PRZELEWY24_ORIGIN\.live|liveApproved: true/);
-  const gate = await sql('../lib/sc19-payment-preview.ts');
-  assert.doesNotMatch(gate,/secure\.przelewy24\.pl/);
-  // Both deployments are sandbox-only by construction: each branch of the gate
-  // tests P24_SANDBOX for the exact string 'true'.
-  assert.equal(gate.match(/P24_SANDBOX !== 'true'/g).length,2);
+test('the shape hint echoes short public values only, never anything long enough to be a key', () => {
+  assert.equal(publicShape(undefined), 'missing');
+  assert.equal(publicShape(''), 'empty');
+  assert.equal(publicShape('preview'), 'value:preview');
+  assert.equal(publicShape('x'.repeat(65)), 'length:65');
+  assert.equal(publicShape('true', 2), 'length:4');
+  assert.equal(publicShape('zażółć'), 'length:6');
 });
 
 const sql = path => readFile(new URL(path,import.meta.url),'utf8');
