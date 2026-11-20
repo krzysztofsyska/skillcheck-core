@@ -109,7 +109,7 @@ miesięcznie, z limitem pilnowanym w aplikacji (decyzja 19.11.2026, `docs/DECYZJ
 | Krok | Status | Dowód |
 |---|---|---|
 | Architektura i MVP rozmowy (dawne SC-011, SC-012) | W TOKU (sprawdzone 18.11.2026) | audyt PR #526, `docs/checks/r6-voice-audit-2026-11-18.md`: fundamenty działają tylko na sztucznym dostawcy i bazie testowej; brakuje migracji, webhooka, połączenia z Retell i ekranu (R6-1a…1e). R6-1a/1b: PR #527; R6-1b cz. 2: PR #530; R6-1c: PR #529; R6-1d: PR #528; R6-1c cz. 2: PR #531; R6-1c cz. 3: PR #533; R6-1c cz. 4: PR #534; R6-1c cz. 5: PR #535; R6-1c cz. 6: PR #536; R6-1c cz. 7: PR #539; R6-1c cz. 8: PR #540; transkrypt w podglądzie (#542): PR #543 |
-| Podpięcie do limitów pakietów (FREE 1, płatne 10) | W TOKU (przyznanie puli przez operatora gotowe; sprawdzanie limitu przy zlecaniu rozmowy gotowe i potwierdzone testem bazy, także przy równoległych zleceniach; pakiety do podpięcia po zdjęciu zamrożenia 19.11.2026) | PR #532, PR #544 |
+| Podpięcie do limitów pakietów (FREE 1, płatne 10) | W TOKU (przyznanie puli przez operatora gotowe; sprawdzanie limitu przy zlecaniu rozmowy gotowe i potwierdzone testem bazy, także przy równoległych zleceniach; pula z pakietu przyznawana automatycznie — FREE 1, każdy płatny pakiet 10, bez podwójnego przyznania — w PR do przeglądu; zostaje: wywołanie przy zlecaniu rozmowy z ekranu rekrutera, gdy ten ekran powstanie) | PR #532, PR #544, PR #553 |
 
 ### R7. Płatności Stripe w tym repozytorium (od 19.11.2026)
 
