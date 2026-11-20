@@ -13,6 +13,7 @@ import { createHash } from "node:crypto";
 import type { SqlClient } from "./trusted-source-verifier.ts";
 import { isCompiledRetellOutboundDraft, type RetellOutboundDraft } from "./retell-outbound-draft.ts";
 import { recordRetellDispatch } from "./retell-dispatch-ledger.ts";
+import { isVoiceCostCapRefusal, VOICE_COST_CAP_RECRUITER_MESSAGE } from "./cost-cap.ts";
 
 export type RetellDispatchTransport = (url: string, init: RequestInit) =>
   Promise<Pick<Response, "status" | "headers" | "body">>;
@@ -23,10 +24,27 @@ export type RetellDispatchResult = Readonly<
   | { state: "unknown" }
 >;
 export class RetellDispatchError extends Error {
-  readonly code: "VOICE_DISPATCH_REJECTED" | "VOICE_DISPATCH_STALE_DRAFT" | "VOICE_DISPATCH_UNAVAILABLE";
+  readonly code: "VOICE_DISPATCH_REJECTED" | "VOICE_DISPATCH_STALE_DRAFT" | "VOICE_DISPATCH_UNAVAILABLE"
+    | "VOICE_DISPATCH_COST_CAP";
   constructor(code: RetellDispatchError["code"]) { super(code); this.code = code; }
 }
 const fail = (code: RetellDispatchError["code"]): never => { throw new RetellDispatchError(code); };
+/**
+ * R7: maps a failed claim transaction to the worker's error code. The monthly
+ * voice cost cap refusal (database, PT429) has its own code so the recruiter
+ * gets a plain message; nothing was sent and no claim exists.
+ */
+export function dispatchClaimErrorCode(e: unknown): RetellDispatchError["code"] {
+  if (isVoiceCostCapRefusal(e)) return "VOICE_DISPATCH_COST_CAP";
+  // 42501: the guard refused a draft that does not belong to this preparation.
+  const code = e && typeof e === "object" && "code" in e ? String(e.code) : "";
+  return code === "42501" ? "VOICE_DISPATCH_REJECTED" : "VOICE_DISPATCH_UNAVAILABLE";
+}
+/** Recruiter-facing text for a dispatch error that has one; otherwise null. */
+export function retellDispatchRecruiterMessage(error: unknown): string | null {
+  return error instanceof RetellDispatchError && error.code === "VOICE_DISPATCH_COST_CAP"
+    ? VOICE_COST_CAP_RECRUITER_MESSAGE : null;
+}
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const callIdPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/;
 /** Stays inside Retell's one-hour deduplication window with a safety margin. */
@@ -195,9 +213,7 @@ export async function dispatchRetellCall(
     return { state: "send" };
   }); } catch (e) {
     if (e instanceof RetellDispatchError) throw e;
-    // 42501: the guard refused a draft that does not belong to this preparation.
-    const code = e && typeof e === "object" && "code" in e ? String(e.code) : "";
-    return fail(code === "42501" ? "VOICE_DISPATCH_REJECTED" : "VOICE_DISPATCH_UNAVAILABLE");
+    return fail(dispatchClaimErrorCode(e));
   }
   const settled = await claimResult(db, companyId, operationId, claim.state);
   if (settled) return settled;
