@@ -84,6 +84,9 @@ export type StripeCustomerStore = Readonly<{
   find(companyId: string, mode: PaymentMode): Promise<string | null>;
   /** Insert-if-absent; returns the id that is stored afterwards (first writer wins). */
   save(companyId: string, mode: PaymentMode, customerId: string): Promise<string>;
+  /** Replace a mapping ONLY while it still points at `staleId` (a customer Stripe
+   * confirmed deleted); returns the id stored afterwards. */
+  replace(companyId: string, mode: PaymentMode, staleId: string, customerId: string): Promise<string>;
 }>;
 export type StripeProviderOptions = Readonly<{
   secretKey: string; webhookSecret: string; mode: PaymentMode; appOrigin: string; scope: PaymentScope;
@@ -156,9 +159,13 @@ export function createStripeProvider(options: StripeProviderOptions): PaymentPro
     const ours = (c: Json | null) => !!c && c.deleted !== true && meta(c).app === STRIPE_APP &&
       meta(c).company_id === companyId && typeof c.id === 'string' && customerIdShape.test(c.id);
     let id = await options.customers.find(companyId, mode);
+    let stale: string | null = null;
     if (id) {
       const existing = await call('GET', `/v1/customers/${encodeURIComponent(id)}`);
-      if (!ours(existing)) id = null;
+      // Only a customer Stripe confirms deleted (or absent) may be replaced. Any
+      // other mismatch is not ours to overwrite: fail closed.
+      if (existing === null || existing.deleted === true) { stale = id; id = null; }
+      else if (!ours(existing)) return fail('SC19_PAYMENT_RETRY');
     }
     if (!id) {
       const found = await call('GET', '/v1/customers/search',
@@ -172,11 +179,12 @@ export function createStripeProvider(options: StripeProviderOptions): PaymentPro
       const created = await call('POST', '/v1/customers', {
         ...details, metadata: { app: STRIPE_APP, company_id: companyId },
         ...(buyer.nip ? { tax_id_data: [{ type: 'eu_vat', value: 'PL' + buyer.nip }] } : {}),
-      }, `${STRIPE_APP}:customer:${mode}:${companyId}`);
+      // After a deleted customer, a new key: the original key would replay the deleted one.
+      }, `${STRIPE_APP}:customer:${mode}:${companyId}${stale ? `:after:${stale}` : ''}`);
       if (!ours(created)) return fail('SC19_PAYMENT_RETRY');
       id = String(created!.id);
     }
-    return options.customers.save(companyId, mode, id);
+    return stale ? options.customers.replace(companyId, mode, stale, id) : options.customers.save(companyId, mode, id);
   }
 
   /** Price created by the setup step (lookup key skillcheck-core:<code>), checked
@@ -222,6 +230,10 @@ export function createStripeProvider(options: StripeProviderOptions): PaymentPro
       client_reference_id: order.id, metadata,
       payment_intent_data: { metadata, description: `SkillCheck PRESELEKCJA — ${n} × ${STRIPE_CATALOG.PRESELEKCJA.cvCredits} analiz CV` },
       line_items: [line],
+      // Immediate methods only: the package is granted solely on checkout.session.completed
+      // (owner, 19.11.2026), so a delayed method (bank transfer, SEPA…) is never offered.
+      // Apple Pay and Google Pay arrive as `card`.
+      payment_method_types: ['card', 'blik', 'p24', 'link'],
       billing_address_collection: 'required', tax_id_collection: { enabled: true },
       success_url: `${back}?stripe=${order.id}`, cancel_url: `${back}?stripe=${order.id}&cancelled=1`,
       branding_settings: stripeBranding(appOrigin),

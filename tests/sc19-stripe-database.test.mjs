@@ -91,6 +91,15 @@ test('R7 migration: additive, TEST-mode Stripe orders only, buyer data only for 
   await assert.rejects(asRole(`update sc19_stripe.customers set customer_id='cus_other1'`), /permission denied/);
   await assert.rejects(asRole(`delete from sc19_stripe.customers`), /permission denied/);
   assert.equal((await asRole('select customer_id from sc19_stripe.customers where company_id=$1', [A])).rows[0].customer_id, 'cus_fixture1');
+  // Compare-and-set replacement of a deleted customer: wrong stale id changes nothing, live mode refused.
+  assert.equal((await asRole(`select sc19_stripe.replace_customer($1,'test','cus_wrong1','cus_fixture3') v`, [A])).rows[0].v, 'cus_fixture1');
+  await assert.rejects(asRole(`select sc19_stripe.replace_customer($1,'live','cus_fixture1','cus_fixture3')`, [A]), /stripe_customer_invalid/);
+  assert.equal((await asRole(`select sc19_stripe.replace_customer($1,'test','cus_fixture1','cus_fixture3') v`, [A])).rows[0].v, 'cus_fixture3');
+  for (const role of ['anon', 'authenticated']) {
+    await db.query('begin'); await db.query(`set local role ${role}`);
+    await assert.rejects(db.query(`select sc19_stripe.replace_customer($1,'test','cus_fixture3','cus_fixture4')`, [A]), /permission denied/);
+    await db.query('rollback');
+  }
   // API roles see nothing.
   for (const role of ['anon', 'authenticated']) {
     await db.query('begin'); await db.query(`set local role ${role}`);

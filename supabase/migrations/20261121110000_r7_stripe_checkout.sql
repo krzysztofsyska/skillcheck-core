@@ -15,6 +15,8 @@
 --  * sc19_stripe.buyer(company) — company name and NIP for the Stripe checkout
 --    form, and ONLY for a company that currently has an unpaid Stripe order. The
 --    roles still have no direct access to the nip column.
+--  * sc19_stripe.replace_customer(...) — replaces a stored customer only while it
+--    still points at a customer Stripe confirmed deleted (test mode only).
 --  * policy stripe_checkout_orders on private.sc19_payment_orders — the roles may
 --    create, read and settle Stripe orders of the KTIG account in TEST mode only.
 --    A LIVE order can be neither created nor read nor settled through these roles;
@@ -60,6 +62,22 @@ language sql stable security definer set search_path='' as $$
 $$;
 revoke all on function sc19_stripe.buyer(uuid) from public, anon, authenticated;
 
+-- A stored customer that Stripe confirms deleted is replaced, and only while the
+-- mapping still points at that deleted id (compare-and-set). Test mode only for the
+-- adapter roles; the roles get no UPDATE on the table itself.
+create function sc19_stripe.replace_customer(target_company uuid, target_mode text, stale_id text, fresh_id text)
+returns text language plpgsql volatile security definer set search_path='' as $$
+declare stored text;
+begin
+ if target_mode is distinct from 'test' or fresh_id !~ '^cus_[A-Za-z0-9]{6,64}$' then
+  raise exception 'stripe_customer_invalid' using errcode='22023';end if;
+ update sc19_stripe.customers set customer_id=fresh_id
+  where company_id=target_company and mode=target_mode and customer_id=stale_id;
+ select customer_id into stored from sc19_stripe.customers where company_id=target_company and mode=target_mode;
+ return stored;
+end;$$;
+revoke all on function sc19_stripe.replace_customer(uuid,text,text,text) from public, anon, authenticated;
+
 do $roles$
 declare r text;
 begin
@@ -68,6 +86,7 @@ begin
   execute format('grant usage on schema sc19_stripe to %I', r);
   execute format('grant select, insert on sc19_stripe.customers to %I', r);
   execute format('grant execute on function sc19_stripe.buyer(uuid) to %I', r);
+  execute format('grant execute on function sc19_stripe.replace_customer(uuid,text,text,text) to %I', r);
   execute format('create policy %I on sc19_stripe.customers for select to %I using (mode = %L)', 'stripe_customers_read_'||r, r, 'test');
   execute format('create policy %I on sc19_stripe.customers for insert to %I with check (mode = %L)', 'stripe_customers_add_'||r, r, 'test');
   execute format($p$create policy %I on private.sc19_payment_orders to %I

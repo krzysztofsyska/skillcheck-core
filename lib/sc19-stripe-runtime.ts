@@ -61,6 +61,11 @@ export async function stripeRuntime(config: Sc19StripeConfig) {
       if (!stored) throw new Sc19PaymentError('SC19_PAYMENT_RETRY');
       return stored;
     },
+    async replace(companyId, mode, staleId, customerId) {
+      const rows = await query('select sc19_stripe.replace_customer($1,$2,$3,$4) as customer_id', [companyId, mode, staleId, customerId]);
+      if (!rows[0] || typeof rows[0].customer_id !== 'string') throw new Sc19PaymentError('SC19_PAYMENT_RETRY');
+      return rows[0].customer_id;
+    },
   };
   const scope = stripeScope(config.mode);
   const provider = createStripeProvider({

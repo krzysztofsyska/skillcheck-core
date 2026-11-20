@@ -21,6 +21,7 @@ begin
  end loop;
 end $policies$;
 
+drop function if exists sc19_stripe.replace_customer(uuid,text,text,text);
 drop function if exists sc19_stripe.buyer(uuid);
 drop table if exists sc19_stripe.customers;
 drop schema if exists sc19_stripe;

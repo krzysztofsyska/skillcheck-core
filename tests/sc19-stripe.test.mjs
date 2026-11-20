@@ -99,6 +99,7 @@ function harness(opts = {}) {
   const customers = {
     async find(c, mode) { return st.customers.get(`${c}:${mode}`) ?? null; },
     async save(c, mode, cid) { const k = `${c}:${mode}`; if (!st.customers.has(k)) st.customers.set(k, cid); return st.customers.get(k); },
+    async replace(c, mode, stale, cid) { const k = `${c}:${mode}`; if (st.customers.get(k) === stale) st.customers.set(k, cid); return st.customers.get(k); },
   };
   const provider = createStripeProvider({ secretKey: SECRET, webhookSecret: WHSEC, mode: 'test', appOrigin: ORIGIN, scope,
     customers, fetch: stripe.fetch, nowMs: () => opts.now ?? Date.now(),
@@ -176,6 +177,9 @@ test('checkout: server amount for 2 packages, metadata on session AND PaymentInt
   assert.equal(p['line_items[0][price_data][unit_amount]'], '30000');
   assert.equal(p['line_items[0][price_data][tax_behavior]'], 'inclusive');
   assert.equal(p.billing_address_collection, 'required');
+  // Immediate methods only (no delayed bank transfer): the package is granted solely on completed.
+  assert.deepEqual([0, 1, 2, 3].map(i => p[`payment_method_types[${i}]`]), ['card', 'blik', 'p24', 'link']);
+  assert.equal(p['payment_method_types[4]'], undefined);
   assert.equal(p['tax_id_collection[enabled]'], 'true');
   assert.equal(p['customer_update[name]'], 'auto'); assert.equal(p['customer_update[address]'], 'auto');
   assert.equal(p.client_reference_id, order.id);
@@ -214,6 +218,31 @@ test('one Stripe customer per company: stored id is reused, a lost id is found b
   await service.checkout(buy({ requestId: id(12) }));
   assert.equal(stripe.calls.filter(c => c.method === 'POST' && c.path === '/v1/customers').length, 1);
   assert.equal(stripe.customers.size, 1);
+});
+
+test('a stored customer that Stripe confirms deleted is replaced (new idempotency key); any other mismatch fails closed', async () => {
+  const { st, stripe, service } = harness();
+  const first = await service.checkout(buy());
+  const old = st.customers.get(`${id(1)}:test`);
+  stripe.pay(st.orders.get(first.orderId).sessionId);
+  const ev = signed(completed(stripe.sessions.get(st.orders.get(first.orderId).sessionId)));
+  await service.notification(ev.raw, ev.header);
+  stripe.customers.get(old).deleted = true; // e.g. removed in the Stripe dashboard
+  const second = await service.checkout(buy({ requestId: id(15) }));
+  const fresh = st.customers.get(`${id(1)}:test`);
+  assert.notEqual(fresh, old);
+  const creates = stripe.calls.filter(c => c.method === 'POST' && c.path === '/v1/customers');
+  assert.equal(creates.length, 2);
+  assert.equal(creates[1].key, `skillcheck-core:customer:test:${id(1)}:after:${old}`);
+  assert.equal(stripe.calls.findLast(c => c.path === '/v1/checkout/sessions' && c.method === 'POST').body.customer, fresh);
+  assert.equal(second.amountMinor, 30000);
+  // A stored id that exists but is not ours is never overwritten.
+  stripe.pay(second.sessionId);
+  const ev2 = signed(completed(stripe.sessions.get(second.sessionId)));
+  await service.notification(ev2.raw, ev2.header);
+  stripe.customers.get(fresh).metadata.company_id = id(9);
+  await assert.rejects(service.checkout(buy({ requestId: id(16) })), e => e.code === 'SC19_PAYMENT_RETRY');
+  assert.equal(st.customers.get(`${id(1)}:test`), fresh);
 });
 
 test('„wkrótce” packages are refused by the server with 409; invalid pools are refused', async () => {
@@ -267,9 +296,7 @@ test('webhook: package granted only after checkout.session.completed, exactly on
   const { st, stripe, service } = harness();
   const r = await service.checkout(buy({ packages: 2 }));
   const sid = st.orders.get(r.orderId).sessionId;
-  // Completed but not paid (delayed method): nothing granted.
-  const early = signed(completed(stripe.sessions.get(sid)));
-  assert.deepEqual(await service.notification(early.raw, early.header), { state: 'not_paid' });
+  // Only immediate methods are offered, so checkout.session.completed is the paid moment.
   assert.equal(st.credits.get(id(1)) ?? 0, 0);
   stripe.pay(sid);
   const event = completed(stripe.sessions.get(sid));
@@ -420,7 +447,7 @@ test('form encoding and source hygiene: no key in code, no Stripe invoices, P24 
     assert.doesNotMatch(src, /origin_context|integration_identifier/, file);
   }
   const sql = readFileSync(new URL('../supabase/migrations/20261121110000_r7_stripe_checkout.sql', import.meta.url), 'utf8')
-    .replace(/--[^\n]*/g, '');
+    .replace(/--[^\n]*/g, '').replace(/\$\$[\s\S]*?\$\$/g, '');
   assert.doesNotMatch(sql, /\b(drop|truncate|delete\s+from|update\s+\w|rename|alter\s+column)\b/i);
   assert.match(sql, /mode = 'test' and provider = 'stripe'/);
 });
