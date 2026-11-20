@@ -2,11 +2,23 @@ import { FutureOfferPreview } from "./future-offer-preview";
 import Link from "next/link";
 import styles from "../../marketing.module.css";
 import { sc19AnalysisScope, sc19PolicyPendingCell, sc19PolicyPendingScope, type Sc19PackageSizes } from "../../../lib/sc19-package-sizes";
-import { freeAnalyses, freePrice, preselekcjaAnalyses, preselekcjaOffer, preselekcjaPrice } from "./preselekcja-offer";
+import { freeAnalyses, freePrice as staticFreePrice, preselekcjaAnalyses, preselekcjaOffer, preselekcjaPrice as staticPreselekcjaPrice } from "./preselekcja-offer";
 import { futureOffers } from "./future-offers";
 import { BUY_PRESELEKCJA_LABEL, BUY_PRESELEKCJA_PATH } from "../../../lib/buy-preselekcja";
+import { freeLabel, grossLabel, substituteQuotedPrice, type PublicPrices } from "../../../lib/pricing/public-catalog";
 
-export function PackageComparison({ sizes, catalogEnabled = false, futureOffersEnabled = false }: { sizes: Sc19PackageSizes | null; catalogEnabled?: boolean; futureOffersEnabled?: boolean }) {
+export function PackageComparison({ sizes, catalogEnabled = false, futureOffersEnabled = false, prices = null }: { sizes: Sc19PackageSizes | null; catalogEnabled?: boolean; futureOffersEnabled?: boolean; prices?: PublicPrices | null }) {
+  // SC-PRICING-W4: `prices` is non-null only when PRICING_PUBLIC_CATALOG_ENABLED=true and the published
+  // catalog passed the contract check; otherwise the current static figures are shown unchanged.
+  const freePrice = prices ? freeLabel(prices.FREE) : staticFreePrice;
+  const preselekcjaPrice = prices ? grossLabel(prices.PRESELEKCJA) : staticPreselekcjaPrice;
+  const futurePrice = (name: string, fallback: string) =>
+    prices ? grossLabel(name === "WERYFIKACJA" ? prices.WERYFIKACJA : prices.ASSESSMENT_CENTER) : fallback;
+  // The terms text quotes the static amount ("nie jest wliczone w 1 499 zł"); with the catalog on, quote the catalog amount.
+  const futureResult = (stage: (typeof futureOffers)[number]) => {
+    if (!prices || stage.name !== "ASSESSMENT CENTER") return stage.result;
+    return substituteQuotedPrice(stage.result, stage.price, prices.ASSESSMENT_CENTER);
+  };
   // WERYFIKACJA and ASSESSMENT CENTER are visible on the public offer by default; hidden only by PUBLIC_FUTURE_OFFERS_ENABLED=false
   // (owner decisions 2026-11-10 and 2026-11-16, ROADMAP R4). Their copy stays in future-offers.ts and below.
   // Live catalog wins when enabled; an enabled but failing catalog shows no number.
@@ -58,7 +70,7 @@ export function PackageComparison({ sizes, catalogEnabled = false, futureOffersE
   <div className={styles.futureGrid}>{futureOffers.map(stage=><article key={stage.name} className={styles.futureCard}>
     <p className={`${styles.status} ${styles.statusPlanned}`}>Cena zatwierdzona · w przygotowaniu — nie można jeszcze kupić</p>
     <h3>{stage.name}</h3><p className={styles.planTitle}>{stage.outcome}</p>
-    <div className={styles.planPrice}><strong>{stage.price}</strong><p>{stage.scope}</p></div>
+    <div className={styles.planPrice}><strong>{futurePrice(stage.name, stage.price)}</strong><p>{stage.scope}</p></div>
     <h4>Co planujemy w tej cenie?</h4>
     <ul>{stage.features.map(feature=><li key={feature}>{feature}</li>)}</ul>
     <h4>Kto wykonuje pracę?</h4>
@@ -68,7 +80,7 @@ export function PackageComparison({ sizes, catalogEnabled = false, futureOffersE
     {stage.exercises.length > 0 && <><h4>Ćwiczenia w pakiecie</h4><ol>{stage.exercises.map(exercise=><li key={exercise}>{exercise}</li>)}</ol></>}
     <details className={styles.packageDetails}>
       <summary>Raport i warunki planowanego pakietu</summary>
-      <p>{stage.result}</p>
+      <p>{futureResult(stage)}</p>
       <p>Jedno stanowisko, 3 miesiące od aktywacji. Jedno podejście do testu na osobę. Ponowienie z powodu potwierdzonego problemu technicznego nie zużywa kolejnego miejsca; poprawa wyniku nie jest wliczona.</p>
       <p>Cena obejmuje narzędzia i materiały. Nie obejmuje zewnętrznego asesora, pozyskania kandydatów ani organizacji sesji przez SkillCheck.</p>
     </details>
