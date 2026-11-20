@@ -1,7 +1,7 @@
-// DRAFT — legal summary, requires owner acceptance before production (SC-P24-VERIFY-002).
+// DRAFT — legal summary, requires owner acceptance before production (SC-PAYMENTS-SUMMARY).
 // Every statement below restates the Regulamin (docs/legal/v1.0/01_Regulamin_SkillCheck.md) and adds no terms
 // of its own. One deliberate difference: the payment-method status follows the offer pages (transfer only
-// today, Przelewy24 being prepared), while Regulamin § 7 ust. 1 lists online payment as available.
+// today, online payment through Stripe being prepared), while Regulamin § 7 ust. 1 lists online payment as available.
 // Company data comes from lib/legal.ts, price and scope from the PRESELEKCJA offer.
 import type { Metadata } from "next";
 import Link from "next/link";
@@ -41,10 +41,9 @@ export default async function PaymentsAndComplaintsPage() {
       {full("§ 2, § 3 i § 6")}
 
       <h2>Metody płatności</h2>
-      {/* Same status as the offer pages: only the transfer works today; Przelewy24 is named as being prepared. */}
+      {/* Same status as the offer pages: only the transfer works today; Stripe is named as being prepared. */}
       <p>Obecnie za pakiet płacisz przelewem tradycyjnym na podstawie faktury proforma, w terminie wskazanym na fakturze.
-        Płatność online Przelewy24 jest przygotowywana (szybki przelew, BLIK lub karta, zależnie od metod dostępnych w chwili płatności).
-        Operatorem płatności online jest PayPro S.A. z siedzibą w Poznaniu.</p>
+        Płatność online przez Stripe jest przygotowywana; udostępnimy ją w koncie firmy, gdy będzie gotowa (dostępne metody zależą od ustawień operatora w chwili płatności).</p>
       <p>Płatność online jest dokonana po potwierdzeniu przez operatora, a przelew tradycyjny — po uznaniu rachunku usługodawcy. Sam powrót ze strony operatora do serwisu nie jest potwierdzeniem płatności.
         Po zaksięgowaniu płatności wystawiamy fakturę VAT i wysyłamy ją e-mailem. Nie stosujemy automatycznych obciążeń cyklicznych.</p>
       {full("§ 7")}
