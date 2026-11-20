@@ -204,6 +204,7 @@ test('R7 packages: paid test-mode WERYFIKACJA / ASSESSMENT CENTER grant once thr
   const { createSc19Payments } = await import('../lib/sc19-payments.ts');
   const { createPostgresPaymentStore } = await import('../lib/sc19-payment-postgres.ts');
   const { stripePackageExtension, STRIPE_PACKAGE_OFFERS } = await import('../lib/sc19-stripe-packages.ts');
+  const { readStripeBuyerCompany } = await import('../lib/sc19-stripe-provider.ts');
   const u = new URL(url);
   if (!['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname)) throw Error('Disposable loopback database required');
   const root = new pg.Client({ connectionString: u.href }); await root.connect();
@@ -218,9 +219,18 @@ test('R7 packages: paid test-mode WERYFIKACJA / ASSESSMENT CENTER grant once thr
   const A = '00000000-0000-4000-8000-000000000001', OWNER = '00000000-0000-4000-8000-000000000002';
   const rolePool = { async connect() { const c = await pool.connect(); await c.query('set role sc19_p24_checkout'); return c; } };
   const scope = { provider: 'stripe', account: 'ktig-consulting', mode: 'test' };
+  // The REAL buyer lookup of the Stripe runtime (lib/sc19-stripe-runtime.ts):
+  // sc19_stripe.buyer() on its own connection as the adapter role, after the order
+  // transaction committed — exactly where Stripe's createCheckout reads it.
+  const roleQuery = async (sql, values) => {
+    const c = await rolePool.connect();
+    try { return (await c.query(sql, values)).rows; } finally { c.release(); }
+  };
+  const buyers = [];
   let paymentId = 'pi_fixtureac1';
   const provider = {
     async createCheckout(order) {
+      buyers.push(await readStripeBuyerCompany(roleQuery, order.companyId));
       const sid = `cs_test_${order.id.replace(/-/g, '')}`;
       return { orderId: order.id, sessionId: sid, url: `https://checkout.stripe.com/c/pay/${sid}`, scope,
         amountMinor: order.amountMinor, currency: 'PLN', paymentKind: 'one_time' };
@@ -267,6 +277,12 @@ test('R7 packages: paid test-mode WERYFIKACJA / ASSESSMENT CENTER grant once thr
   assert.equal(hosted.amountMinor, 149900);
   const row = (await db.query('select * from sc19_stripe.package_orders where id=$1', [hosted.orderId])).rows[0];
   assert.equal(row.package_code, 'ASSESSMENT_CENTER'); assert.equal(row.mode, 'test'); assert.equal(row.session_id, hosted.sessionId);
+  // Codex P1 (PR #563): buyer data is available for an unpaid PACKAGE order, so the
+  // Stripe session is actually created instead of SC19_PAYMENT_FORBIDDEN.
+  assert.deepEqual(buyers, [{ companyName: 'Firma A', nip: '7394002294' }]);
+  assert.equal((await db.query(`select has_function_privilege('sc19_p24_checkout','sc19_stripe.buyer(uuid)','execute') r`)).rows[0].r, true);
+  for (const role of ['anon', 'authenticated'])
+    assert.equal((await db.query(`select has_function_privilege($1,'sc19_stripe.buyer(uuid)','execute') r`, [role])).rows[0].r, false);
   // Same request again: same order. Another purchase while it is unpaid: refused.
   assert.equal((await service.checkout({ companyId: A, offerId: ac.id, termsRevision: ac.termsRevision, requestId: req(2),
     packageCode: 'ASSESSMENT_CENTER' })).orderId, hosted.orderId);
@@ -283,12 +299,15 @@ test('R7 packages: paid test-mode WERYFIKACJA / ASSESSMENT CENTER grant once thr
   assert.equal((await db.query('select available from private.sc19_balances where company_id=$1', [A])).rows[0].available, 50);
   assert.equal((await db.query('select count(*)::int n from private.sc19_credit_journal')).rows[0].n, 1);
   await db.query('select private.ac_package_required($1)', [A]); // the R3 gate now passes
+  // Paid, nothing else unpaid: buyer data is closed again.
+  await assert.rejects(readStripeBuyerCompany(roleQuery, A), e => e.code === 'SC19_PAYMENT_FORBIDDEN');
   const read = await store.readOrder(A, OWNER, hosted.orderId);
   assert.equal(read.status, 'paid'); assert.equal(read.packageCode, 'ASSESSMENT_CENTER');
 
   // WERYFIKACJA: a second order; the SAME payment id as the AC order is a reused receipt and grants nothing.
   const w = await service.checkout({ companyId: A, offerId: wer.id, termsRevision: wer.termsRevision, requestId: req(4), packageCode: 'WERYFIKACJA' });
   assert.equal(w.amountMinor, 61500);
+  assert.equal(buyers.length, 2); assert.deepEqual(buyers[1], { companyName: 'Firma A', nip: '7394002294' });
   await assert.rejects(deliver(service, { id: w.orderId, sessionId: w.sessionId, amountMinor: 61500 }), e => e.code === 'SC19_PAYMENT_REUSED');
   assert.equal((await db.query('select count(*)::int n from sc19_stripe.package_grants')).rows[0].n, 1);
   paymentId = 'pi_fixturewer1';
@@ -335,5 +354,9 @@ test('R7 packages: paid test-mode WERYFIKACJA / ASSESSMENT CENTER grant once thr
   await db.query(packagesRollback);
   assert.equal((await db.query(`select to_regclass('sc19_stripe.package_orders') r`)).rows[0].r, null);
   assert.notEqual((await db.query(`select to_regnamespace('sc19_stripe') n`)).rows[0].n, null, 'the R7 checkout schema stays');
+  // The buyer lookup is back to the R7 checkout body (PRESELEKCJA orders only), still callable and still closed to the API roles.
+  assert.doesNotMatch((await db.query(`select pg_get_functiondef('sc19_stripe.buyer(uuid)'::regprocedure) d`)).rows[0].d, /package_orders/);
+  assert.deepEqual(await roleQuery('select * from sc19_stripe.buyer($1)', [A]), []);
+  assert.equal((await db.query(`select has_function_privilege('anon','sc19_stripe.buyer(uuid)','execute') r`)).rows[0].r, false);
   assert.equal((await db.query('select private.erasure_schema_signature() s')).rows[0].s, signature);
 });

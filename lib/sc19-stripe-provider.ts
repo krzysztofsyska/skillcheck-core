@@ -82,6 +82,19 @@ export function stripeForm(params: Record<string, unknown>): string {
 }
 
 export type StripeBuyer = Readonly<{ email: string; companyName: string; nip: string | null }>;
+/** Company name and NIP for the Stripe checkout form, through the security-definer
+ * sc19_stripe.buyer() (the adapter roles cannot read the NIP column directly). It
+ * answers only while the company has an unpaid Stripe order, PRESELEKCJA or (after
+ * migration 20261121130000) WERYFIKACJA / ASSESSMENT CENTER; otherwise
+ * SC19_PAYMENT_FORBIDDEN. `query` runs on the adapter's restricted login. */
+export async function readStripeBuyerCompany(
+  query: (sql: string, values: unknown[]) => Promise<Record<string, unknown>[]>, companyId: string,
+): Promise<{ companyName: string; nip: string | null }> {
+  const rows = await query('select company_name,nip from sc19_stripe.buyer($1)', [companyId]);
+  if (!rows[0] || typeof rows[0].company_name !== 'string') throw new Sc19PaymentError('SC19_PAYMENT_FORBIDDEN');
+  const nip = typeof rows[0].nip === 'string' && /^[0-9]{10}$/.test(rows[0].nip) ? rows[0].nip : null;
+  return { companyName: rows[0].company_name, nip };
+}
 /** One Stripe customer per company and mode, stored by the runtime (sc19_stripe.customers). */
 export type StripeCustomerStore = Readonly<{
   find(companyId: string, mode: PaymentMode): Promise<string | null>;

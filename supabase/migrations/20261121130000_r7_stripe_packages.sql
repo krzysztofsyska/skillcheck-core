@@ -29,6 +29,14 @@
 --  * adds 1 to sc19_commerce.entitlements(company, 'package:<code>') — the row the
 --    R3 gate private.ac_package_required() reads, so a company that paid for
 --    ASSESSMENT CENTER can create and open a finalist session.
+--
+-- BUYER DATA: sc19_stripe.buyer(company) (migration 20261121110000) returns the
+-- company name and NIP for the Stripe checkout form only while the company has an
+-- unpaid Stripe order. It is redefined here (create or replace: same signature,
+-- owner and grants, security definer, empty search_path) so that an unpaid TEST-mode
+-- WERYFIKACJA / ASSESSMENT CENTER order in sc19_stripe.package_orders counts too.
+-- Without it every package checkout stopped with SC19_PAYMENT_FORBIDDEN before a
+-- Stripe session was created. The rollback restores the previous body.
 -- Skill-test units are NOT granted: the number of tests in WERYFIKACJA is not in
 -- the price list, and test metering (sc19_commerce.settings.skill_test_metering)
 -- stays off, so tests are not limited by the package today.
@@ -51,7 +59,7 @@ do $preflight$
 begin
  if to_regnamespace('sc19_stripe') is null or to_regclass('sc19_commerce.entitlements') is null
   or to_regclass('private.sc19_credit_journal') is null or to_regclass('private.sc19_balances') is null
-  or to_regclass('private.sc19_payment_grants') is null then
+  or to_regclass('private.sc19_payment_grants') is null or to_regprocedure('sc19_stripe.buyer(uuid)') is null then
   raise exception 'r7_stripe_packages_requires_r7_checkout_and_catalog_orders' using errcode='55000';end if;
  if to_regclass('sc19_stripe.package_orders') is not null then
   raise exception 'r7_stripe_packages_already_installed' using errcode='55000';end if;
@@ -174,6 +182,23 @@ begin
  return null;
 end;$$;
 revoke all on function sc19_stripe.grant_package(uuid, text) from public, anon, authenticated;
+
+-- Buyer data for the Stripe checkout form: also for an unpaid TEST-mode package
+-- order of the same company (see the header). Body otherwise identical to
+-- 20261121110000_r7_stripe_checkout.sql; create or replace keeps the existing
+-- grants (adapter roles only), the revoke below repeats the closed default.
+create or replace function sc19_stripe.buyer(target_company uuid)
+returns table(company_name text, nip text)
+language sql stable security definer set search_path='' as $$
+ select c.name, a.nip from public.companies c
+ left join private.sc19_trial_approvals a on a.company_id=c.id
+ where c.id=target_company and (
+  exists(select 1 from private.sc19_payment_orders o
+   where o.company_id=target_company and o.provider='stripe' and o.status='awaiting_payment')
+  or exists(select 1 from sc19_stripe.package_orders p
+   where p.company_id=target_company and p.provider='stripe' and p.mode='test' and p.status='awaiting_payment'))
+$$;
+revoke all on function sc19_stripe.buyer(uuid) from public, anon, authenticated;
 
 do $roles$
 declare r text;

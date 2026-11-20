@@ -16,7 +16,7 @@ import { createClient } from './supabase/server.ts';
 import { composeSc19PaymentRuntime } from './sc19-payment-runtime.ts';
 import type { PaymentOrder, PaymentMode } from './sc19-payments.ts';
 import { Sc19PaymentError } from './sc19-payments.ts';
-import { createStripeProvider, STRIPE_CHECKOUT_ORIGIN, type StripeCustomerStore } from './sc19-stripe-provider.ts';
+import { createStripeProvider, readStripeBuyerCompany, STRIPE_CHECKOUT_ORIGIN, type StripeCustomerStore } from './sc19-stripe-provider.ts';
 import type { Sc19StripeConfig } from './sc19-stripe-config.ts';
 import { stripePackageExtension } from './sc19-stripe-packages.ts';
 
@@ -75,10 +75,8 @@ export async function stripeRuntime(config: Sc19StripeConfig) {
     async buyer(order) {
       const buyer = await user();
       if (buyer?.id !== order.buyerId || !buyer.email_confirmed_at || !buyer.email) throw new Sc19PaymentError('SC19_PAYMENT_FORBIDDEN');
-      const rows = await query('select company_name,nip from sc19_stripe.buyer($1)', [order.companyId]);
-      if (!rows[0] || typeof rows[0].company_name !== 'string') throw new Sc19PaymentError('SC19_PAYMENT_FORBIDDEN');
-      const nip = typeof rows[0].nip === 'string' && /^[0-9]{10}$/.test(rows[0].nip) ? rows[0].nip : null;
-      return { email: buyer.email, companyName: rows[0].company_name, nip };
+      const company = await readStripeBuyerCompany(query, order.companyId);
+      return { email: buyer.email, ...company };
     },
   });
   return composeSc19PaymentRuntime({ pool: { async connect() {

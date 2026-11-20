@@ -120,7 +120,7 @@ Decyzja 19.11.2026 (`docs/DECYZJE.md`): Stripe zamiast Przelewy24, to samo konto
 |---|---|---|
 | Zdjęcie `PAYMENT_PATH_FREEZE` z publikatora (`.github/workflows/auto-release.yml`) i testów polityki wydań | DO ZROBIENIA | — |
 | Zakup PRESELEKCJI, WERYFIKACJI i ASSESSMENT CENTER przez Stripe Checkout (wzór: `skillcheck-preselekcja`), ceny z `docs/cennik-2026-11-02.md`, domyślnie wyłączony do czasu kluczy | W TOKU (PRESELEKCJA w całych pakietach po 60 CV, WERYFIKACJA i ASSESSMENT CENTER po jednym pakiecie; tylko tryb testowy, domyślnie wyłączone; opłacony pakiet AC pozwala utworzyć sesję AC; bez faktur i bez dopłaty za CV ponad pulę) | PR #556, #563 |
-| Usunięcie kodu Przelewy24 | DO ZROBIENIA | — |
+| Usunięcie kodu Przelewy24 | W TOKU (część 1: kod płatności, trasy, panel operatora i ekran zakupu bez Przelewy24; zostają teksty stron publicznych i regulaminu, martwe gałęzie w komponencie zakupu, dokumentacja oraz lista plików w workflow) | PR #562 |
 | Limit kosztu rozmów voicebota 50 zł miesięcznie w aplikacji (blokada nowych rozmów i powiadomienie właściciela) | W TOKU (blokada w bazie i alert dla właściciela w bazie; każda rozmowa rezerwuje 15 zł, czyli jej najwyższy możliwy koszt, więc limitu nie da się przekroczyć także bez rozliczenia rzeczywistych kosztów — przy obecnej rezerwie mieszczą się 3 rozmowy w miesiącu; usunięcie danych kandydata nie zmienia miesięcznej sumy; rzeczywisty koszt rozmowy z webhooka Retell (call_analyzed, przeliczony po stałym kursie 4,50 zł/USD) zastępuje rezerwę raz na rozmowę, a koszt wyższy niż rezerwa blokuje resztę miesiąca; zostaje wysyłka powiadomienia właściciela) | PR #558, PR #561 |
 
 ## Wstrzymane do pierwszej sprzedaży

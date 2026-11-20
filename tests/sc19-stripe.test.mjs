@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createSc19Payments, Sc19PaymentError } from '../lib/sc19-payments.ts';
 import { createSc19PaymentHttp } from '../lib/sc19-payment-http.ts';
 import { createStripeProvider, stripeModeOf, verifyStripeSignature, stripeForm, STRIPE_CHECKOUT_ORIGIN } from '../lib/sc19-stripe-provider.ts';
@@ -460,10 +460,8 @@ test('an expired Stripe session is never re-bound (order row is immutable): fail
   assert.equal(stripe.calls.filter(c => c.method === 'POST' && c.path === '/v1/checkout/sessions').length, 1);
 });
 
-test('P24 notifications stay on the P24 runtime; a status read of another provider\'s order does not fail', async () => {
-  const route = readFileSync(new URL('../app/api/billing/webhook/route.ts', import.meta.url), 'utf8');
-  assert.match(route, /resolveSc19P24Runtime\(request\)\)\.webhook/);
-  assert.doesNotMatch(route, /resolveSc19PaymentRuntime|resolveSc19StripeRuntime/);
+test('the Przelewy24 notification route is gone; a status read of a historical P24 order does not fail', async () => {
+  assert.equal(existsSync(new URL('../app/api/billing/webhook/route.ts', import.meta.url)), false);
   const { service } = harness();
   const p24Order = { id: id(70), companyId: id(1), buyerId: id(2), requestId: id(71), offerId: 'preselection-v1', offerRevision: 'revision-v1',
     termsRevision: 'terms-v1', amountMinor: 30000, currency: 'PLN', credits: 60, scope: { provider: 'przelewy24', account: '1', mode: 'test' },
