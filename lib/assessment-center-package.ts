@@ -10,7 +10,7 @@ import { catalogEntitlements, catalogRpc } from './sc19-catalog-orders.ts';
  */
 export const AC_PACKAGE_ENTITLEMENT = 'package:ASSESSMENT_CENTER';
 export type AcPackageState = 'active' | 'missing' | 'unknown';
-export const AC_PACKAGE_MISSING_TEXT = 'Sesja Assessment Center jest dostępna dla firm z opłaconym pakietem ASSESSMENT CENTER. Twoja firma nie ma jeszcze tego pakietu.';
+export { AC_PACKAGE_MISSING_TEXT } from './assessment-center-session.ts';
 
 export function acPackageState(value: unknown): AcPackageState {
   try {

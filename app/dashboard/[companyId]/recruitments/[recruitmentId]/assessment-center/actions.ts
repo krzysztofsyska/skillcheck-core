@@ -3,8 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { revalidatePath } from 'next/cache';
 import { exerciseContext } from '../../../../../../lib/exercise-context';
 import { assessmentCenterPreviewEnabled } from '../../../../../../lib/assessment-center-preview';
-import { AC_PACKAGE_MISSING_TEXT } from '../../../../../../lib/assessment-center-package';
-import { acChangeAssessments, acStageTypes, parseAssessmentCenterSession, parseReconciliationForm } from '../../../../../../lib/assessment-center-session';
+import { AC_PACKAGE_MISSING_TEXT, acChangeAssessments, acStageTypes, parseAssessmentCenterSession, parseReconciliationForm } from '../../../../../../lib/assessment-center-session';
 import { hrbpCaseTemplate } from '../../../../../../lib/assessment-center-session-template';
 import { bindMethodToDefinitions } from '../../../../../../lib/method-binding';
 
