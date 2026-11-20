@@ -14,7 +14,7 @@
 // Native disposable PostgreSQL only; synthetic data; no provider, no network.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { activeBoot, users } from './helpers/competency-active-fixture.mjs';
 import { seedSyntheticPolicy } from './helpers/sc19-migration-fixture.mjs';
@@ -28,6 +28,7 @@ import { prepareOfflineVoiceDraft } from '../lib/voice/offline-preparation.ts';
 import {
   dispatchRetellCall, RetellDispatchError, retellDispatchRecruiterMessage, dispatchClaimErrorCode,
 } from '../lib/voice/retell-dispatch-worker.ts';
+import { ingestRetellWebhook, recordRetellDispatch } from '../lib/voice/retell-dispatch-ledger.ts';
 import {
   VOICE_CALL_RESERVE_GROSZE, VOICE_COST_CAP_RECRUITER_MESSAGE, VOICE_MONTHLY_COST_CAP_GROSZE, isVoiceCostCapRefusal,
 } from '../lib/voice/cost-cap.ts';
@@ -435,6 +436,75 @@ test('R7: the monthly voice cost cap refuses new dispatches in the database and 
     await h.asUser(b.owner);
     await assert.rejects(db.query('select company_id from voice_budget.charges'), e => e.code === '42501');
     await h.asAdmin();
+  });
+
+  await t.test('the Retell webhook records the real call cost once; missing cost keeps the reservation; above it fails closed', async () => {
+    await setCap(100000, 500);
+    const webhookKey = 'key_synthetic_webhook_0123456789';
+    const agentId = 'agent_1234567890abcdef';
+    const config = { webhookKey, agentId, agentVersion: 2 };
+    const deliver = async (event, callId, change = {}, at = Date.now()) => {
+      const body = new TextEncoder().encode(JSON.stringify({ event, call: {
+        call_type: 'phone_call', direction: 'outbound', call_id: callId, agent_id: agentId, agent_version: 2,
+        start_timestamp: at - 400_000, end_timestamp: at - 10_000, disconnection_reason: 'user_hangup', ...change,
+      } }));
+      const signature = 'v=' + at + ',d=' + createHmac('sha256', webhookKey)
+        .update(Buffer.concat([Buffer.from(body), Buffer.from(String(at))])).digest('hex');
+      await h.asAdmin();
+      return ingestRetellWebhook(db, body, signature, config, at);
+    };
+    const charge = async p => {
+      await h.asAdmin();
+      return (await db.query('select reserved_grosze,cost_grosze from voice_budget.charges where preparation_id=$1', [p])).rows[0];
+    };
+    const mtd = async () => Number((await status(new Date())).month_to_date_grosze);
+    const pool3 = await grant(a, 5);
+    const calls = [];
+    for (let i = 0; i < 3; i++) {
+      const f = await ready(a);
+      const o = await order(f, pool3);
+      await claim(f, o.operationId);
+      const callId = `call_r7cost_${i}_${randomUUID().slice(0, 8)}`;
+      await h.asAdmin();
+      await recordRetellDispatch(db, { companyId: a.companyId, operationId: o.operationId, providerCallId: callId, agentId });
+      calls.push({ f, o, callId });
+    }
+    const [real, missing, over] = calls;
+    const before = await mtd();
+
+    // A real cost (USD 0.40 = 40 cents at 4.50 zł/USD = 180 grosze) replaces the 500 grosze reservation.
+    assert.deepEqual(await deliver('call_analyzed', real.callId, { call_cost: { combined_cost: 40 } }), { outcome: 'recorded' });
+    assert.deepEqual(await charge(real.o.operationId), { reserved_grosze: 500, cost_grosze: 180 });
+    assert.equal(await mtd(), before - 320);
+    // Retell's retries (and a retry claiming another cost) are duplicates: nothing counted twice.
+    assert.deepEqual(await deliver('call_analyzed', real.callId, { call_cost: { combined_cost: 40 } }), { outcome: 'duplicate_delivery' });
+    assert.deepEqual(await deliver('call_analyzed', real.callId, { call_cost: { combined_cost: 90 } }, Date.now() + 1000),
+      { outcome: 'duplicate_delivery' });
+    assert.deepEqual(await charge(real.o.operationId), { reserved_grosze: 500, cost_grosze: 180 });
+    assert.equal(await mtd(), before - 320);
+    await h.asAdmin();
+    assert.equal(await one(`select count(*)::int as v from voice_budget.charges where preparation_id=$1`, [real.o.operationId]), 1);
+
+    // No cost (or a cost that is not a number, or a cost only on call_ended): the full reservation keeps counting.
+    assert.deepEqual(await deliver('call_ended', missing.callId, { call_cost: { combined_cost: 10 } }), { outcome: 'applied' });
+    assert.deepEqual(await deliver('call_analyzed', missing.callId, { call_cost: { combined_cost: 'free' } }), { outcome: 'recorded' });
+    assert.deepEqual(await charge(missing.o.operationId), { reserved_grosze: 500, cost_grosze: null });
+    assert.equal(await mtd(), before - 320);
+    let s = await status(new Date());
+    assert.equal(s.reserve_exceeded, false);
+    assert.equal(s.new_calls_blocked, false);
+
+    // A real cost above the call's reservation (USD 2.00 = 900 grosze > 500): new calls stop for the month.
+    assert.deepEqual(await deliver('call_analyzed', over.callId, { call_cost: { combined_cost: 200 } }), { outcome: 'recorded' });
+    assert.deepEqual(await charge(over.o.operationId), { reserved_grosze: 500, cost_grosze: 900 });
+    s = await status(new Date());
+    assert.equal(Number(s.month_to_date_grosze), before - 320 + 400);
+    assert.equal(s.reserve_exceeded, true);
+    assert.equal(s.new_calls_blocked, true, 'far under the cap, but the per-call upper bound proved wrong');
+    const next = await ready(a);
+    const o = await order(next, pool3);
+    await assert.rejects(claim(next, o.operationId), capped);
+    assert.equal(networkCalls, 0);
   });
 
   await t.test('settings, charges and alerts cannot be deleted or rewritten', async () => {
