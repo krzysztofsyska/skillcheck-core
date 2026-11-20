@@ -54,7 +54,8 @@ export const LEGAL_ACCEPTANCE_FIELD = 'legal_acceptance';
  *   and nothing is sent.
  * - `1.0+r4` (from 2026-11-20): Regulamin § 7 ust. 1-2 and Polityka prywatności § 5 name Stripe Payments
  *   Europe, Limited instead of the previous payment operator as the online payment operator and recipient of payment
- *   data (owner decision 2026-11-19). Document set unchanged; same registration-only recording as r3.
+ *   data (owner decision 2026-11-19). Polityka prywatności § 6 also lists Stripe among the providers that may
+ *   process data outside the EEA. Document set unchanged; same registration-only recording as r3.
  */
 export const LEGAL_ACCEPTANCE_REVISION = `${LEGAL_VERSION}+r4`;
 export const LEGAL_ACCEPTED_DOCUMENTS = ['regulamin', 'dpa', 'polityka-prywatnosci'] as const;

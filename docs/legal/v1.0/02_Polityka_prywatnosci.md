@@ -49,7 +49,7 @@ Dane mogą otrzymać wyłącznie podmioty, które pomagają nam świadczyć usł
 
 # 6. Przekazywanie danych poza EOG
 
-Niektórzy dostawcy (Vercel, Resend, OpenAI) mogą przetwarzać dane lub zapewniać dostęp do nich spoza Europejskiego Obszaru Gospodarczego, w szczególności w USA. W takich przypadkach transfer odbywa się na podstawie decyzji Komisji Europejskiej stwierdzającej odpowiedni stopień ochrony (EU–US Data Privacy Framework) lub standardowych klauzul umownych przyjętych przez Komisję Europejską. Kopię zabezpieczeń możesz otrzymać, kontaktując się z nami.
+Niektórzy dostawcy (Vercel, Resend, OpenAI, Stripe) mogą przetwarzać dane lub zapewniać dostęp do nich spoza Europejskiego Obszaru Gospodarczego, w szczególności w USA. W takich przypadkach transfer odbywa się na podstawie decyzji Komisji Europejskiej stwierdzającej odpowiedni stopień ochrony (EU–US Data Privacy Framework) lub standardowych klauzul umownych przyjętych przez Komisję Europejską. Kopię zabezpieczeń możesz otrzymać, kontaktując się z nami.
 
 # 7. Jak długo przechowujemy dane
 
