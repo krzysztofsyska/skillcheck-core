@@ -1,5 +1,5 @@
 import { createSc19PaymentHttp } from '../../../../lib/sc19-payment-http';
-import { resolveSc19PaymentRuntime } from '../../../../lib/sc19-payment-runtime';
+import { resolveSc19P24Runtime } from '../../../../lib/sc19-payment-runtime';
 export const runtime='nodejs';
 // SC-P24-DIAG-001: the platform default (10 s Hobby / 15 s Pro) is SHORTER than
 // this handler's own worst case — a Supabase auth round trip, a pooler connect
@@ -10,5 +10,6 @@ export const runtime='nodejs';
 // cleanly and say why.
 export const maxDuration = 60;
 export async function POST(request: Request) {
-  return createSc19PaymentHttp(await resolveSc19PaymentRuntime(request)).webhook(request);
+  // Przelewy24 only (its urlStatus): never rerouted to the Stripe runtime (R7).
+  return createSc19PaymentHttp(await resolveSc19P24Runtime(request)).webhook(request);
 }
