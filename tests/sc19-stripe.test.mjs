@@ -29,6 +29,7 @@ function fakeStripe() {
     const u = new URL(url); const method = init.method; const body = Object.fromEntries(new URLSearchParams(init.body ?? ''));
     const key = init.headers['Idempotency-Key'];
     assert.equal(init.headers.Authorization, `Bearer ${SECRET}`);
+    assert.equal(init.headers['Stripe-Version'], '2026-10-28.endive');
     s.calls.push({ method, path: u.pathname, query: Object.fromEntries(u.searchParams), body, key });
     if (key && s.keys.has(key)) return json(s.keys.get(key));
     const remember = obj => { if (key) s.keys.set(key, obj); return json(obj); };
@@ -178,8 +179,9 @@ test('checkout: server amount for 2 packages, metadata on session AND PaymentInt
   assert.equal(p['line_items[0][price_data][tax_behavior]'], 'inclusive');
   assert.equal(p.billing_address_collection, 'required');
   // Immediate methods only (no delayed bank transfer): the package is granted solely on completed.
-  assert.deepEqual([0, 1, 2, 3].map(i => p[`payment_method_types[${i}]`]), ['card', 'blik', 'p24', 'link']);
-  assert.equal(p['payment_method_types[4]'], undefined);
+  assert.deepEqual([0, 1, 2, 3].map(i => p[`allowed_payment_method_types[${i}]`]), ['card', 'blik', 'p24', 'link']);
+  assert.equal(p['allowed_payment_method_types[4]'], undefined);
+  assert.ok(!Object.keys(p).some(k => k.startsWith('payment_method_types')));
   assert.equal(p['tax_id_collection[enabled]'], 'true');
   assert.equal(p['customer_update[name]'], 'auto'); assert.equal(p['customer_update[address]'], 'auto');
   assert.equal(p.client_reference_id, order.id);

@@ -20,6 +20,9 @@ import { STRIPE_APP, STRIPE_CATALOG, stripeLookupKey, stripeQuote } from './stri
 
 export const STRIPE_API = 'https://api.stripe.com';
 export const STRIPE_CHECKOUT_ORIGIN = 'https://checkout.stripe.com';
+/** Pinned API version: the same one skillcheck-preselekcja uses on this account
+ * (stripe-node 23.1.0), so request and response shapes do not follow the account default. */
+export const STRIPE_API_VERSION = '2026-10-28.endive';
 /** Seconds a signed webhook stays acceptable (Stripe's own default tolerance). */
 export const STRIPE_SIGNATURE_TOLERANCE_S = 300;
 
@@ -122,7 +125,7 @@ export function createStripeProvider(options: StripeProviderOptions): PaymentPro
 
   async function api(method: 'GET' | 'POST', path: string, params?: Json, idempotencyKey?: string): Promise<Json | null> {
     const query = method === 'GET' && params ? '?' + stripeForm(params) : '';
-    const headers: Record<string, string> = { Authorization: `Bearer ${secretKey}` };
+    const headers: Record<string, string> = { Authorization: `Bearer ${secretKey}`, 'Stripe-Version': STRIPE_API_VERSION };
     if (method === 'POST') headers['Content-Type'] = 'application/x-www-form-urlencoded';
     if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
     let response: Response;
@@ -232,8 +235,9 @@ export function createStripeProvider(options: StripeProviderOptions): PaymentPro
       line_items: [line],
       // Immediate methods only: the package is granted solely on checkout.session.completed
       // (owner, 19.11.2026), so a delayed method (bank transfer, SEPA…) is never offered.
-      // Apple Pay and Google Pay arrive as `card`.
-      payment_method_types: ['card', 'blik', 'p24', 'link'],
+      // Apple Pay and Google Pay arrive as `card`. An allowlist filter on the dynamic
+      // methods (API 2026-10-28 has no static `payment_method_types` on Checkout).
+      allowed_payment_method_types: ['card', 'blik', 'p24', 'link'],
       billing_address_collection: 'required', tax_id_collection: { enabled: true },
       success_url: `${back}?stripe=${order.id}`, cancel_url: `${back}?stripe=${order.id}&cancelled=1`,
       branding_settings: stripeBranding(appOrigin),
