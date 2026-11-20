@@ -79,7 +79,7 @@ const consentLabel = () => {
   return page.slice(start, end);
 };
 
-test('the consent version is r3, differs from the Annex 1 consent, and the documents match the label', () => {
+test('the consent version is r4, differs from the Annex 1 consent, and the documents match the label', () => {
   assert.equal(LEGAL_ACCEPTANCE_REVISION, '1.0+r4');
   assert.equal(LEGAL_ACCEPTANCE_VALUE, 'v1.0+r4');
   assert.notEqual(LEGAL_ACCEPTANCE_REVISION, `${LEGAL_VERSION}+aneks1`, 'changed wording must not reuse the old revision');
