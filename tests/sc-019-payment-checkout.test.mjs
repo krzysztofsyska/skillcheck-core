@@ -27,7 +27,7 @@ const ok = data => ({ ok: true, json: async () => structuredClone(data) });
 
 async function harness({ offers = [offer()], entries = [], checkout, order, clientNow, storageUnavailable=false,
   checkoutAvailable = true, offersResponse, search = '', statusOnly = false, testMode = false,
-  recruitmentId, currentCompany = companyId } = {}) {
+  recruitmentId, currentCompany = companyId, cvPoolEnabled } = {}) {
   const storage = new Map(entries), posts = [], redirects = [], statusReads = [], replacedUrls = [];
   const hooks = [], effects = [];
   let cursor = 0, sequence = 0, offerReads = 0, tree;
@@ -82,7 +82,8 @@ async function harness({ offers = [offer()], entries = [], checkout, order, clie
   runInNewContext(compiled, context);
   function render() {
     cursor = 0;
-    tree = context.exports.default({ companyId: currentCompany, recruitmentId, statusOnly, testMode });
+    tree = context.exports.default({ companyId: currentCompany, recruitmentId, statusOnly, testMode,
+      ...(cvPoolEnabled === undefined ? {} : { cvPoolEnabled }) });
     for (const effect of effects.splice(0)) effect();
     return tree;
   }
@@ -114,7 +115,14 @@ async function harness({ offers = [offer()], entries = [], checkout, order, clie
     render();
     return elements(tree).find(node => node.type === 'input' && node.props.type === 'checkbox');
   }
-  return { storage, posts, redirects, statusReads, replacedUrls, find, click, checkbox,
+  function setPool(value) {
+    render();
+    const input = elements(tree).find(node => node.type === 'input' && node.props.type === 'number');
+    assert.ok(input, 'Missing CV pool input');
+    input.props.onChange({ target: { value: String(value) } });
+    render();
+  }
+  return { storage, posts, redirects, statusReads, replacedUrls, find, click, checkbox, setPool,
     uuidCount: () => sequence,
     accept() { checkbox().props.onChange({ target: { checked: true } }); render(); },
     close() { for (const hook of hooks) hook?.cleanup?.(); },
@@ -490,4 +498,87 @@ test('an unnamed checkout failure shows only its code and invites a retry; detai
   html.accept();
   await html.click('Zamawiam');
   assert.match(String(html.find('p','pomoc@skillcheck.pl').props.children), /kod: HTTP 502\.$/);
+});
+
+// R5 W2b: the CV pool chosen in the form goes with the order only behind
+// PRICING_CV_SLIDER_ENABLED (passed by page.tsx as `cvPoolEnabled`).
+const redirecting = async () => ok({ orderId:'order-a', status:'awaiting_payment', checkoutUrl:'https://pay.fixture.invalid/a' });
+test('R5 W2b: with the slider flag off the order request keeps its exact pre-W2b shape', async t => {
+  for (const cvPoolEnabled of [undefined, false]) {
+    const h = await harness({ checkout: redirecting, cvPoolEnabled });
+    t.after(h.close);
+    h.setPool(65);
+    h.accept();
+    await h.click('Zamawiam');
+    assert.deepEqual(Object.keys(h.posts[0]).sort(),
+      ['companyId','offerId','packageCode','packages','requestId','termsRevision']);
+    assert.equal(h.posts[0].packages, 2);
+    assert.equal('cvCount' in h.posts[0], false);
+  }
+});
+
+test('R5 W2b: with the slider flag on the chosen CV pool is sent with the matching package count', async t => {
+  for (const [pool, packages] of [[60, 1], [65, 2], [120, 2], [1200, 20]]) {
+    const h = await harness({ checkout: redirecting, cvPoolEnabled: true });
+    t.after(h.close);
+    if (pool !== 60) h.setPool(pool);
+    h.accept();
+    await h.click('Zamawiam');
+    assert.equal(h.posts.length, 1, String(pool));
+    assert.equal(h.posts[0].cvCount, pool);
+    assert.equal(h.posts[0].packages, packages);
+    assert.equal(h.posts[0].packageCode, 'PRESELEKCJA');
+    // Never a price or credits from the browser.
+    assert.equal('amountMinor' in h.posts[0], false);
+    assert.equal('credits' in h.posts[0], false);
+    assert.deepEqual(h.redirects, ['https://pay.fixture.invalid/a']);
+  }
+});
+
+test('R5 W2b: a pool the slider cannot produce is never posted, flag on or off', async t => {
+  for (const cvPoolEnabled of [true, false]) for (const pool of [62, 0, 1205, 'abc']) {
+    const h = await harness({ checkout: redirecting, cvPoolEnabled });
+    t.after(h.close);
+    h.setPool(pool);
+    h.accept();
+    assert.equal(h.find('button', 'Zamawiam').props.disabled, true, `${cvPoolEnabled} ${pool}`);
+    assert.equal(h.posts.length, 0);
+  }
+});
+
+test('R5 W2b: only PRESELEKCJA sends a CV pool; other packages keep their one-package request', async t => {
+  const weryfikacja = { ...offer('offer-w'), packageCode: 'WERYFIKACJA', credits: 60 };
+  const h = await harness({ offers: [weryfikacja], checkout: redirecting, cvPoolEnabled: true });
+  t.after(h.close);
+  h.accept();
+  await h.click('Zamawiam');
+  assert.equal(h.posts[0].packageCode, 'WERYFIKACJA');
+  assert.equal(h.posts[0].packages, 1);
+  assert.equal('cvCount' in h.posts[0], false);
+});
+
+test('R5 W2b: a refused CV count shows the server sentence as text, resets acceptance and never redirects', async t => {
+  const refusing = message => harness({ cvPoolEnabled: true, checkout: async () => ({ ok:false, status:400,
+    json: async () => ({ error:'SC19_PAYMENT_CV_COUNT_INVALID', ...(message === undefined ? {} : { message }) }) }) });
+  const sentence = 'Liczbę CV wybiera się co 5. 62 nie jest dozwoloną wartością.';
+  const h = await refusing(sentence);
+  t.after(h.close);
+  h.accept();
+  await h.click('Zamawiam');
+  assert.ok(h.find('p', sentence));
+  assert.equal(h.checkbox().props.checked, false);
+  assert.deepEqual(h.redirects, []);
+  for (const odd of [undefined, 42, '', 'x'.repeat(301)]) {
+    const f = await refusing(odd);
+    t.after(f.close);
+    f.accept();
+    await f.click('Zamawiam');
+    assert.ok(f.find('p', 'Wybierz pulę CV ponownie'), String(odd));
+  }
+});
+
+test('R5 W2b: page.tsx passes the slider flag from the server environment only', async () => {
+  const page = await readFile(new URL('../app/dashboard/[companyId]/billing/checkout/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /cvPoolEnabled=\{process\.env\.PRICING_CV_SLIDER_ENABLED==='true'\}/);
+  assert.doesNotMatch(source, /NEXT_PUBLIC_PRICING_CV_SLIDER/);
 });
