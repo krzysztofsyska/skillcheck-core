@@ -24,7 +24,14 @@ export async function sessionBoot(t, options = {}) {
  const finalist = (owner=users.owner) => e.seed({owner,shortlist:true});
  const saveDefinition = (f,definition) => call('public.save_exercise_definition',
   [f.recruitment.id,randomUUID(),JSON.stringify(definition),0,f.position.id,f.position.updated_at]);
- const plan = async (f,{template=hrbpCaseTemplate,stages=template.stages,competencies=template.plannedCompetencies}={}) => {
+ // R3 (20261121090000): a session needs the company's paid ASSESSMENT CENTER package.
+ // Synthetic entitlement row, as a settled catalog order would leave it; harmless before the gate.
+ const grantAcPackage = async f => {
+  await h.asAdmin();
+  await e.db.query("insert into sc19_commerce.entitlements(company_id,code,available) values($1,'package:ASSESSMENT_CENTER',1) on conflict(company_id,code) do update set available=greatest(sc19_commerce.entitlements.available,1)",[f.companyId]);
+ };
+ const plan = async (f,{template=hrbpCaseTemplate,stages=template.stages,competencies=template.plannedCompetencies,acPackage=true}={}) => {
+  if (acPackage) await grantAcPackage(f);
   await h.asUser(f.owner);
   const sessionId = await call('public.ac_session_create',[f.recruitment.id,template.title,competencies]);
   const saved = [];
@@ -46,5 +53,5 @@ export async function sessionBoot(t, options = {}) {
   call('public.ac_session_record_entry',[sessionId,f.application.id,stage?.id??null,kind,JSON.stringify(body)],client);
  const read = sessionId => call('public.ac_session_read',[sessionId]);
  const find = f => call('public.ac_session_find',[f.recruitment.id]);
- return {...e,finalist,saveDefinition,plan,addStage,addFinalist,setStatus,assign,submit,reconcile,confirm,record,read,find};
+ return {...e,finalist,grantAcPackage,saveDefinition,plan,addStage,addFinalist,setStatus,assign,submit,reconcile,confirm,record,read,find};
 }
