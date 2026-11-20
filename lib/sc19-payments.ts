@@ -20,7 +20,9 @@ export type PaymentOrder = Readonly<{
   id: string; companyId: string; buyerId: string; requestId: string;
   offerId: string; offerRevision: string; termsRevision: string;
   amountMinor: number; currency: 'PLN'; credits: number; scope: PaymentScope;
-  status: 'awaiting_payment' | 'paid'; sessionId: string | null;
+  /** 'expired' (R7): the provider confirmed the order's session expired unpaid and
+   * the order was closed without any grant (sc19_stripe.close_expired_order). Final. */
+  status: 'awaiting_payment' | 'paid' | 'expired'; sessionId: string | null;
   checkoutUrl: string | null; paymentId: string | null; checkoutDeadlineMs: number;
   /** R7: set only for a package other than PRESELEKCJA (absent = PRESELEKCJA, the
    * pre-R7 shape every existing order row has). */
@@ -36,8 +38,14 @@ export type HostedCheckout = Readonly<{
 export type VerifiedPayment = Readonly<{
   eventId: string; orderId: string; sessionId: string; paymentId: string;
   scope: PaymentScope; amountMinor: number; currency: string;
-  status: 'paid' | 'pending' | 'failed';
+  /** 'expired' (R7): the provider confirmed the session expired unpaid (Stripe
+   * checkout.session.expired re-read from the API). It never grants; it only closes
+   * the order bound to exactly that session. */
+  status: 'paid' | 'pending' | 'failed' | 'expired';
 }>;
+/** Result of closing an order whose provider session expired unpaid. 'unsupported'
+ * = the database has no closing function yet (pre-migration schema). */
+export type CloseExpiredResult = 'closed' | 'already_closed' | 'unsupported';
 export interface PaymentTransaction {
   /** Fresh DB authorization under the transaction, never browser/JWT user_metadata. */
   companyAccess(companyId: string, userId: string): Promise<{ owner: boolean; verified: boolean }>;
@@ -60,6 +68,10 @@ export interface PaymentTransaction {
    * increment the existing SC-019 balance inside this SAME transaction.
    */
   grantOnce(key: string, order: PaymentOrder): Promise<string | null>;
+  /** OPTIONAL (R7): close the locked, unpaid order bound to `sessionId` after the
+   * provider confirmed that session expired unpaid. Grants nothing. Must refuse
+   * (throw) for a paid order, another session or an existing receipt. */
+  closeExpired?(order: PaymentOrder, sessionId: string): Promise<CloseExpiredResult>;
 }
 export interface PaymentStore {
   /** Commit all writes on success; rollback ALL writes on any error. Implement
@@ -124,6 +136,10 @@ export class Sc19PaymentError extends Error {
   constructor(code: string, userMessage: string | null = null) { super(code); this.code = code; this.userMessage = userMessage; }
 }
 const deny = (code: string): never => { throw new Sc19PaymentError(code); };
+/** R7: the order's payment session expired unpaid and the order is closed without
+ * any grant. The buyer starts a NEW purchase (a new request id). */
+export const SESSION_EXPIRED_MESSAGE = 'Sesja płatności wygasła, a zamówienie zamknęliśmy bez opłaty. Rozpocznij zakup ponownie.';
+const expiredDeny = (): never => { throw new Sc19PaymentError('SC19_PAYMENT_SESSION_EXPIRED', SESSION_EXPIRED_MESSAGE); };
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const opaque = /^[A-Za-z0-9][A-Za-z0-9_.:-]{1,159}$/;
 function stringId(value: unknown): value is string { return typeof value === 'string' && opaque.test(value); }
@@ -247,6 +263,7 @@ export function createSc19Payments(deps: PaymentDependencies) {
         if (access.owner !== true || access.verified !== true ||
             current.buyerId !== userId) return deny('SC19_PAYMENT_FORBIDDEN');
       }
+      if (current.status === 'expired') return expiredDeny();
       if (current.sessionId !== null && current.sessionId !== hosted.sessionId)
         return deny('SC19_PAYMENT_SESSION_CONFLICT');
       if (current.checkoutUrl !== null && current.checkoutUrl !== hosted.url)
@@ -304,6 +321,30 @@ export function createSc19Payments(deps: PaymentDependencies) {
     });
   }
 
+  /** R7: close an unpaid order whose provider session `sessionId` expired, under the
+   * row lock. Never grants. A paid order is returned as paid; another bound session
+   * or a missing order is a reconciliation case. `userId` (customer checkout)
+   * re-checks current owner authorization; a signed webhook passes none. */
+  async function closeExpiredOrder(orderId: string, sessionId: string, userId?: string):
+      Promise<{ state: CloseExpiredResult; orderId: string } | { orderId: string; paid: true }> {
+    return deps.store.transaction(async tx => {
+      const current = await tx.order(orderId);
+      if (!current) return deny('SC19_PAYMENT_RECONCILIATION_REQUIRED');
+      requireOrderScope(current);
+      if (userId !== undefined) {
+        const access = await tx.companyAccess(current.companyId, userId);
+        if (access.owner !== true || access.verified !== true ||
+            current.buyerId !== userId) return deny('SC19_PAYMENT_FORBIDDEN');
+      }
+      if (current.status === 'paid') return { orderId: current.id, paid: true as const };
+      if (current.sessionId !== sessionId) return deny('SC19_PAYMENT_RECONCILIATION_REQUIRED');
+      if (current.status === 'expired') return { state: 'already_closed' as const, orderId: current.id };
+      if (current.status !== 'awaiting_payment') return deny('SC19_PAYMENT_RECONCILIATION_REQUIRED');
+      if (!tx.closeExpired) return { state: 'unsupported' as const, orderId: current.id };
+      return { state: await tx.closeExpired(clone(current), sessionId), orderId: current.id };
+    });
+  }
+
   async function checkout(input: unknown): Promise<HostedCheckout | { orderId: string; paid: true }> {
     checkoutGate();
     const req = clone(input);
@@ -335,12 +376,15 @@ export function createSc19Payments(deps: PaymentDependencies) {
         if (previous.buyerId !== userId || previous.offerId !== offerId || previous.termsRevision !== terms ||
             !(await samePackages(tx, previous)))
           return deny('SC19_PAYMENT_REQUEST_CONFLICT');
+        // A closed order is never reopened by its old request id.
+        if (previous.status === 'expired') return expiredDeny();
         return clone(previous);
       }
       // Browser IDs are only retry aliases, never permission to open another
       // unresolved purchase. Keep the original economics and provider key even
       // after a lost response, storage eviction, new device or service restart.
       const pending = await tx.unresolvedOrder(companyId);
+      if (pending && pending.status !== 'awaiting_payment') return deny('SC19_PAYMENT_RECONCILIATION_REQUIRED');
       if (pending) {
         if (!sameScope(pending.scope, scope) || pending.buyerId !== userId ||
             pending.offerId !== offerId || pending.termsRevision !== terms ||
@@ -369,13 +413,17 @@ export function createSc19Payments(deps: PaymentDependencies) {
       return created;
     });
     if (order.status === 'paid') return { orderId: order.id, paid: true };
+    if (order.status === 'expired') return expiredDeny();
     if (order.sessionId && order.checkoutUrl) {
-      // A provider-confirmed expired session can never be paid. The order row keeps
-      // its session for good (trigger sc19_order_immutable), so the buyer gets the
-      // reconciliation answer instead of a dead payment link. Releasing such an
-      // order needs an owner-approved schema change (see PR #556, KNOWN ISSUES).
-      if (deps.provider.expiredSession && await deps.provider.expiredSession(clone(order)))
-        return deny('SC19_PAYMENT_RECONCILIATION_REQUIRED');
+      // A provider-confirmed expired session can never be paid. R7: the order is
+      // closed without any grant (sc19_stripe.close_expired_order), which frees the
+      // company's one unresolved purchase; the buyer starts a new purchase. On a
+      // database without that function the old answer stays (reconciliation).
+      if (deps.provider.expiredSession && await deps.provider.expiredSession(clone(order))) {
+        const closed = await closeExpiredOrder(order.id, order.sessionId, userId);
+        if ('paid' in closed) return closed;
+        return closed.state === 'unsupported' ? deny('SC19_PAYMENT_RECONCILIATION_REQUIRED') : expiredDeny();
+      }
       return storedCheckout(order);
     }
     let pending = order;
@@ -429,13 +477,16 @@ export function createSc19Payments(deps: PaymentDependencies) {
         !stringId(payment.sessionId) || !stringId(payment.paymentId) ||
         typeof payment.orderId !== 'string' || !uuid.test(payment.orderId) ||
         !money(payment.amountMinor) || payment.currency !== 'PLN' ||
-        !['paid', 'pending', 'failed'].includes(payment.status)) return deny('SC19_PAYMENT_NOTIFICATION_INVALID');
+        !['paid', 'pending', 'failed', 'expired'].includes(payment.status)) return deny('SC19_PAYMENT_NOTIFICATION_INVALID');
+    if (payment.status === 'expired') return closeNotified(payment);
     if (payment.status !== 'paid') return { state: 'not_paid' as const };
     // Lost createCheckout response: first re-bind the independently verified
     // original checkout, never trust a webhook-supplied session by itself.
     const before = await deps.store.transaction(tx => tx.order(payment.orderId));
     if (!before) return deny('SC19_PAYMENT_ORDER_MISSING');
     requireOrderScope(before);
+    // A closed order never grants (refund / manual review), whatever the event says.
+    if (before.status === 'expired') return deny('SC19_PAYMENT_ORDER_CLOSED_REVIEW');
     if (!before.sessionId) {
       const recovered = await reconcileSession(before);
       if (recovered === null) return deny('SC19_PAYMENT_SESSION_NOT_BOUND');
@@ -445,6 +496,7 @@ export function createSc19Payments(deps: PaymentDependencies) {
       if (!order) return deny('SC19_PAYMENT_ORDER_MISSING');
       requireOrderScope(order);
       // A second actual payment needs a refund/review even with a NEW session.
+      if (order.status === 'expired') return deny('SC19_PAYMENT_ORDER_CLOSED_REVIEW');
       if (order.status === 'paid' && order.paymentId !== payment.paymentId)
         return deny('SC19_PAYMENT_DOUBLE_PAYMENT_REVIEW');
       if (!order.sessionId) return deny('SC19_PAYMENT_SESSION_NOT_BOUND');
@@ -460,6 +512,22 @@ export function createSc19Payments(deps: PaymentDependencies) {
       await tx.saveOrder({ ...order, status: 'paid', paymentId: payment.paymentId });
       return { state: previouslyGrantedTo === null ? 'applied' as const : 'already_applied' as const, orderId: order.id };
     });
+  }
+  /** A verified "session expired" notification closes the order bound to exactly
+   * that session. Anything else (unknown order, no or another session, already paid,
+   * a database without the closing function) is acknowledged with no action. */
+  async function closeNotified(payment: VerifiedPayment) {
+    const before = await deps.store.transaction(tx => tx.order(payment.orderId));
+    if (!before) return { state: 'ignored' as const };
+    requireOrderScope(before);
+    if (before.sessionId !== payment.sessionId || before.status === 'paid') return { state: 'ignored' as const };
+    if (before.status === 'expired') return { state: 'already_closed' as const, orderId: before.id };
+    const closed = await closeExpiredOrder(before.id, payment.sessionId).catch((e: unknown) => {
+      if (e instanceof Sc19PaymentError && e.code === 'SC19_PAYMENT_RECONCILIATION_REQUIRED') return null;
+      throw e;
+    });
+    if (!closed || 'paid' in closed || closed.state === 'unsupported') return { state: 'ignored' as const };
+    return { state: closed.state, orderId: closed.orderId };
   }
   return Object.freeze({ checkout, notification, refreshSettlement, checkoutEnabled });
 }
