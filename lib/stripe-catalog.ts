@@ -74,3 +74,38 @@ export function stripeQuote(code: unknown, packages: unknown): StripeQuote | nul
   const pkg = STRIPE_CATALOG[code], n = Number(packages);
   return Object.freeze({ code, packages: n, grossMinor: pkg.grossMinor * n, cvCredits: pkg.cvCredits * n });
 }
+
+export type CvCountCheck = Readonly<{ ok: true; packages: number }> | Readonly<{ ok: false; message: string }>;
+
+/** R5 W2b: server-side check of a CV count sent with an order (the slider pool).
+ *
+ * The count never sets the price or the credits: it only has to be a value the
+ * slider can produce for this package, and it is turned into whole packages here,
+ * on the server. Allowed values:
+ * - PRESELEKCJA: a multiple of CV_POOL_STEP from CV_POOL_STEP to MAX_PACKAGES × 60,
+ *   rounded UP to whole packages of 60 CV (owner, 19.11.2026);
+ * - WERYFIKACJA and ASSESSMENT CENTER: exactly the pool of one package. A larger
+ *   pool is priced by the CV overage rule, which is not sold online yet.
+ * `packages`, when the request also names it, must be the same number of packages
+ * the count gives; a mismatch is refused, never silently resolved either way.
+ * Messages are Polish and contain only numbers from the request and the catalog. */
+export function checkCvCount(code: StripePackageCode, cvCount: unknown, packages: number | null = null): CvCountCheck {
+  const pkg = STRIPE_CATALOG[code];
+  const no = (message: string): CvCountCheck => Object.freeze({ ok: false, message });
+  if (typeof cvCount !== 'number' || !Number.isSafeInteger(cvCount) || cvCount < 0)
+    return no('Liczba CV musi być liczbą całkowitą.');
+  if (code !== 'PRESELEKCJA') {
+    if (cvCount === pkg.cvCredits) return packages === null || packages === 1 ? Object.freeze({ ok: true, packages: 1 })
+      : no(`Pakiet ${pkg.name} kupuje się online tylko jako jeden pakiet (${pkg.cvCredits} CV).`);
+    return no(`Pakiet ${pkg.name} ma pulę ${pkg.cvCredits} CV. Inną pulę CV zamówisz przez obsługę SkillCheck.`);
+  }
+  const max = MAX_PACKAGES * pkg.cvCredits;
+  if (cvCount < CV_POOL_STEP) return no(`Najmniejsza pula CV to ${CV_POOL_STEP}.`);
+  if (cvCount % CV_POOL_STEP !== 0) return no(`Liczbę CV wybiera się co ${CV_POOL_STEP}. ${cvCount} nie jest dozwoloną wartością.`);
+  if (cvCount > max) return no(`Największa pula CV w jednym zakupie to ${max}. Większe zamówienie złożysz przez obsługę SkillCheck.`);
+  const derived = packagesForPool(cvCount, code);
+  if (derived === null) return no('Tej liczby CV nie można zamówić online.');
+  if (packages !== null && packages !== derived)
+    return no(`Liczba CV (${cvCount}) nie zgadza się z liczbą pakietów (${packages}). Odśwież stronę i wybierz pulę CV ponownie.`);
+  return Object.freeze({ ok: true, packages: derived });
+}
