@@ -86,7 +86,7 @@ async function renderPage({ analysis, rows = [], stale = false } = {}) {
   const code = ts.transpileModule(readFileSync(path, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, esModuleInterop: true } }).outputText;
   const require = createRequire(import.meta.url);
   const mod = { exports: {} };
-  const replacements = { 'next/link': ({ children, ...props }) => React.createElement('a', props, children), 'next/navigation': { notFound() { throw Error('404'); } }, '../screening/screening.module.css': {} };
+  const replacements = { 'next/link': ({ children, ...props }) => React.createElement('a', props, children), 'next/navigation': { notFound() { throw Error('404'); } }, '../screening/screening.module.css': {}, './voice-order-panel': { VoiceOrderPanel: () => null } };
   const customRequire = name => {
     if (Object.hasOwn(replacements, name)) return replacements[name];
     if (name.endsWith('/lib/company-access')) return { companyAccess: async () => ({ client, canEdit: true }) };

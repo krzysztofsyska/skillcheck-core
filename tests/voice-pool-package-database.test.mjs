@@ -17,6 +17,7 @@
 //  - one company's packages never give or show a pool to another company.
 // Native disposable PostgreSQL only; synthetic data; package data is only read;
 // no provider, no network, nothing granted to API roles.
+import './voice-order-check-database.test.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
