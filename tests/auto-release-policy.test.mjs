@@ -194,6 +194,8 @@ test('F1: every money-moving or invoicing file is refused by path (repository-wi
     'lib/ai-ledger-writer.ts': 'only imports the shared TLS helper previewPoolTls from sc19-payment-preview-tls.ts',
     'lib/competency-broker-tls.ts': 'only imports the shared TLS helper previewPoolTls from sc19-payment-preview-tls.ts',
     'lib/tenant-domain-network.ts': 'only imports the shared TLS helper previewPoolTls from sc19-payment-preview-tls.ts',
+    'lib/voice/retell-webhook-config.ts': 'R6 voice webhook config; only imports the shared preview DB URL helpers publicShape / restrictedDatabaseUrl from sc19-payment-preview.ts',
+    'lib/voice/retell-webhook-runtime.ts': 'R6 voice webhook runtime; only imports the shared TLS helper previewPoolTls from sc19-payment-preview-tls.ts',
     // Payment-path freeze lifted by the owner on 2026-11-19: purchase flow, offers and the Stripe
     // adapter release like other reviewed work. Their changed lines that touch the P24/Fakturownia
     // or sc19-payments core are still refused by PAYMENTS_CONTENT.
