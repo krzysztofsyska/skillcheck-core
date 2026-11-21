@@ -110,6 +110,11 @@ export interface PaymentProvider {
    * session has expired and can never be paid (Stripe Checkout: status=expired).
    * The stored link is then not returned. Throw on any uncertainty. */
   expiredSession?(order: PaymentOrder): Promise<boolean>;
+  /** OPTIONAL, READ ONLY (R7): the create response was lost before the order stored
+   * its session. Return that session's id only when the provider lists exactly one
+   * session for this order and confirms it expired unpaid; null otherwise (none,
+   * several, open, paid, list not complete). Throw on any uncertainty. */
+  expiredUnboundSession?(order: PaymentOrder): Promise<string | null>;
   verifyAndRetrieve(rawBody: Uint8Array, signature: string): Promise<VerifiedPayment | null>;
 }
 export type PaymentDependencies = Readonly<{
@@ -139,6 +144,9 @@ const deny = (code: string): never => { throw new Sc19PaymentError(code); };
 /** R7: the order's payment session expired unpaid and the order is closed without
  * any grant. The buyer starts a NEW purchase (a new request id). */
 export const SESSION_EXPIRED_MESSAGE = 'Sesja płatności wygasła, a zamówienie zamknęliśmy bez opłaty. Rozpocznij zakup ponownie.';
+/** R7: the link bound for one transaction while an order whose create response was
+ * lost is closed (closeUnboundExpired). Not a URL: it is never served. */
+const UNBOUND_EXPIRED_MARKER = 'sc19:expired-unbound';
 const expiredDeny = (): never => { throw new Sc19PaymentError('SC19_PAYMENT_SESSION_EXPIRED', SESSION_EXPIRED_MESSAGE); };
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const opaque = /^[A-Za-z0-9][A-Za-z0-9_.:-]{1,159}$/;
@@ -347,6 +355,41 @@ export function createSc19Payments(deps: PaymentDependencies) {
     });
   }
 
+  /** R7: Stripe created the session but its response was lost before bindHosted, and
+   * Stripe (expiredUnboundSession) now confirms that the order's only session expired
+   * unpaid. Binds that session and closes the order in ONE transaction: both or
+   * neither. The bound link is a fixed non-URL marker, never served (it fails
+   * safeCheckoutUrl) and closed in the same transaction. Never grants. */
+  async function closeUnboundExpired(orderId: string, sessionId: string, userId?: string):
+      Promise<{ state: CloseExpiredResult; orderId: string } | { orderId: string; paid: true }> {
+    const rollback = new Error('SC19_PAYMENT_CLOSE_UNSUPPORTED');
+    try {
+      return await deps.store.transaction(async tx => {
+        const current = await tx.order(orderId);
+        if (!current) return deny('SC19_PAYMENT_RECONCILIATION_REQUIRED');
+        requireOrderScope(current);
+        if (userId !== undefined) {
+          const access = await tx.companyAccess(current.companyId, userId);
+          if (access.owner !== true || access.verified !== true ||
+              current.buyerId !== userId) return deny('SC19_PAYMENT_FORBIDDEN');
+        }
+        if (current.status === 'paid') return { orderId: current.id, paid: true as const };
+        if (current.status !== 'awaiting_payment' || current.sessionId !== null || current.checkoutUrl !== null ||
+            !stringId(sessionId)) return deny('SC19_PAYMENT_RECONCILIATION_REQUIRED');
+        if (!tx.closeExpired) return { state: 'unsupported' as const, orderId: current.id };
+        const bound: PaymentOrder = { ...current, sessionId, checkoutUrl: UNBOUND_EXPIRED_MARKER };
+        await tx.saveOrder(bound);
+        const state = await tx.closeExpired(clone(bound), sessionId);
+        // A database without the closing function: undo the binding as well.
+        if (state === 'unsupported') throw rollback;
+        return { state, orderId: current.id };
+      });
+    } catch (e) {
+      if (e === rollback) return { state: 'unsupported' as const, orderId };
+      throw e;
+    }
+  }
+
   async function checkout(input: unknown): Promise<HostedCheckout | { orderId: string; paid: true }> {
     checkoutGate();
     const req = clone(input);
@@ -432,6 +475,15 @@ export function createSc19Payments(deps: PaymentDependencies) {
     if (Date.now() >= order.checkoutDeadlineMs) {
       const recovered = await reconcileSession(order, userId);
       if (recovered) return recovered;
+      // R7: a lost create response whose session has since expired. Reopening would
+      // only replay that dead session, so the order is closed (no grant) instead.
+      const lost = deps.provider.expiredUnboundSession
+        ? await deps.provider.expiredUnboundSession(clone(order)) : null;
+      if (lost !== null) {
+        const closed = await closeUnboundExpired(order.id, lost, userId);
+        if ('paid' in closed) return closed;
+        return closed.state === 'unsupported' ? deny('SC19_PAYMENT_RECONCILIATION_REQUIRED') : expiredDeny();
+      }
       const reopened = await reopenAbsentSession(order, userId);
       if (!('reopen' in reopened)) return reopened;
       pending = reopened.reopen;
@@ -522,9 +574,15 @@ export function createSc19Payments(deps: PaymentDependencies) {
     const before = await deps.store.transaction(tx => tx.order(payment.orderId));
     if (!before) return { state: 'ignored' as const };
     requireOrderScope(before);
-    if (before.sessionId !== payment.sessionId || before.status === 'paid') return { state: 'ignored' as const };
+    // R7: no session bound (the create response was lost). Closed only when Stripe,
+    // re-read, lists this event's session as the order's one and only, expired unpaid.
+    const unbound = before.status === 'awaiting_payment' && before.sessionId === null;
+    if (unbound && (!deps.provider.expiredUnboundSession ||
+        await deps.provider.expiredUnboundSession(clone(before)) !== payment.sessionId)) return { state: 'ignored' as const };
+    if (!unbound && (before.sessionId !== payment.sessionId || before.status === 'paid')) return { state: 'ignored' as const };
     if (before.status === 'expired') return { state: 'already_closed' as const, orderId: before.id };
-    const closed = await closeExpiredOrder(before.id, payment.sessionId).catch((e: unknown) => {
+    const close = unbound ? closeUnboundExpired : closeExpiredOrder;
+    const closed = await close(before.id, payment.sessionId).catch((e: unknown) => {
       if (e instanceof Sc19PaymentError && e.code === 'SC19_PAYMENT_RECONCILIATION_REQUIRED') return null;
       throw e;
     });
