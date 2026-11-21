@@ -97,7 +97,7 @@
     "test:voice-settlement-migration-db": "node scripts/r6-voice-settlement-compose.mjs --check && node --experimental-strip-types --test --test-concurrency=1 tests/voice-settlement-migration-database.test.mjs",
     "test:voice-resolution-migration-db": "node scripts/r6-voice-resolution-compose.mjs --check && node --experimental-strip-types --test --test-concurrency=1 tests/voice-resolution-migration-database.test.mjs",
     "test:voice-transcripts-migration-db": "node scripts/r6-voice-transcripts-compose.mjs --check && node --experimental-strip-types --test --test-concurrency=1 tests/voice-transcripts-migration-database.test.mjs tests/voice-transcript-reader-database.test.mjs",
-    "test:voice-retention-migration-db": "node scripts/r6-voice-retention-compose.mjs --check && node --experimental-strip-types --test --test-concurrency=1 tests/voice-retention-migration-database.test.mjs tests/voice-cost-cap-database.test.mjs",
+    "test:voice-retention-migration-db": "node scripts/r6-voice-retention-compose.mjs --check && node --experimental-strip-types --test --test-concurrency=1 tests/voice-retention-migration-database.test.mjs tests/voice-cost-cap-database.test.mjs tests/retell-webhook-role-database.test.mjs",
     "test:form-reset": "node --test tests/form-reset-on-error.test.mjs"
   },
   "dependencies": {
