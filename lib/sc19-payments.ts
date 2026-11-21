@@ -246,11 +246,13 @@ export function createSc19Payments(deps: PaymentDependencies) {
   const fulfillmentGate = () => {
     if (!validScope(scope)) deny('SC19_PAYMENTS_DISABLED');
   };
+  // Stripe returns Checkout URLs with a fragment (`/c/pay/cs_...#...`) that the hosted
+  // page needs, so a fragment is allowed; protocol, credentials and origin stay strict.
   const safeCheckoutUrl = (text: string): boolean => {
     try {
       const url = new URL(text);
       return typeof text === 'string' && text.length <= 4096 && url.protocol === 'https:' &&
-        url.username === '' && url.password === '' && url.hash === '' &&
+        url.username === '' && url.password === '' &&
         origins.includes(url.origin);
     } catch { return false; }
   };
@@ -377,11 +379,13 @@ export function createSc19Payments(deps: PaymentDependencies) {
     // A named package must be the existing order's package.
     const samePackages = async (tx: PaymentTransaction, existing: PaymentOrder) => {
       if (packageCode !== null && orderPackage(existing) !== packageCode) return false;
-      if (packages === null) return true;
+      if (packages === null && orderPackage(existing) === 'PRESELEKCJA') return true;
       const offer = await tx.offer(existing.offerId);
-      if (!offer || offer.revision !== existing.offerRevision || packagesOf(offer, existing) !== packages) return false;
+      if (!offer || offer.revision !== existing.offerRevision) return false;
+      if (packages !== null && packagesOf(offer, existing) !== packages) return false;
       // R7: one WERYFIKACJA / ASSESSMENT CENTER package is the same purchase only
-      // with the same CV pool (no `cvCount` = the base pool).
+      // with the same CV pool (no `cvCount` = the base pool), also when the
+      // request names no package count.
       return offer.plan === 'PRESELEKCJA' || existing.credits === (cvPool ?? offer.credits);
     };
     const auth = await deps.authenticate();

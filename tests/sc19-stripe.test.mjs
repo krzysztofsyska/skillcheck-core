@@ -59,7 +59,7 @@ function fakeStripe() {
       const sid = `cs_test_fake${++s.seq}session`;
       const session = { id: sid, object: 'checkout.session', mode: body.mode, currency: body.currency, livemode: false,
         customer: body.customer, client_reference_id: body.client_reference_id, metadata, amount_total: unit * qty,
-        url: `${STRIPE_CHECKOUT_ORIGIN}/c/pay/${sid}`, status: 'open', payment_status: 'unpaid', payment_intent: null, params: body };
+        url: `${STRIPE_CHECKOUT_ORIGIN}/c/pay/${sid}#fidkdWxOYHwnPyd1blpxYHZxWjA0`, status: 'open', payment_status: 'unpaid', payment_intent: null, params: body };
       s.sessions.set(sid, session); return remember(session);
     }
     if (method === 'GET' && path === '/v1/checkout/sessions') {
@@ -185,7 +185,7 @@ test('Stripe-Signature: good, wrong secret, tampered body, stale timestamp', () 
 test('checkout: server amount for 2 packages, metadata on session AND PaymentIntent, one customer, branding, legal links', async () => {
   const { st, stripe, service } = harness();
   const result = await service.checkout(buy({ packages: 2 }));
-  assert.match(result.url, /^https:\/\/checkout\.stripe\.com\//);
+  assert.match(result.url, /^https:\/\/checkout\.stripe\.com\/c\/pay\/cs_[A-Za-z0-9_]+#fidkdWxOYHwnPyd1blpxYHZxWjA0$/);
   assert.equal(result.amountMinor, 60000);
   const order = st.orders.get(result.orderId);
   assert.equal(order.amountMinor, 60000); assert.equal(order.credits, 120); assert.equal(order.scope.provider, 'stripe');
@@ -476,6 +476,9 @@ test('R7: WERYFIKACJA with 100 CV — server-priced order, Stripe line item = or
   await assert.rejects(service.checkout(packageBuy('WERYFIKACJA', { packages: 1 })), e => e.code === 'SC19_PAYMENT_REQUEST_CONFLICT');
   assert.equal((await service.checkout(packageBuy('WERYFIKACJA', { requestId: id(40), cvCount: 100 }))).orderId, r.orderId);
   await assert.rejects(service.checkout(packageBuy('WERYFIKACJA', { requestId: id(41), cvCount: 60 })), e => e.code === 'SC19_PAYMENT_PURCHASE_PENDING');
+  // No `packages` and no `cvCount` means the base pool, so it is not the 100-CV purchase either.
+  await assert.rejects(service.checkout(packageBuy('WERYFIKACJA')), e => e.code === 'SC19_PAYMENT_REQUEST_CONFLICT');
+  await assert.rejects(service.checkout(packageBuy('WERYFIKACJA', { requestId: id(42) })), e => e.code === 'SC19_PAYMENT_PURCHASE_PENDING');
   assert.equal(stripe.calls.filter(c => c.method === 'POST' && c.path === '/v1/checkout/sessions').length, 1);
   // Paid webhook: exactly the chosen pool and the package entitlement, once.
   stripe.pay(order.sessionId);
