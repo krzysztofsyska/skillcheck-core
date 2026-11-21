@@ -13,6 +13,9 @@
 //    gives one pool of 10 per package (20261121160000), an odd or unprovable
 //    amount counts as 1 package, and extra packages of a purchase that already
 //    had its pool are added exactly once;
+//  - a WERYFIKACJA / ASSESSMENT CENTER package bought through the TEST-mode
+//    Stripe checkout is ONE package (10) with its own code, also with a larger
+//    CV pool (20261121230000; Codex P2 on PR #566: 120 CV gave 20);
 //  - retries and parallel calls never grant twice;
 //  - one company's packages never give or show a pool to another company.
 // Native disposable PostgreSQL only; synthetic data; package data is only read;
@@ -34,6 +37,7 @@ const functions = [syncFn, topupFn, 'private.sc19_voice_package_events(uuid)', '
   'private.sc19_voice_package_allowance(text)', 'private.sc19_voice_package_window()'];
 const migration = '20261121130000_r6_voice_package_pools.sql';
 const countMigration = '20261121160000_r6_voice_pool_package_count.sql';
+const stripeMigration = '20261121230000_r6_voice_pool_stripe_packages.sql';
 
 test('R6-2 packages: FREE 1, paid 10, idempotent, tenant-isolated, owner-only', async t => {
   const env = await bootMigrationDatabase(t);
@@ -112,6 +116,11 @@ test('R6-2 packages: FREE 1, paid 10, idempotent, tenant-isolated, owner-only', 
       'create trigger', 'grant execute', 'stripe', 'p24', 'retell'])
       assert.ok(!source.includes(write), `${file} code mentions ${write}`);
     }
+    // The Stripe fix only READS the Stripe package tables.
+    const stripeSource = (await readFile(new URL(`../supabase/migrations/${stripeMigration}`, import.meta.url), 'utf8')).replace(/--[^\n]*/g, '').toLowerCase();
+    for (const write of ['insert into', 'update ', 'delete from', 'sc19_commerce.entitlements', 'private.sc19_balances', 'pricing.',
+      'create table', 'alter table', 'create trigger', 'grant execute', 'grant_package', 'p24', 'retell'])
+      assert.ok(!stripeSource.includes(write), `${stripeMigration} code mentions ${write}`);
   });
 
   await t.test('no package: no pool and nothing to pick', async () => {
@@ -412,6 +421,81 @@ test('R6-2 packages: FREE 1, paid 10, idempotent, tenant-isolated, owner-only', 
     }
   });
 
+  // A TEST-mode Stripe package order granted the one way the app does it
+  // (sc19_stripe.grant_package), with a CV pool at the catalog amount
+  // (package_orders_price_list, 20261121190000). Synthetic ids only.
+  const stripeGross = (code, credits) => {
+    const [base, baseCv] = code === 'WERYFIKACJA' ? [50000, 60] : [121870, 50];
+    const net = base + (credits - baseCv) * 16;
+    return net + Math.floor((net * 2300 * 2 + 10000) / 20000);
+  };
+  const stripePackage = async (company, code, credits, status = 'paid') => {
+    const id = randomUUID(), sid = `cs_test_${id.replace(/-/g, '')}`;
+    await db.query(`insert into sc19_stripe.package_orders(id,company_id,buyer_id,request_id,package_code,offer_id,offer_revision,terms_revision,
+      amount_minor,currency,credits,provider,account,mode,status,session_id,checkout_url,checkout_deadline_ms)
+      values($1,$2,$3,$4,$5,'synthetic-offer','r1','t1',$6,'PLN',$7,'stripe','ktig-consulting','test','awaiting_payment',$8,$9,1)`,
+    [id, company, users.owner, randomUUID(), code, stripeGross(code, credits), credits, sid, `https://example.invalid/${sid}`]);
+    if (status === 'paid') {
+      const key = `pi_synthetic_${id.replace(/-/g, '')}`;
+      assert.equal(await one('select sc19_stripe.grant_package($1,$2) as v', [id, key]), null);
+      await db.query("update sc19_stripe.package_orders set status='paid', payment_id=$2 where id=$1", [id, key]);
+    }
+    return id;
+  };
+  const codes = async company => (await db.query(
+    'select package_code from private.sc19_voice_package_events($1) order by package_key', [company])).rows.map(r => r.package_code);
+
+  await t.test('a Stripe WERYFIKACJA / ASSESSMENT CENTER package is ONE package (10) with its own code, whatever its CV pool', async () => {
+    assert.equal(stripeGross('WERYFIKACJA', 60), 61500);
+    assert.equal(stripeGross('ASSESSMENT_CENTER', 50), 149900);
+    const cases = [['WERYFIKACJA', 120], ['ASSESSMENT_CENTER', 120], ['WERYFIKACJA', 60], ['ASSESSMENT_CENTER', 50], ['WERYFIKACJA', 150]];
+    for (const [code, credits] of cases) {
+      const f = await fresh();
+      await stripePackage(f.companyId, code, credits);
+      assert.equal(await one("select delta as v from private.sc19_credit_journal where company_id=$1 and reason='paid_grant'", [f.companyId]), credits);
+      assert.deepEqual(await codes(f.companyId), [code], `${code} ${credits} CV`);
+      assert.deepEqual(await sync(f.companyId), { package_pools: 1, created: 1 }, `${code} ${credits} CV`);
+      assert.deepEqual(await sync(f.companyId), { package_pools: 1, created: 0 }, 'a replay grants nothing');
+      assert.deepEqual(await totals(f.companyId), [10], `${code} ${credits} CV`);
+      assert.deepEqual(await balance(f.companyId), { granted: 10, used: 0, reserved: 0, available: 10 });
+    }
+    // An unpaid Stripe order gives nothing.
+    const unpaid = await fresh();
+    await stripePackage(unpaid.companyId, 'WERYFIKACJA', 120, 'awaiting_payment');
+    assert.deepEqual(await sync(unpaid.companyId), { package_pools: 0, created: 0 });
+    // A Stripe package next to a PRESELEKCJA checkout for 2 packages and FREE: 10 + 20 + 1.
+    const mixed = await fresh();
+    await trial(mixed.companyId);
+    await checkout(mixed.companyId, 120, 60000);
+    await stripePackage(mixed.companyId, 'ASSESSMENT_CENTER', 120);
+    assert.deepEqual(await sync(mixed.companyId), { package_pools: 4, created: 4 });
+    assert.deepEqual((await codes(mixed.companyId)).sort(), ['ASSESSMENT_CENTER', 'FREE', 'PRESELEKCJA', 'PRESELEKCJA']);
+    assert.deepEqual(await balance(mixed.companyId), { granted: 31, used: 0, reserved: 0, available: 31 });
+  });
+
+  await t.test('without the Stripe fix one 120-CV package counted as 2; rollback and reinstall keep the first pool', async () => {
+    const f = await fresh();
+    await stripePackage(f.companyId, 'WERYFIKACJA', 120);
+    assert.deepEqual(await sync(f.companyId), { package_pools: 1, created: 1 });
+    const firstRef = (await pools(f.companyId))[0].grant_reference;
+    await db.query(await readFile(new URL(`../supabase/rollbacks/${stripeMigration.replace('.sql', '_down.sql')}`, import.meta.url), 'utf8'));
+    // The previous body (20261121160000): the bug from the Codex finding.
+    assert.deepEqual(await codes(f.companyId), ['PRESELEKCJA', 'PRESELEKCJA']);
+    await db.query(await readFile(new URL(`../supabase/migrations/${stripeMigration}`, import.meta.url), 'utf8'));
+    await rejects(db.query(await readFile(new URL(`../supabase/migrations/${stripeMigration}`, import.meta.url), 'utf8')),
+      '55000', 'voice_pool_stripe_packages_already_installed');
+    await db.query('rollback').catch(() => {});
+    assert.deepEqual(await codes(f.companyId), ['WERYFIKACJA']);
+    assert.deepEqual(await sync(f.companyId), { package_pools: 1, created: 0 }, 'the existing first pool is recognised, never granted again');
+    assert.deepEqual((await pools(f.companyId)).map(p => [p.total, p.grant_reference]), [[10, firstRef]]);
+    for (const fn of functions) {
+      assert.equal(await one('select prosecdef as v from pg_proc where oid=$1::regprocedure', [fn]), true, fn);
+      assert.equal(await one(`select count(*)::int as v from pg_proc p,aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a
+        where p.oid=$1::regprocedure and a.grantee<>p.proowner`, [fn]), 0, fn);
+    }
+    assert.equal(await one('select private.erasure_schema_signature() as v'), signature);
+  });
+
   await t.test('upgrade: a purchase whose first pool exists gets only its extra packages, exactly once; rollback restores the old body', async () => {
     const f = await fresh();
     await checkout(f.companyId, 120, 60000);
@@ -427,6 +511,9 @@ test('R6-2 packages: FREE 1, paid 10, idempotent, tenant-isolated, owner-only', 
     assert.deepEqual(await sync(f.companyId), { package_pools: 2, created: 1 }, 'only the second package is added');
     assert.deepEqual(await sync(f.companyId), { package_pools: 2, created: 0 });
     assert.deepEqual(await totals(f.companyId), [10, 10]);
+    // The Stripe fix (20261121230000) needs the per-package body and goes back on top of it.
+    await db.query(await readFile(new URL(`../supabase/migrations/${stripeMigration}`, import.meta.url), 'utf8'));
+    assert.deepEqual(await sync(f.companyId), { package_pools: 2, created: 0 });
     for (const fn of functions) {
       assert.equal(await one('select prosecdef as v from pg_proc where oid=$1::regprocedure', [fn]), true, fn);
       assert.equal(await one(`select count(*)::int as v from pg_proc p,aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a
