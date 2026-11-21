@@ -136,3 +136,5 @@
 20261121220000_r6_retell_webhook_role.sql
 # R6-2 (packages) Codex P2 on #566: a WERYFIKACJA / ASSESSMENT CENTER package bought through the TEST-mode Stripe checkout is ONE package (10 voice interviews) with its own code, also with a larger CV pool (120 CV no longer counts as 2 PRESELEKCJA packages): only the body of private.sc19_voice_package_events changes (one added read of sc19_stripe.package_grants / package_orders, same reference formula as sc19_stripe.grant_package; first-package key unchanged, so no pool is granted twice). Functions only, erasure signature unchanged, owner-only, nothing sent, test data only.
 20261121230000_r6_voice_pool_stripe_packages.sql
+# R7 (live payments, part: VAT invoice): one Fakturownia VAT invoice per paid LIVE Stripe order — new table sc19_stripe.vat_invoices and two security-definer functions (claim_vat_invoice, finish_vat_invoice), EXECUTE only for the payment adapter's existing restricted roles. Additive only; no existing table, policy, function body or row changed; test-mode orders are never invoiced, so nothing is sent to Fakturownia from Preview.
+20261122000000_r7_fakturownia_vat_invoice.sql
