@@ -270,13 +270,21 @@ test('an order paid or bound meanwhile is reported as such instead of being regi
   assert.equal(half.state.createCalls.length, 1);
 });
 
-test('checkout URL must match exact approved HTTPS origin, no credentials or fragment', async () => {
+test('checkout URL must match exact approved HTTPS origin, no credentials', async () => {
   for (const url of ['http://pay.fixture.invalid/x', 'https://pay.fixture.invalid.evil.test/x',
-    'https://user:pass@pay.fixture.invalid/x', 'https://pay.fixture.invalid/x#token', 'javascript:alert(1)']) {
+    'https://user:pass@pay.fixture.invalid/x', 'http://pay.fixture.invalid/x#token',
+    'https://evil.test/x#token', 'https://pay.fixture.invalid/' + 'a'.repeat(4096) + '#f', 'javascript:alert(1)']) {
     const h = harness(); h.state.url = url;
     await rejects(h.service.checkout(request()), 'SC19_PAYMENT_CHECKOUT_INVALID');
     assert.equal([...h.state.orders.values()][0].sessionId, null);
   }
+});
+
+test('a checkout URL with a fragment (as Stripe returns it) is accepted and returned unchanged', async () => {
+  const h = harness(); h.state.url = 'https://pay.fixture.invalid/c/pay/cs_test_a1#fidkdWxOYHwnPyd1blpxYHZxWjA0';
+  const hosted = await h.service.checkout(request());
+  assert.equal(hosted.url, h.state.url);
+  assert.equal([...h.state.orders.values()][0].checkoutUrl, h.state.url);
 });
 
 test('provider merchant/test-live mismatch cannot bind checkout', async () => {

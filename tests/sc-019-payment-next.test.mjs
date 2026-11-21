@@ -47,10 +47,13 @@ test('SC19 real Next routes: authenticated owner UI and disabled transport',asyn
  });
  await t.test('every route that could take money refuses activation; no browser success query changes state',async()=>{
   // Registering a transaction needs a provider; there is none, so these stay shut.
-  for(const [p,method] of [['checkout','POST'],['orders/'+company+'?companyId='+company+'&success=true','GET'],['webhook','POST']]){
+  for(const [p,method] of [['checkout','POST'],['orders/'+company+'?companyId='+company+'&success=true','GET'],['stripe/webhook','POST']]){
     const r=await fetch(base+'/api/billing/'+p,{method,headers:{...headers,Origin:base,'Content-Type':'application/json'},...(method==='POST'?{body:'{}'}:{})});
     assert.equal(r.status,503);assert.match(r.headers.get('cache-control'),/no-store/);assert.deepEqual(await r.json(),{error:'SC19_PAYMENTS_DISABLED'});
   }
+  // The removed Przelewy24 notification route no longer exists.
+  const gone=await fetch(base+'/api/billing/webhook',{method:'POST',headers:{...headers,Origin:base,'Content-Type':'application/json'},body:'{}'});
+  assert.equal(gone.status,404);
  });
  await t.test('reading the offer needs no provider, but the stub database still refuses this company',async()=>{
   // The read-only catalog is composed even with no provider. Against the synthetic
@@ -86,7 +89,7 @@ test('SC19 offer route honours SC19_PACKAGES_ENABLED before resolving the catalo
   assert.deepEqual(await r.json(),{error:'SC19_PAYMENTS_DISABLED'});
  });
  await t.test('the write routes stay refused and the checkout page sells nothing',async()=>{
-  for(const [p,method] of [['checkout','POST'],['webhook','POST']]){
+  for(const [p,method] of [['checkout','POST'],['stripe/webhook','POST']]){
    const r=await fetch(base+'/api/billing/'+p,{method,headers:{...headers,Origin:base,'Content-Type':'application/json'},body:'{}'});
    assert.equal(r.status,503);assert.deepEqual(await r.json(),{error:'SC19_PAYMENTS_DISABLED'});
   }

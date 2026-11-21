@@ -13,6 +13,72 @@
 4. Decyzje sprzed 16.11.2026 są w historii git plików `AGENTS.md` i `CLAUDE.md` (stan sprzed
    17.11.2026) oraz w `docs/BACKLOG.md` (archiwum).
 
+## 20.11.2026
+
+**Pula rozmów voicebota: scalenie, ważność, limit kosztu (odpowiedź właściciela w czacie, 18:31).**
+Pytania sesji Claude w poprzedniej wiadomości czatu (TAK/NIE, każde z rekomendacją TAK):
+1) czy scalić pulę rozmów z pakietów (PR #553) do wersji testowej (`integration`);
+2) czy rozmowy z pakietu mają być ważne 3 miesiące, tak jak pakiet CV;
+3) czy zostawić limit 50 zł miesięcznie na czas testów i wrócić do niego po pierwszych próbnych
+   rozmowach (przy 15 zł rezerwacji na rozmowę to w najgorszym razie ok. 3 rozmowy miesięcznie
+   łącznie, a pakiet ma 10 — do decyzji przed pokazaniem voicebota klientom).
+Cytat odpowiedzi właściciela: „1 tak, 2 tak, 3 tak”.
+
+**Voicebot w pakietach: pula rozmów i dokupowanie (polecenie właściciela dla PR #553, ok. 09:55).**
+Cytat z polecenia właściciela (układ tabeli i listy zachowany):
+
+> Voicebot będzie częścią pakietów SkillCheck:
+>
+> | Pakiet | Rozmowy voicebota w cenie |
+> |---|---|
+> | FREE | 1 próbna rozmowa |
+> | PRESELEKCJA | 10 rozmów |
+> | WERYFIKACJA | 10 rozmów |
+> | ASSESSMENT CENTER | 10 rozmów |
+>
+> Po wykorzystaniu przyznanej puli klient będzie mógł dokupić kolejne rozmowy.
+>
+> Cena, wielkość dodatkowej puli i sposób jej zakupu zostaną ustalone później. Nie wprowadzaj
+> własnych założeń handlowych.
+>
+> Limity analiz CV pozostają bez zmian:
+>
+> * FREE — 5 analiz CV.
+> * PRESELEKCJA — 60 analiz CV za 300 zł brutto.
+>
+> Limity rozmów i analiz CV są odrębnymi uprawnieniami.
+
+oraz: „Voicebot pozostaje niewidoczny dla klientów do czasu skonfigurowania i zatwierdzenia
+uruchomienia.”
+
+**Potwierdzenie decyzji z 19.11.2026 (Stripe zamiast Przelewy24, voicebot do 50 zł/mies., PR #546).**
+Pytanie czatu: „PR #546 zapisuje Twoje decyzje z 19.11 (Stripe zamiast P24, voicebot do 50 zł/mies.)
+… Odpisz TAK, jeśli tak zdecydowałeś” Właściciel, ok. 08:4x:
+„3 tak potwierdzam wyrzucamy całkowicie P24 , voicebot do 50zł”
+
+## 19.11.2026
+
+**Zdjęcie zamrożenia ścieżki płatności w tym repozytorium, Stripe zamiast Przelewy24, voicebot
+z płatnym dostawcą do 50 zł miesięcznie.** Propozycje czatu (22:50):
+„1. Zdjąć zamrożenie płatności w core i przejść tam na Stripe (to samo konto KTIG). Polecam to.
+Odblokowuje R3, R5 i część R6. Agenci od razu dostaną kilkanaście kroków.”
+„2. Voicebot: zgoda na Retell z miesięcznym limitem wydatków albo dalsza praca tylko na udawanym
+dostawcy. Jeśli bez zgody, R6 wkrótce stanie.”
+Właściciel, 22:59: **„1 tak, 2 limit 50 zł, 3 tak, 4 dokładna kontrola pliku w samej aplikacji”**
+(punkty 3 i 4 dotyczą repozytorium `skillcheck-preselekcja`).
+
+Następnie czat przedstawił listę zmian, m.in.:
+„W poleceniach wykonawcy i recenzenta core dopiszę Twoje decyzje jako cytaty. Pierwszym zadaniem
+wykonawcy będzie PR z dokumentami (DECYZJE.md, ROADMAP.md, AGENTS.md): zamrożenie ścieżki płatności
+zdjęte; płatności przez Stripe na tym samym koncie KTIG Consulting; Przelewy24 do usunięcia.”
+„To odblokowuje kolejne kroki w core: podpięcie Assessment Center do kupionego pakietu; kalkulator
+wyceny; limity rozmów z voicebotem w pakietach; zakup WERYFIKACJI i AC przez Stripe.”
+„Voicebot: zgoda na płatnego dostawcę rozmów (Retell) z limitem 50 zł miesięcznie. Limit będzie
+pilnowany w samej aplikacji: po przekroczeniu nowe rozmowy się nie uruchamiają, a Ty dostajesz
+powiadomienie.”
+„Bez zmian zostają: zakaz ruszania sekretów, kasowania danych i prawdziwych wysyłek do klientów.”
+Właściciel, 23:01: **„wszystko tak”**.
+
 ## 18.11.2026
 
 **Test kompetencji na Preview i równoległy start voicebota (R6).** Propozycja czatu:

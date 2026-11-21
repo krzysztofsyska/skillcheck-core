@@ -1,7 +1,8 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { sc19OfferAmounts } from '../../../../../lib/sc19-offer-amounts';
-type Offer={id:string;revision:string;amountMinor:number;currency:string;credits:number;
+import { CV_POOL_STEP, MAX_PACKAGES, STRIPE_CATALOG, STRIPE_VAT_BASIS_POINTS, isStripePackageCode, packagesForPool, stripePoolQuote, type StripePackageCode } from '../../../../../lib/stripe-catalog';
+type Offer={id:string;revision:string;packageCode?:string;amountMinor:number;currency:string;credits:number;
   termsRevision:string;termsText:string;validUntilMs:number;
   netMinor?:number|null;vatMinor?:number|null;vatBasisPoints?:number|null};
 const pln=(v:number)=>new Intl.NumberFormat('pl-PL',{style:'currency',currency:'PLN'}).format(v/100);
@@ -12,34 +13,75 @@ const breakdown=(offer: Offer)=>typeof offer.netMinor==='number'&&typeof offer.v
   ?{netMinor:offer.netMinor,vatMinor:offer.vatMinor,vatBasisPoints:offer.vatBasisPoints ?? null}
   :sc19OfferAmounts(offer.amountMinor);
 const verificationPending='Twoja firma czeka na weryfikację — do tego czasu zakupu nie można złożyć. Odświeżenie strony tego nie zmieni. Napisz do nas przez formularz kontaktowy (/rozmowa) albo na pomoc@skillcheck.pl, a potwierdzimy firmę i odblokujemy zamówienie.';
-const paymentsPending='Płatność online jest w trakcie uruchamiania (trwa weryfikacja u operatora płatności Przelewy24). Zamówienia nie można jeszcze złożyć — cena i warunki poniżej są wiążące i nie zmienią się po włączeniu płatności.';
-// The sandbox runs on the production domain too, so that a Przelewy24 verifier can
-// pay with test money (owner decision 2026-11-11). Nothing is charged, but the
-// analyses ARE granted on this account, which is exactly what makes the walk
-// meaningful — so the screen says both, and promises no payment method of its own
-// beyond what the operator's sandbox offers.
-const sandboxNotice='Płatność testowa w Sandboxie Przelewy24: żadne pieniądze nie zostaną pobrane. Analizy CV zostaną jednak przyznane na tym koncie tak samo jak po zwykłym zakupie.';
+const paymentsPending='Płatność online jest w trakcie uruchamiania. Zamówienia nie można jeszcze złożyć — cena i warunki poniżej są wiążące i nie zmienią się po włączeniu płatności.';
 /** A failure we have no dedicated sentence for. The code is shown on purpose: it
  * is the only thing that tells support whether to retry or to look at the payment
  * operator, and it contains no private data. */
 const checkoutFailed=(code:string)=>
   `Nie udało się otworzyć płatności. Ponów próbę — serwer sprawdzi istniejące zamówienie. Jeśli to się powtarza, napisz na pomoc@skillcheck.pl i podaj kod: ${code}.`;
-/** Optional Przelewy24 failure code from the server, e.g. P24_UNAUTHORIZED. Only a
- * fixed-format code is ever rendered, never anything else the response carries. */
-const p24Detail=(value:unknown)=>typeof value==='string'&&/^P24_[A-Z_]{3,40}$/.test(value)?value:null;
 const reconciliationRequired='Tego zamówienia nie można już otworzyć ani potwierdzić automatycznie. Ponawianie nie pomoże. Napisz na pomoc@skillcheck.pl, podaj nazwę firmy — odblokujemy zamówienie i będziesz mógł złożyć nowe.';
-const sessionExists='Płatność dla tego zamówienia została już rozpoczęta u operatora, ale nie możemy bezpiecznie pokazać jej ponownie. Ponawianie nie pomoże. Napisz na pomoc@skillcheck.pl, podaj nazwę firmy i kod: P24_SESSION_EXISTS.';
+const sessionExpired='Sesja płatności wygasła. Zamówienie zamknęliśmy bez żadnej opłaty i bez przyznania pakietu. Kliknij ponownie, aby rozpocząć nowy zakup.';
+// R7: the Stripe hosted page. Methods offered there depend on the Stripe account;
+// the list names what the account is set up for, not a promise of each one.
+const stripeText='Płatność online obsługuje Stripe (karta, BLIK, Przelewy24, Apple Pay, Google Pay). Na stronie płatności podasz dane firmy do faktury, w tym NIP. Pakiet przyznajemy automatycznie po potwierdzeniu płatności przez Stripe, zwykle w ciągu kilku minut. Zasady reklamacji i odstąpienia opisuje Regulamin (§ 10–11).';
+const stripeTestNotice='Płatność testowa Stripe: żadne pieniądze nie zostaną pobrane. Pakiet i analizy CV zostaną jednak przyznane na tym koncie tak samo jak po zwykłym zakupie.';
+// R7: what each package adds over the CV analyses (docs/cennik-2026-11-02.md). No voicebot.
+const packageExtras:Record<StripePackageCode,string>={PRESELEKCJA:'',
+  WERYFIKACJA:'testy kompetencji dla kandydatów z shortlisty i rozszerzony raport',
+  ASSESSMENT_CENTER:'testy kompetencji, zadania praktyczne i sesja Assessment Center dla finalistów (5–6 osób)'};
+/** Packages not offered right now (not on sale, or no migration yet): shown as „wkrótce”. */
+const soonPackages=(offers:Offer[])=>[STRIPE_CATALOG.WERYFIKACJA,STRIPE_CATALOG.ASSESSMENT_CENTER]
+  .filter(p=>!offers.some(o=>offerPackage(o)===p.code));
+/** R7: net surcharge per extra CV, read from the engine (one step above the base), never typed in. */
+const overageNetPerCv=(code:StripePackageCode)=>{
+  const base=stripePoolQuote(code,STRIPE_CATALOG[code].cvCredits),next=stripePoolQuote(code,STRIPE_CATALOG[code].cvCredits+CV_POOL_STEP);
+  return base&&next?(next.netMinor-base.netMinor)/CV_POOL_STEP:null;
+};
+const offerPackage=(o:{packageCode?:unknown}|undefined):StripePackageCode=>o&&isStripePackageCode(o.packageCode)?o.packageCode:'PRESELEKCJA';
 const uuid = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
 const contextKey = (companyId: string, orderId: string) => `sc19:recruitment:${companyId.toLowerCase()}:${orderId.toLowerCase()}`;
-export default function Checkout({companyId,recruitmentId,sandbox=false,statusOnly=false}: {companyId:string;recruitmentId?:string;sandbox?:boolean;statusOnly?:boolean}) {
+// R7: Stripe is the only payment provider (owner decision 19.11.2026); the return
+// from the Stripe hosted page carries the order id in `?stripe=<uuid>`.
+const returnParam='stripe';
+const cvCountInvalid='Wybrana pula CV nie jest dozwolona. Wybierz pulę CV ponownie.';
+/** R5 W2b: the server's Polish sentence for a refused CV count (fixed wording and
+ * numbers only). Rendered as text, never as HTML; anything else falls back. */
+const cvCountMessage=(value:unknown)=>typeof value==='string'&&value.length>0&&value.length<=300?value:cvCountInvalid;
+export default function Checkout({companyId,recruitmentId,statusOnly=false,testMode=false,cvPoolEnabled=false}: {companyId:string;recruitmentId?:string;statusOnly?:boolean;testMode?:boolean;
+  /** R5 W2b: PRICING_CV_SLIDER_ENABLED. On: the order also sends the chosen CV pool
+   * (`cvCount`) and the server checks it; WERYFIKACJA and ASSESSMENT CENTER may take a
+   * pool above the base, priced by the server (R7). Off: request unchanged. */
+  cvPoolEnabled?:boolean}) {
+  // PRESELEKCJA is sold in whole packages of 60 CV; the slider picks a pool (co 5)
+  // and the server recomputes the amount from the package count.
+  const [pool,setPool]=useState(STRIPE_CATALOG.PRESELEKCJA.cvCredits);
+  // R7: WERYFIKACJA / ASSESSMENT CENTER pool (flag on only); null = the base pool.
+  const [packagePool,setPackagePool]=useState<number|null>(null);
   const [offers,setOffers]=useState<Offer[]>([]),[selected,setSelected]=useState('');
   const [accepted,setAccepted]=useState(false),[busy,setBusy]=useState(false);
   const [loading,setLoading]=useState(true),[message,setMessage]=useState('');
   const [checkoutAvailable,setCheckoutAvailable]=useState(true);
-  const [orderId,setOrderId]=useState(''),[paidOrder,setPaidOrder]=useState<{offerId:string;termsRevision:string}|null>(null);
+  const [orderId,setOrderId]=useState(''),[paidOrder,setPaidOrder]=useState<{offerId:string;termsRevision:string;part:string}|null>(null);
   const [requestIds]=useState(()=>new Map<string,string>());
   const [returnedRecruitment,setReturnedRecruitment]=useState<string|null>(null);
-  const offer=offers.find(o=>o.id===selected);
+  const selectedOffer=offers.find(o=>o.id===selected);
+  const code=offerPackage(selectedOffer);
+  // R7: with the flag on, WERYFIKACJA and ASSESSMENT CENTER take a CV pool from the base
+  // up to the catalog maximum (co 5). The price shown is the same engine computation the
+  // server charges (stripePoolQuote); the server recomputes it and never takes it from here.
+  const poolPackage=cvPoolEnabled&&code!=='PRESELEKCJA'&&!!STRIPE_CATALOG[code].overage;
+  const chosenPool=packagePool??STRIPE_CATALOG[code].cvCredits;
+  const poolQuote=poolPackage?stripePoolQuote(code,chosenPool):null;
+  const perCvNet=poolPackage?overageNetPerCv(code):null;
+  // PRESELEKCJA: whole packages from the pool; WERYFIKACJA and ASSESSMENT CENTER: one package.
+  const packages=code==='PRESELEKCJA'?packagesForPool(pool):poolPackage&&!poolQuote?null:1;
+  // At the base pool the offer itself is shown (its price is the package price).
+  const offer=selectedOffer&&poolQuote&&poolQuote.overageCv>0?{...selectedOffer,amountMinor:poolQuote.grossMinor,credits:poolQuote.cvCredits,
+    netMinor:poolQuote.netMinor,vatMinor:poolQuote.grossMinor-poolQuote.netMinor,vatBasisPoints:STRIPE_VAT_BASIS_POINTS}
+    :selectedOffer&&packages?{...selectedOffer,amountMinor:selectedOffer.amountMinor*packages,credits:selectedOffer.credits*packages,
+    netMinor:null,vatMinor:null}:selectedOffer;
+  // Request key part: the package count, plus the CV pool for a pool package (flag on only).
+  const requestPart=(n:number|null,cv:number|null)=>cv===null?`${n}`:`${n}:cv${cv}`;
   const amounts=offer&&breakdown(offer);
   async function loadOffers(signal?: AbortSignal) {
     setLoading(true);setAccepted(false);setOffers([]);setSelected('');
@@ -80,7 +122,7 @@ export default function Checkout({companyId,recruitmentId,sandbox=false,statusOn
     const abort=new AbortController();
     setReturnedRecruitment(null);
     if (!statusOnly) void loadOffers(abort.signal);
-    const returned = sandbox && new URLSearchParams(window.location.search).get('p24');
+    const returned = new URLSearchParams(window.location.search).get(returnParam);
     if (returned && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(returned)) {
       // Optional same-tab navigation hint, never payment evidence or an access grant.
       // The destination checks membership; storage can only supply a UUID, never a URL.
@@ -93,49 +135,60 @@ export default function Checkout({companyId,recruitmentId,sandbox=false,statusOn
       void status(returned);
     } else try { setOrderId(sessionStorage.getItem(`sc19:order:${companyId}`) ?? ''); } catch { /* unavailable storage: status can be retried in this session */ }
     return ()=>abort.abort();
-  },[companyId,sandbox,statusOnly]);
+  },[companyId,statusOnly]);
   async function status(id=orderId) {
     if(!id)return;
     setBusy(true);
     try {
-      const r=await fetch(`/api/billing/orders/${encodeURIComponent(id)}?companyId=${encodeURIComponent(companyId)}`,{cache:'no-store',method:sandbox?'POST':'GET'});
+      const r=await fetch(`/api/billing/orders/${encodeURIComponent(id)}?companyId=${encodeURIComponent(companyId)}`,{cache:'no-store'});
       if(!r.ok)throw Error(); const data=await r.json();
-      setPaidOrder(data.status==='paid'?{offerId:data.offerId,termsRevision:data.termsRevision}:null);
-      setMessage(data.status==='paid' ? `Płatność potwierdzona. Przyznano ${data.credits} analiz CV.` :
+      // The paid order's own package count (its CV pool / 60), not the form's current
+      // value: the request key of THAT purchase is the one to clear.
+      const paidCode=offerPackage(data);
+      const paidPackages=Number.isSafeInteger(data.credits/STRIPE_CATALOG[paidCode].cvCredits)
+        ?data.credits/STRIPE_CATALOG[paidCode].cvCredits:null;
+      const paidPool=cvPoolEnabled&&paidCode!=='PRESELEKCJA'&&!!STRIPE_CATALOG[paidCode].overage&&Number.isSafeInteger(data.credits)?data.credits:null;
+      setPaidOrder(data.status==='paid'?{offerId:data.offerId,termsRevision:data.termsRevision,
+        part:requestPart(paidPool===null?paidPackages:1,paidPool)}:null);
+      setMessage(data.status==='expired' ? sessionExpired : data.status==='paid' ? (paidCode==='PRESELEKCJA' ? `Płatność potwierdzona. Przyznano ${data.credits} analiz CV.`
+        : `Płatność potwierdzona. Przyznano pakiet ${STRIPE_CATALOG[paidCode].name} i ${data.credits} analiz CV.`) :
         'Czekamy na potwierdzenie płatności. Kredyty zostaną przyznane po jej weryfikacji.');
     } catch {setMessage('Nie udało się sprawdzić statusu. Spróbuj ponownie.');}
     finally {setBusy(false);}
   }
   function nextPurchase() {
-    if(!paidOrder||!offer)return;
-    const key=`sc19:request:${companyId}:${paidOrder.offerId}:${paidOrder.termsRevision}`;
+    if(!paidOrder)return;
+    const key=`sc19:request:${companyId}:${paidOrder.offerId}:${paidOrder.termsRevision}:${paidOrder.part}`;
     requestIds.delete(key);
     try {
       sessionStorage.removeItem(key);
       sessionStorage.removeItem(`sc19:order:${companyId}`);
     } catch { /* Server-side order invariant does not depend on browser storage. */ }
-    if (sandbox) {
-      const url = new URL(window.location.href);
-      url.searchParams.delete('p24');
-      window.history.replaceState(window.history.state,'',url);
-    }
+    const url = new URL(window.location.href);
+    url.searchParams.delete(returnParam);
+    url.searchParams.delete('cancelled');
+    window.history.replaceState(window.history.state,'',url);
     setOrderId('');setPaidOrder(null);setAccepted(false);setMessage('Możesz złożyć kolejne zamówienie.');
   }
   async function buy() {
     // Never post while checkout is unavailable: the server refuses it anyway
     // (SC19_PAYMENTS_DISABLED), and the button is rendered disabled.
-    if(!offer||!accepted||busy||loading||paidOrder||!checkoutAvailable)return;
+    if(!offer||!accepted||busy||loading||paidOrder||!checkoutAvailable||!packages)return;
     setBusy(true);setMessage('');
     try {
       // Best-effort retry hint. The durable server invariant also protects new
       // tabs/devices and browsers where sessionStorage is missing or evicted.
-      const key=`sc19:request:${companyId}:${offer.id}:${offer.termsRevision}`;
+      const key=`sc19:request:${companyId}:${offer.id}:${offer.termsRevision}:${requestPart(packages,poolPackage?chosenPool:null)}`;
       let requestId=requestIds.get(key);
       try {requestId ??= sessionStorage.getItem(key) ?? undefined;} catch { /* optional */ }
       requestId ??= crypto.randomUUID();requestIds.set(key,requestId);
       try {sessionStorage.setItem(key,requestId);} catch { /* optional */ }
+      // R5 W2b: with the slider flag on, the chosen pool goes with the order. The
+      // server derives the packages (PRESELEKCJA) or the pool price (WERYFIKACJA,
+      // ASSESSMENT CENTER — R7) from it and refuses anything else; it never takes a price.
+      const cvCount=cvPoolEnabled&&code==='PRESELEKCJA'?{cvCount:pool}:poolPackage?{cvCount:chosenPool}:{};
       const response=await fetch('/api/billing/checkout',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({companyId,offerId:offer.id,termsRevision:offer.termsRevision,requestId})});
+        body:JSON.stringify({companyId,offerId:offer.id,termsRevision:offer.termsRevision,requestId,packages,packageCode:code,...cvCount})});
       // A killed invocation or a platform error answers with HTML, not JSON. Bare
       // `response.json()` threw here and every failure — including our own error
       // codes — fell into the generic catch below, which is why a broken checkout
@@ -152,21 +205,28 @@ export default function Checkout({companyId,recruitmentId,sandbox=false,statusOn
         if(data.error==='SC19_PAYMENTS_DISABLED'){
           setCheckoutAvailable(false);setMessage(paymentsPending);return;
         }
+        if(cvPoolEnabled&&data.error==='SC19_PAYMENT_CV_COUNT_INVALID'){
+          setAccepted(false);setMessage(cvCountMessage(data.message));return;
+        }
         // The order exists but its payment session can no longer be opened or
         // confirmed automatically. Retrying cannot help and the next purchase stays
         // blocked until we clear this one, so say that instead of "try again".
         if(data.error==='SC19_PAYMENT_RECONCILIATION_REQUIRED'){
           setMessage(reconciliationRequired);return;
         }
+        // R7: the payment session expired unpaid and the order was closed without any
+        // charge or grant. Its request id is spent; the next click is a new purchase.
+        if(data.error==='SC19_PAYMENT_SESSION_EXPIRED'){
+          requestIds.delete(key);
+          try {sessionStorage.removeItem(key);sessionStorage.removeItem(`sc19:order:${companyId}`);} catch { /* optional */ }
+          setOrderId('');
+          setMessage(sessionExpired);return;
+        }
         // Anything else: name the code instead of hiding it. These are short machine
         // codes (SC19_PAYMENT_RETRY, HTTP 503) with nothing private in them, and they
         // are the difference between "retry" and "the payment operator is refusing us".
         const code=typeof data.error==='string'?data.error:`HTTP ${response.status}`;
-        const detail=p24Detail(data.detail);
-        // The operator already has a session for this order and its link was lost:
-        // a retry would hit the same answer, so do not offer one.
-        if(detail==='P24_SESSION_EXISTS'){setMessage(sessionExists);return;}
-        setMessage(checkoutFailed(detail?`${code} / ${detail}`:code));return;
+        setMessage(checkoutFailed(code));return;
       }
       setOrderId(data.orderId);
       if (uuid(companyId) && uuid(data.orderId) && uuid(recruitmentId)) try {
@@ -183,20 +243,31 @@ export default function Checkout({companyId,recruitmentId,sandbox=false,statusOn
   if (statusOnly) return <section aria-busy={busy}>
     {returnLink}
     <h2>Status zamówienia testowego</h2>
-    <p role="status">{message || 'Sprawdzamy potwierdzenie w Przelewy24…'}</p>
+    <p role="status">{message || 'Sprawdzamy potwierdzenie płatności…'}</p>
     <button type="button" disabled={!orderId || busy} onClick={()=>status()}>Sprawdź status zamówienia</button>
   </section>;
   return <section aria-busy={loading||busy}>
     {returnLink}
-    {sandbox&&<p role="note">{sandboxNotice}</p>}
+    {testMode&&<p role="note">{stripeTestNotice}</p>}
     <p>Pakiet FREE nie wymaga płatności i nie korzysta z tego formularza.</p>
     {loading ? <p role="status">Wczytuję ofertę…</p> : offers.length>0 ? <>
-      <label>Wariant <select value={selected} disabled={busy} onChange={e=>{setSelected(e.target.value);setAccepted(false);}}>
-        {offers.map(o=><option key={o.id} value={o.id}>{o.credits} analiz CV — {pln(o.amountMinor)} brutto</option>)}
+      <label>Wariant <select value={selected} disabled={busy} onChange={e=>{setSelected(e.target.value);setPackagePool(null);setAccepted(false);}}>
+        {offers.map(o=><option key={o.id} value={o.id}>{`${STRIPE_CATALOG[offerPackage(o)].name}: `}{o.credits} analiz CV — {pln(o.amountMinor)} brutto</option>)}
       </select></label>
-      {offer&&<><h2>{pln(offer.amountMinor)} brutto</h2><p>{offer.credits} analiz CV • jednorazowo • analizy ważne 3 miesiące od przyznania</p>
+      {selectedOffer&&code==='PRESELEKCJA'&&<label>Pula CV (co {CV_POOL_STEP}) <input type="number" min={CV_POOL_STEP} step={CV_POOL_STEP}
+        max={MAX_PACKAGES*STRIPE_CATALOG.PRESELEKCJA.cvCredits} value={pool} disabled={busy}
+        onChange={e=>{setPool(Number(e.target.value));setAccepted(false);}}/>
+        <small>{packages ? `PRESELEKCJA sprzedajemy w całych pakietach po ${STRIPE_CATALOG.PRESELEKCJA.cvCredits} CV: ${packages} ${packages===1?'pakiet':'pakiety'} = ${packages*STRIPE_CATALOG.PRESELEKCJA.cvCredits} analiz CV.`
+          : `Podaj wielokrotność ${CV_POOL_STEP}, od ${CV_POOL_STEP} do ${MAX_PACKAGES*STRIPE_CATALOG.PRESELEKCJA.cvCredits} CV.`}</small></label>}
+      {selectedOffer&&poolPackage&&<label>Pula CV (co {CV_POOL_STEP}) <input type="number" min={STRIPE_CATALOG[code].cvCredits} step={CV_POOL_STEP}
+        max={STRIPE_CATALOG[code].overage?.cvMax} value={chosenPool} disabled={busy}
+        onChange={e=>{setPackagePool(Number(e.target.value));setAccepted(false);}}/>
+        <small>{!poolQuote ? `Podaj liczbę CV co ${CV_POOL_STEP}, od ${STRIPE_CATALOG[code].cvCredits} do ${STRIPE_CATALOG[code].overage?.cvMax} CV.`
+          : `W cenie pakietu ${STRIPE_CATALOG[code].cvCredits} CV.${perCvNet!==null?` Każde dodatkowe CV: ${pln(perCvNet)} netto${poolQuote.overageCv>0?` (wybrano ${poolQuote.overageCv} dodatkowych)`:''}.`:''}`}</small></label>}
+      {offer&&<><h2>{pln(offer.amountMinor)} brutto</h2><p>{offer.credits} analiz CV{packageExtras[code]?` • ${packageExtras[code]}`:''} • jednorazowo • analizy ważne 3 miesiące od przyznania</p>
         <table><caption>Podsumowanie zamówienia</caption><tbody>
-          <tr><th scope="row">Pakiet</th><td>PRESELEKCJA</td></tr>
+          <tr><th scope="row">Pakiet</th><td>{STRIPE_CATALOG[code].name}</td></tr>
+          {packageExtras[code]&&<tr><th scope="row">W pakiecie</th><td>{packageExtras[code]}</td></tr>}
           <tr><th scope="row">Liczba analiz CV</th><td>{offer.credits}</td></tr>
           {amounts&&<tr><th scope="row">Cena netto</th><td>{pln(amounts.netMinor)}</td></tr>}
           {amounts&&<tr><th scope="row">VAT{typeof amounts.vatBasisPoints==='number'?` ${amounts.vatBasisPoints/100}%`:''}</th><td>{pln(amounts.vatMinor)}</td></tr>}
@@ -205,11 +276,12 @@ export default function Checkout({companyId,recruitmentId,sandbox=false,statusOn
         <details open><summary>Warunki oferty · {offer.termsRevision}</summary><p style={{whiteSpace:'pre-wrap'}}>{offer.termsText}</p></details>
         <label style={{display:'block',margin:'20px 0'}}><input type="checkbox" checked={accepted} disabled={busy}
           onChange={e=>setAccepted(e.target.checked)}/> Akceptuję powyższe warunki oferty oraz <a href="/regulamin" target="_blank" rel="noopener">Regulamin</a> i potwierdzam zapoznanie się z <a href="/polityka-prywatnosci" target="_blank" rel="noopener">Polityką prywatności</a>.</label>
-        <p>Płatność online obsługuje Przelewy24 (PayPro S.A., ul. Pastelowa 8, 60-198 Poznań): szybki przelew, BLIK lub karta, w zakresie metod udostępnionych przez operatora. Analizy przyznajemy niezwłocznie po potwierdzeniu płatności: po zaksięgowaniu wpłaty na naszym rachunku, a przy płatności online — po jej potwierdzeniu przez operatora, zwykle w ciągu kilku minut. Zasady reklamacji i odstąpienia opisuje <a href="/regulamin" target="_blank" rel="noopener">Regulamin</a> (§ 10–11).</p>
+        <p>{stripeText}</p>
         {!checkoutAvailable&&<p role="status" aria-live="polite">{paymentsPending}</p>}
-        <button type="button" disabled={!checkoutAvailable||!accepted||busy||!!paidOrder} onClick={buy}>
+        <button type="button" disabled={!checkoutAvailable||!accepted||busy||!!paidOrder||!packages} onClick={buy}>
           {busy?'Przetwarzam…':checkoutAvailable?`Zamawiam i płacę ${pln(offer.amountMinor)}`:`Zamawiam i płacę ${pln(offer.amountMinor)} — wkrótce`}</button></>}
     </> : !message&&<p>Brak zatwierdzonej oferty. Zakup jest obecnie niedostępny.</p>}
+    {soonPackages(offers).length>0&&<><h2>Wkrótce</h2><ul>{soonPackages(offers).map(p=><li key={p.code}>{p.name} — {pln(p.grossMinor)} brutto za {p.cvCredits} CV — wkrótce</li>)}</ul></>}
     {message&&<p role="status" aria-live="polite">{message}</p>}
     <button type="button" disabled={busy||loading} onClick={()=>{setMessage('');return loadOffers();}}>Odśwież oferty</button>
     {paidOrder&&<button type="button" disabled={busy} onClick={nextPurchase}>Kup kolejny pakiet</button>}

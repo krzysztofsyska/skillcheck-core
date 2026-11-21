@@ -3,7 +3,7 @@
  * No provider network I/O may run inside transaction callbacks (they can retry).
  */
 import { createHash } from 'node:crypto';
-import type { PaymentStore, PaymentTransaction, PaymentOrder, PaymentOffer } from './sc19-payments.ts';
+import type { CloseExpiredResult, PaymentStore, PaymentTransaction, PaymentOrder, PaymentOffer } from './sc19-payments.ts';
 import { Sc19PaymentError } from './sc19-payments.ts';
 export interface PaymentSqlClient {
   query(sql: string, values?: unknown[]): Promise<{ rows: Record<string, unknown>[]; rowCount?: number | null }>;
@@ -11,15 +11,53 @@ export interface PaymentSqlClient {
 }
 export interface PaymentSqlPool { connect(): Promise<PaymentSqlClient> }
 export type CheckoutOffer = PaymentOffer & Readonly<{ termsText: string }>;
+/** R7: optional second order source in the SAME database transaction (the Stripe
+ * WERYFIKACJA / ASSESSMENT CENTER orders, lib/sc19-stripe-packages.ts). Without it
+ * this store behaves exactly as before. */
+export type PaymentStoreExtension = Readonly<{
+  /** Wraps the transaction's operations; `lockCompany` is the store's company lock. */
+  tx(base: PaymentTransaction, client: PaymentSqlClient, lockCompany: (companyId: string) => Promise<void>): PaymentTransaction;
+  /** An order of this source, already scoped to the company, or null. */
+  readOrder(client: PaymentSqlClient, companyId: string, orderId: string): Promise<PaymentOrder | null>;
+  /** Extra offers for an authorized, verified company. */
+  offers(client: PaymentSqlClient): Promise<CheckoutOffer[]>;
+}>;
 const fail = (code: string): never => { throw new Sc19PaymentError(code); };
+/** Providers whose settlement code was removed (Przelewy24, owner decision
+ * 19.11.2026). Their unpaid TEST orders can never be paid or granted, so they no
+ * longer count as the company's unresolved purchase; the rows stay unchanged. The
+ * database index sc19_payment_one_unresolved excludes the same provider
+ * (migration 20261121150000_r7_stripe_packages.sql). */
+export const RETIRED_PAYMENT_PROVIDERS: readonly string[] = Object.freeze(['przelewy24']);
+/** R7 (migration 20261121180000_r7_stripe_expired_session.sql): a PRESELEKCJA order
+ * whose Stripe session expired unpaid is closed by setting its checkout_url to this
+ * fixed marker (its status check belongs to the erasure schema signature, so no new
+ * status value). It reads as status 'expired' with no checkout link. */
+export const EXPIRED_CHECKOUT_MARKER = 'sc19:expired';
+/** The ONE database call that closes an expired order (both order tables). On a
+ * database without the function: 'unsupported' (the pre-migration behaviour). */
+export async function closeExpiredInDatabase(c: PaymentSqlClient, orderId: string, sessionId: string): Promise<CloseExpiredResult> {
+  const routine = await c.query("select to_regprocedure('sc19_stripe.close_expired_order(uuid,text)') as routine");
+  if (!routine.rows[0]?.routine) return 'unsupported';
+  try {
+    const r = await c.query('select sc19_stripe.close_expired_order($1,$2) as closed', [orderId, sessionId]);
+    return r.rows[0]?.closed === true ? 'closed' : 'already_closed';
+  } catch (error) {
+    // Refused by the database (paid, receipt, another session, not test mode): never
+    // closed; the order needs reconciliation. Other errors (retry codes) pass through.
+    if ((error as { code?: string }).code === '22023') return fail('SC19_PAYMENT_RECONCILIATION_REQUIRED');
+    throw error;
+  }
+}
 function orderRow(r: Record<string, unknown>): PaymentOrder {
+  const closed = r.checkout_url === EXPIRED_CHECKOUT_MARKER;
   return {
     id: String(r.id), companyId: String(r.company_id), buyerId: String(r.buyer_id), requestId: String(r.request_id),
     offerId: String(r.offer_id), offerRevision: String(r.offer_revision), termsRevision: String(r.terms_revision),
     amountMinor: Number(r.amount_minor), currency: 'PLN', credits: Number(r.credits),
     scope: { provider: String(r.provider), account: String(r.account), mode: r.mode as 'test' | 'live' },
-    status: r.status as PaymentOrder['status'], sessionId: r.session_id as string | null,
-    checkoutUrl: r.checkout_url as string | null, paymentId: r.payment_id as string | null,
+    status: closed ? 'expired' : r.status as PaymentOrder['status'], sessionId: r.session_id as string | null,
+    checkoutUrl: closed ? null : r.checkout_url as string | null, paymentId: r.payment_id as string | null,
     checkoutDeadlineMs: Number(r.checkout_deadline_ms),
   };
 }
@@ -28,7 +66,7 @@ function offerRow(r: Record<string, unknown>): CheckoutOffer {
     approved: r.approved === true, amountMinor: Number(r.amount_minor), currency: 'PLN', credits: Number(r.credits),
     termsRevision: String(r.terms_revision), termsText: String(r.terms_text), validUntilMs: Number(r.valid_until_ms) };
 }
-export function createPostgresPaymentStore(pool: PaymentSqlPool): PaymentStore & {
+export function createPostgresPaymentStore(pool: PaymentSqlPool, extension?: PaymentStoreExtension): PaymentStore & {
   readOrder(companyId: string, userId: string, orderId: string): Promise<PaymentOrder | null>;
   listOffers(companyId: string, userId: string): Promise<CheckoutOffer[]>;
 } {
@@ -44,7 +82,7 @@ export function createPostgresPaymentStore(pool: PaymentSqlPool): PaymentStore &
           const r = await c.query('select id from public.companies where id=$1 for update', [companyId]);
           if (!r.rows.length) fail('SC19_PAYMENT_FORBIDDEN');
         };
-        const tx: PaymentTransaction = {
+        const base: PaymentTransaction = {
           async companyAccess(companyId, userId) {
             await lockCompany(companyId);
             const owner = await c.query('select id from public.companies where id=$1 and owner_id=$2', [companyId,userId]);
@@ -64,8 +102,16 @@ export function createPostgresPaymentStore(pool: PaymentSqlPool): PaymentStore &
           },
           async unresolvedOrder(companyId) {
             await lockCompany(companyId);
+            // A retired provider's order is skipped only once the database index skips it
+            // too (same migration as sc19_stripe.package_orders); before that it still
+            // answers SC19_PAYMENT_PURCHASE_PENDING instead of a unique-index failure.
+            // A closed order (expired Stripe session, R7) is not unresolved either; the
+            // database index skips it too.
             const r = await c.query(`select * from private.sc19_payment_orders
-              where company_id=$1 and status='awaiting_payment' for update`,[companyId]);
+              where company_id=$1 and status='awaiting_payment'
+                and (provider<>all($2::text[]) or to_regclass('sc19_stripe.package_orders') is null)
+                and checkout_url is distinct from $3 for update`,
+            [companyId,RETIRED_PAYMENT_PROVIDERS,EXPIRED_CHECKOUT_MARKER]);
             return r.rows[0] ? orderRow(r.rows[0]) : null;
           },
           async bindRequest(companyId, requestId, orderId) {
@@ -98,6 +144,7 @@ export function createPostgresPaymentStore(pool: PaymentSqlPool): PaymentStore &
             [o.id,o.companyId,o.buyerId,o.requestId,o.offerId,o.offerRevision,o.termsRevision,o.amountMinor,o.currency,o.credits,
               o.scope.provider,o.scope.account,o.scope.mode,o.status,o.sessionId,o.checkoutUrl,o.paymentId,o.checkoutDeadlineMs]);
           },
+          closeExpired: (o, sessionId) => closeExpiredInDatabase(c, o.id, sessionId),
           async saveOrder(o) {
             const r = await c.query(`update private.sc19_payment_orders set status=$2,session_id=$3,checkout_url=$4,payment_id=$5
               where id=$1 and company_id=$6`,[o.id,o.status,o.sessionId,o.checkoutUrl,o.paymentId,o.companyId]);
@@ -122,6 +169,7 @@ export function createPostgresPaymentStore(pool: PaymentSqlPool): PaymentStore &
             return null;
           },
         };
+        const tx = extension ? extension.tx(base, c, lockCompany) : base;
         const result = await work(tx,c);
         await c.query('commit');
         return result;
@@ -130,7 +178,8 @@ export function createPostgresPaymentStore(pool: PaymentSqlPool): PaymentStore &
         const code = (error as { code?: string }).code;
         const requestRace = code === '23505' && [
           'sc19_payment_orders_company_id_request_id_key', 'sc19_payment_one_unresolved',
-          'sc19_payment_requests_pkey',
+          'sc19_payment_requests_pkey', 'package_orders_company_id_request_id_key', 'package_one_unresolved',
+          'package_requests_pkey',
         ].includes((error as { constraint?: string }).constraint ?? '');
         if ((!['40001','40P01'].includes(code ?? '') && !requestRace) || attempt >= 5) throw error;
       } finally { c.release(); }
@@ -149,14 +198,15 @@ export function createPostgresPaymentStore(pool: PaymentSqlPool): PaymentStore &
       await authorized(tx,companyId,userId);
       // Scope the SELECT before returning any order, including existence information.
       const r = await c.query('select * from private.sc19_payment_orders where id=$1 and company_id=$2',[id,companyId]);
-      return r.rows[0] ? orderRow(r.rows[0]) : null;
+      if (r.rows[0]) return orderRow(r.rows[0]);
+      return extension ? extension.readOrder(c,companyId,id) : null;
     }),
     listOffers: (companyId,userId) => transaction(async (tx,c) => {
       const a = await authorized(tx,companyId,userId);
       if (!a.verified) fail('SC19_PAYMENT_FORBIDDEN');
       const r = await c.query(`select * from private.sc19_payment_offers
         where approved and active and valid_until_ms>$1 order by created_at desc limit 20`,[Date.now()]);
-      return r.rows.map(offerRow);
+      return [...r.rows.map(offerRow), ...(extension ? await extension.offers(c) : [])];
     }),
   };
 }

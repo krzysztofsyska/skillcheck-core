@@ -110,7 +110,7 @@ export default async function CompanyBilling({ params, searchParams }: {
       <h2>PRESELEKCJA — {sc19AnalysisScope(sizes.PRESELEKCJA)}</h2>
       <p>Jednorazowy pakiet z rankingiem kandydatów i raportem. Analizy CV przyznajemy po potwierdzeniu płatności.</p>
       <p><Link className="button" href="/rozmowa">Zamów przez obsługę SkillCheck</Link></p>
-      {isOwner && <p><Link href={checkoutHref}>Przejdź do zakupu online (Przelewy24) →</Link></p>}
+      {isOwner && <p><Link href={checkoutHref}>Przejdź do zakupu online →</Link></p>}
       <p className="notice">Aktualną ofertę, warunki i dostępność płatności online sprawdzisz na ekranie zakupu. Możesz też zamówić pakiet przez obsługę SkillCheck.</p>
     </section>
   </section></main>;

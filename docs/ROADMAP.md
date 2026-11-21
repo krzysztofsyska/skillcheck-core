@@ -14,9 +14,10 @@
 4. **Decyzje właściciela** zapisujemy wyłącznie w [docs/DECYZJE.md](DECYZJE.md), jako dosłowne
    cytaty z datą. Tutaj zostaje tylko ich skutek.
 
-Bramki bezpieczeństwa (zamrożenie ścieżki płatności, migracje produkcyjne, sekrety, ustawienia,
-kasowanie danych, nowe koszty, nowe realne wysyłki, polityka wydań #369) są w `AGENTS.md`. Ten plik
-ich nie zmienia i nie otwiera.
+Bramki bezpieczeństwa (migracje produkcyjne, sekrety, ustawienia, kasowanie danych, nowe koszty,
+nowe realne wysyłki, polityka wydań #369, ścieżka płatności) są w `AGENTS.md`. Ten plik ich nie
+definiuje; skutek decyzji z 19.11.2026 i 20.11.2026 (płatności na Stripe, voicebot do 50 zł/mies.)
+jest tylko odnotowany w etapach poniżej, a reguły i cytaty są w `AGENTS.md` i `docs/DECYZJE.md`.
 
 Statusy ustalono 17.11.2026 z kodu na `integration` (`7ebd063`) oraz z issue i PR.
 
@@ -27,7 +28,7 @@ Statusy ustalono 17.11.2026 z kodu na `integration` (`7ebd063`) oraz z issue i P
 | **1. Pierwsza sprzedaż** | firma kupuje FREE / PRESELEKCJĘ przez Stripe i dostaje raport | pierwsza prawdziwa płatność za PRESELEKCJĘ | repo `skillcheck-preselekcja`, jego [docs/ROADMAP.md](https://github.com/krzysztofsyska/skillcheck-preselekcja/blob/integration/docs/ROADMAP.md) |
 | **2. WERYFIKACJA gotowa** | rekruter daje test kompetencji z shortlisty i dostaje rozszerzony raport | ścieżka R1 + R2 przechodzi na Preview, pakiet opisany na stronie (R4) | to repo: R1, R2, R4 |
 | **3. Assessment Center gotowe** | firma prowadzi sesję finalistów z dwoma asesorami | ścieżka R3 przechodzi na Preview dla konta firmy z pakietem | to repo: R3 |
-| **4. Później** | kalkulator wyceny i voicebot | — | to repo: R5 (CZEKA), R6 |
+| **4. Później** | kalkulator wyceny i voicebot | — | to repo: R5, R6 |
 
 Etap 1 nie blokuje etapów 2–3: oba repozytoria pracują równolegle. Kolejność w tym repozytorium
 wyznacza lista „Kolejność funkcji” niżej.
@@ -76,7 +77,7 @@ automatycznie. W obu trybach test dostaje tylko kandydat z shortlisty (reguła R
 | Asesorzy pokazani z nazwy (etykieta, potem e-mail konta z tej samej firmy) | ZROBIONE | PR #500, #513 |
 | Jawne braki dowodów w raporcie i CSV sesji | ZROBIONE | PR #508 |
 | Testy równoczesnej pracy asesorów | ZROBIONE | PR #512 |
-| Powiązanie z kontami firm, uprawnieniami i kupionym pakietem | W TOKU (konta i uprawnienia zrobione; pakiet czeka na zdjęcie zamrożenia ścieżki płatności) | PR #503; issue #338, #274, #283 |
+| Powiązanie z kontami firm, uprawnieniami i kupionym pakietem | W TOKU (konta i uprawnienia zrobione; sesję tworzy i otwiera tylko firma z opłaconym pakietem ASSESSMENT CENTER — pilnowane w bazie; zakup pakietu AC przez Stripe działa w trybie testowym; zostaje uruchomienie płatności na żywo w R7) | PR #503, #554, #563; issue #338, #274, #283 |
 
 ### R4. Oferta na stronie (etap 2)
 
@@ -88,27 +89,46 @@ zamówień.
 | WERYFIKACJA i ASSESSMENT CENTER widoczne na stronie, z opisem i dopiskiem „nie można jeszcze kupić”, bez wzmianki o bocie | ZROBIONE | PR #489 |
 | Gwarancja wyniku PRESELEKCJI w regulaminie i na stronie oferty | ZROBIONE | PR #494 (issue #492) |
 
-### R5. Kalkulator wyceny (SC-PRICING-W1…W4) — CZEKA
+### R5. Kalkulator wyceny (SC-PRICING-W1…W4)
 
-**CZEKA na zdjęcie zamrożenia ścieżki płatności przez właściciela.** Do tego czasu nie podejmować.
+Zamrożenie ścieżki płatności zdjęte 19.11.2026 (`docs/DECYZJE.md`). Ceny wyłącznie według `docs/cennik-2026-11-02.md`.
 
 | Krok | Status | Dowód |
 |---|---|---|
 | W1 + W2 — audyt źródeł cennika i katalog cen w bazie | ZROBIONE | PR #265 |
-| W2b — suwak liczby CV co 5 | W TOKU (część 1/2) | PR #286 |
-| W3, W4 — publiczny cennik z katalogu, za wyłączoną flagą | DO ZROBIENIA (CZEKA) | — |
+| W2b — suwak liczby CV co 5 | ZROBIONE (za flagą PRICING_CV_SLIDER_ENABLED, domyślnie wyłączoną; serwer przy zamówieniu sprawdza liczbę CV: co 5, w granicach pakietu, zgodna z liczbą pakietów, inaczej odmowa z polskim komunikatem; przy włączonej fladze formularz zakupu wysyła też wybraną pulę CV, a odmowę serwera pokazuje po polsku; przy wyłączonej formularz działa jak dotąd) | PR #286 (część 1), część 2: PR #552, walidacja na serwerze: PR #574, formularz zakupu: PR #577 |
+| W3, W4 — publiczny cennik z katalogu, za wyłączoną flagą | ZROBIONE (W3 i W4 za wyłączonymi flagami PRICING_PAID_OPTIONS_ENABLED i PRICING_PUBLIC_CATALOG_ENABLED; włączenie flag — decyzja właściciela, TAK/NIE z liczbami przed i po) | W3: PR #557, W4: PR #559 |
 
 ### R6. Voicebot — równolegle z R1–R3 (od 18.11.2026)
 
-Docelowo w każdym pakiecie (FREE 1 rozmowa, płatne 10). Do czasu, aż działa, niewidoczny dla klientów.
+Docelowo w każdym pakiecie: FREE 1 próbna rozmowa, PRESELEKCJA 10, WERYFIKACJA 10, ASSESSMENT CENTER 10;
+po wykorzystaniu puli klient będzie mógł dokupić kolejne rozmowy — cena, wielkość dodatkowej puli,
+ważność i sposób zakupu NIEUSTALONE (decyzja 20.11.2026, `docs/DECYZJE.md`). Pula z pakietu jest ważna
+3 miesiące, jak pakiet CV. Limit kosztu 50 zł/mies. zostaje na czas testów; przed pokazaniem
+voicebota klientom wraca do decyzji właściciela (przy 15 zł rezerwacji na rozmowę to ok. 3 rozmowy
+miesięcznie łącznie, a pakiet ma 10). Limity rozmów i analiz
+CV są odrębne; limity CV bez zmian. Do czasu, aż działa i właściciel zatwierdzi uruchomienie,
+niewidoczny dla klientów.
 Od 18.11.2026 prowadzony równolegle z R1–R3 (decyzja w `docs/DECYZJE.md`). Część dotykająca
-katalogu pakietów czeka na zdjęcie zamrożenia ścieżki płatności; płatny dostawca rozmów to nowy
-koszt (osobna zgoda właściciela).
+katalogu pakietów jest odblokowana (19.11.2026). Płatny dostawca rozmów (Retell) dozwolony do 50 zł
+miesięcznie, z limitem pilnowanym w aplikacji (decyzja 19.11.2026, `docs/DECYZJE.md`).
 
 | Krok | Status | Dowód |
 |---|---|---|
-| Architektura i MVP rozmowy (dawne SC-011, SC-012) | W TOKU (sprawdzone 18.11.2026) | audyt PR #526, `docs/checks/r6-voice-audit-2026-11-18.md`: fundamenty działają tylko na sztucznym dostawcy i bazie testowej; brakuje migracji, webhooka, połączenia z Retell i ekranu (R6-1a…1e). R6-1a/1b: PR #527; R6-1b cz. 2: PR #530; R6-1c: PR #529; R6-1d: PR #528; R6-1c cz. 2: PR #531; R6-1c cz. 3: PR #533; R6-1c cz. 4: PR #534; R6-1c cz. 5: PR #535; R6-1c cz. 6: PR #536; R6-1c cz. 7: PR #539; R6-1c cz. 8: PR #540; transkrypt w podglądzie (#542): PR #543 |
-| Podpięcie do limitów pakietów (FREE 1, płatne 10) | W TOKU (przyznanie puli przez operatora gotowe; sprawdzanie limitu przy zlecaniu rozmowy gotowe i potwierdzone testem bazy, także przy równoległych zleceniach; pakiety czekają na zdjęcie zamrożenia) | PR #532, PR #544 |
+| Architektura i MVP rozmowy (dawne SC-011, SC-012) | W TOKU (sprawdzone 18.11.2026) | audyt PR #526, `docs/checks/r6-voice-audit-2026-11-18.md`: fundamenty działają tylko na sztucznym dostawcy i bazie testowej; brakuje migracji, webhooka, połączenia z Retell i ekranu (R6-1a…1e). R6-1a/1b: PR #527; R6-1b cz. 2: PR #530; R6-1c: PR #529; R6-1d: PR #528; R6-1c cz. 2: PR #531; R6-1c cz. 3: PR #533; R6-1c cz. 4: PR #534; R6-1c cz. 5: PR #535; R6-1c cz. 6: PR #536; R6-1c cz. 7: PR #539; R6-1c cz. 8: PR #540; transkrypt w podglądzie (#542): PR #543; R6-1e (webhook Retell w Preview, domyślnie wyłączony): PR #584; R6-1e cz. 2 (rola bazy dla webhooka, migracja): PR #585 |
+| Podpięcie do limitów pakietów (FREE 1; PRESELEKCJA, WERYFIKACJA, AC po 10) | W TOKU (przyznanie puli przez operatora gotowe; sprawdzanie limitu, rezerwacja, rozliczenie i zwrot nieodbytej rozmowy gotowe i potwierdzone testem bazy, także przy równoległych zleceniach; pula z pakietu przyznawana automatycznie osobno dla każdego pakietu, bez podwójnego przyznania, oraz przygotowane, nieużywane miejsce na dokupione rozmowy — ważność puli 3 miesiące jak pakiet CV (decyzja 20.11.2026, 18:31) — w PR #553 (scalenie do `integration` zatwierdzone przez właściciela 20.11.2026, 18:31, po przeglądzie); poprawka: zakup kilku pakietów jedną płatnością lub jednym zamówieniem daje 10 rozmów za każdy pakiet (wcześniej 10 za całą płatność), bez podwójnego przyznania — PR #572; na ekranie rekrutera (tylko podgląd, niewidoczny dla klientów) przycisk zlecenia rozmowy pokazuje pozostałą pulę i jasny komunikat, gdy pula jest pusta albo miesięczny limit 50 zł blokuje nowe rozmowy — PR #573; poprawka: jeden pakiet WERYFIKACJA lub AC kupiony przez Stripe z dodatkowymi CV daje 10 rozmów (nie 20) i jest liczony jako ten pakiet, nie jako PRESELEKCJA — PR #586; zostaje: rezerwacja i prawdziwe zlecenie rozmowy z tego ekranu, gdy właściciel otworzy prawdziwe rozmowy, oraz zakup dodatkowych rozmów po decyzji o cenie) | PR #532, PR #544, PR #553, PR #572, PR #573, PR #586 |
+
+### R7. Płatności Stripe w tym repozytorium (od 19.11.2026)
+
+Decyzja 19.11.2026 (`docs/DECYZJE.md`): Stripe zamiast Przelewy24, to samo konto KTIG Consulting co
+`skillcheck-preselekcja`. Prawdziwe pieniądze dopiero po wpisaniu kluczy na żywo przez właściciela.
+
+| Krok | Status | Dowód |
+|---|---|---|
+| Zdjęcie `PAYMENT_PATH_FREEZE` z publikatora (`.github/workflows/auto-release.yml`) i testów polityki wydań | DO SPRAWDZENIA (zamrożenie usunięte w całości: `PAYMENT_PATH_FREEZE` i `PAYMENT_CONTENT_FREEZE`; zostaje tylko blokada kodu, który rusza pieniądze lub faktury — `PAYMENTS`; działa na produkcji po promocji #564 na `main`) | kod: PR #564, zasady: PR #565 |
+| Zakup PRESELEKCJI, WERYFIKACJI i ASSESSMENT CENTER przez Stripe Checkout (wzór: `skillcheck-preselekcja`), ceny z `docs/cennik-2026-11-02.md`, domyślnie wyłączony do czasu kluczy | W TOKU (PRESELEKCJA w całych pakietach po 60 CV, WERYFIKACJA i ASSESSMENT CENTER po jednym pakiecie; tylko tryb testowy, domyślnie wyłączone; opłacony pakiet AC pozwala utworzyć sesję AC; wygasła, nieopłacona sesja płatności zamyka zamówienie bez przyznania pakietu i firma może kupić ponownie — PR #578 (wymaga migracji w bazie po zatwierdzeniu przez właściciela); adres płatności Stripe z fragmentem `#…` przyjmowany (poprawka Codex P1 z #566) — PR #580; dopłata za CV ponad pulę bazową dla WERYFIKACJI i ASSESSMENT CENTER (co 5 CV, do 150 CV, 0,16 zł netto za każde dodatkowe CV, np. WERYFIKACJA 100 CV = 622,87 zł) działa za flagą PRICING_CV_SLIDER_ENABLED w trybie testowym — PR #581 (wymaga migracji w bazie po zatwierdzeniu przez właściciela); zamówienie, którego sesja Stripe wygasła, zanim aplikacja zdążyła ją zapisać (utracona odpowiedź Stripe), też się zamyka bez przyznania pakietu i nie blokuje kolejnego zakupu (poprawka Codex P2 z #566) — PR #582; bez faktur) | PR #556, #563, #578, #580, #581, #582, #583 |
+| Usunięcie kodu Przelewy24 | ZROBIONE (część 1: kod płatności, trasy, panel operatora i ekran zakupu bez Przelewy24; cz. 2 (teksty stron): PR #567 — teksty stron publicznych i kalkulatora mówią o Stripe; cz. 3 (dokumenty prawne): PR #570 — regulamin i polityka prywatności nazywają Stripe, wersja zgody r4, także w wersji .docx; archiwalne dokumenty P24 w `docs/` oznaczone jako nieaktualne: PR #571; cz. 4 (komponent zakupu): PR #575 — usunięte martwe gałęzie Przelewy24 w komponencie zakupu (sandbox, kody P24, tekst PayPro); cz. 5 (CI): PR #576 — usunięte wpisy nieistniejących plików Przelewy24 z workflow płatności; cz. 6 (polityka prywatności § 6 — Stripe wśród dostawców poza EOG, także w .docx): PR #579; testy pilnujące, że kod Przelewy24 nie wraca, zostają) | PR #562, PR #567; dokumenty prawne: PR #570; dokumentacja archiwalna: PR #571; komponent zakupu: PR #575; CI: PR #576; polityka prywatności § 6: PR #579 |
+| Limit kosztu rozmów voicebota 50 zł miesięcznie w aplikacji (blokada nowych rozmów i powiadomienie właściciela) | W TOKU (blokada w bazie i alert dla właściciela w bazie; każda rozmowa rezerwuje 15 zł, czyli jej najwyższy możliwy koszt, więc limitu nie da się przekroczyć także bez rozliczenia rzeczywistych kosztów — przy obecnej rezerwie mieszczą się 3 rozmowy w miesiącu; usunięcie danych kandydata nie zmienia miesięcznej sumy; rzeczywisty koszt rozmowy z webhooka Retell (call_analyzed, przeliczony po stałym kursie 4,50 zł/USD) zastępuje rezerwę raz na rozmowę, a koszt wyższy niż rezerwa blokuje resztę miesiąca; alert dla właściciela jest widoczny w panelu operatora „Koszty AI i marża” razem z limitem, kosztem od początku miesiąca i informacją, czy nowe rozmowy są wstrzymane (PR #568); zostaje zewnętrzne powiadomienie (e-mail) — to nowa prawdziwa wysyłka i wymaga zgody właściciela) | PR #558, PR #561, PR #568 |
 
 ## Wstrzymane do pierwszej sprzedaży
 
@@ -120,7 +140,7 @@ analiza treści rozmów.
 ## Poza tym repozytorium
 
 Sprzedaż FREE i PRESELEKCJI oraz Stripe: `krzysztofsyska/skillcheck-preselekcja` (etap 1).
-W `skillcheck-core` ścieżka płatności pozostaje zamrożona.
+W `skillcheck-core` zamrożenie ścieżki płatności zdjęte 19.11.2026 — zob. R7.
 
 ## Utrzymanie wydań
 
