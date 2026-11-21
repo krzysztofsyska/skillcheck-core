@@ -815,3 +815,200 @@ test('R7: WERYFIKACJA / ASSESSMENT CENTER CV pool above the base — the databas
   await db.query('rollback').catch(() => {});
   assert.equal((await db.query('select private.erasure_schema_signature() s')).rows[0].s, signature);
 });
+
+// R7 live (owner decision 20.11.2026, point 5): LIVE-mode Stripe orders of the KTIG
+// account through the same restricted role, on the REAL orchestration and store; a
+// live order and a test order never settle each other (application scope check AND
+// the receipt-key scope check in the database).
+const liveMigration = readFileSync(new URL('../supabase/migrations/20261122100000_r7_stripe_live_orders.sql', import.meta.url), 'utf8');
+const liveRollback = readFileSync(new URL('../supabase/rollbacks/20261122100000_r7_stripe_live_orders_down.sql', import.meta.url), 'utf8');
+
+test('R7 live: live orders created, granted once and closed through the adapter role; test and live never cross-settle; rollback',
+  { skip: !url && 'SC19_TEST_DATABASE_URL required' }, async t => {
+  const { createSc19Payments } = await import('../lib/sc19-payments.ts');
+  const { createPostgresPaymentStore } = await import('../lib/sc19-payment-postgres.ts');
+  const { stripePackageExtension, STRIPE_PACKAGE_OFFERS } = await import('../lib/sc19-stripe-packages.ts');
+  const { readStripeBuyerCompany } = await import('../lib/sc19-stripe-provider.ts');
+  const u = new URL(url);
+  if (!['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname)) throw Error('Disposable loopback database required');
+  const root = new pg.Client({ connectionString: u.href }); await root.connect();
+  const name = 'r7live_' + randomBytes(6).toString('hex');
+  await root.query(`create database "${name}"`); u.pathname = '/' + name;
+  const db = new pg.Client({ connectionString: u.href }); await db.connect();
+  const pool = new pg.Pool({ connectionString: u.href, max: 3 });
+  t.after(async () => { await pool.end(); await db.end(); await root.query(`drop database "${name}"`); await root.end(); });
+  await db.query(fullFixture);
+  await db.query(guardFn); await db.query(guardTrigger);
+  await db.query(gateFn);
+  for (const m of [migration, packagesMigration, expiredMigration, overageMigration]) await db.query(m);
+  const A = '00000000-0000-4000-8000-000000000001', B = '00000000-0000-4000-8000-000000000003';
+  const OWNER = '00000000-0000-4000-8000-000000000002';
+  await db.query(`insert into public.companies values ($1,'Firma B',$2)`, [B, OWNER]);
+  await db.query(`insert into private.sc19_trial_approvals(company_id,nip) values ($1,'1234567890')`, [B]);
+  const rolePool = { async connect() { const c = await pool.connect(); await c.query('set role sc19_p24_checkout'); return c; } };
+  const roleQuery = async (sql, values) => { const c = await rolePool.connect(); try { return (await c.query(sql, values)).rows; } finally { c.release(); } };
+  const asRole = async (sql, values) => {
+    await db.query('begin'); await db.query('set local role sc19_p24_checkout');
+    try { const r = await db.query(sql, values); await db.query('commit'); return r; }
+    catch (e) { await db.query('rollback'); throw e; }
+  };
+  // Runs as the role inside a transaction that is ALWAYS rolled back.
+  const tryAsRole = async (sql, values) => {
+    await db.query('begin'); await db.query('set local role sc19_p24_checkout');
+    try { return await db.query(sql, values); } finally { await db.query('rollback'); }
+  };
+  const buyers = []; const created = [];
+  const payments = { n: 0 };
+  const make = mode => {
+    const scope = { provider: 'stripe', account: 'ktig-consulting', mode };
+    const provider = {
+      async createCheckout(order) {
+        created.push(order.id);
+        buyers.push(await readStripeBuyerCompany(roleQuery, order.companyId));
+        const sid = `cs_${mode}_${order.id.replace(/-/g, '')}`;
+        return { orderId: order.id, sessionId: sid, url: `https://checkout.stripe.com/c/pay/${sid}`, scope,
+          amountMinor: order.amountMinor, currency: 'PLN', paymentKind: 'one_time' };
+      },
+      async lookupCheckout() { return null; },
+      async expiredSession() { return false; },
+      async verifyAndRetrieve(raw) {
+        const e = JSON.parse(new TextDecoder().decode(raw));
+        return { eventId: `evt_${mode}_${e.n}`, orderId: e.id, sessionId: e.sessionId, paymentId: e.paymentId,
+          scope, amountMinor: e.amountMinor, currency: 'PLN', status: 'paid' };
+      },
+    };
+    const store = createPostgresPaymentStore(rolePool, stripePackageExtension);
+    return createSc19Payments({ store, provider, scope, checkoutOrigins: ['https://checkout.stripe.com'],
+      enabled: true, liveApproved: mode === 'live', authenticate: async () => ({ userId: OWNER }) });
+  };
+  const live = make('live'), testMode = make('test');
+  const req = n => `00000000-0000-4000-8000-0000000005${String(n).padStart(2, '0')}`;
+  const deliver = (service, h, amountMinor) => service.notification(new TextEncoder().encode(JSON.stringify(
+    { id: h.orderId, sessionId: h.sessionId, amountMinor, n: ++payments.n, paymentId: `pi_fixturelive${payments.n}` })), 'sig');
+  const deliverAgain = (service, h, amountMinor, paymentId) => service.notification(new TextEncoder().encode(JSON.stringify(
+    { id: h.orderId, sessionId: h.sessionId, amountMinor, n: ++payments.n, paymentId })), 'sig');
+  const preselekcja = (service, company, n) => service.checkout({ companyId: company, offerId: 'preselekcja-60-2026-11-r3',
+    termsRevision: 'preselekcja-terms-2026-11-v3', requestId: req(n), packageCode: 'PRESELEKCJA' });
+  const wer = STRIPE_PACKAGE_OFFERS.find(o => o.plan === 'WERYFIKACJA');
+  const ac = STRIPE_PACKAGE_OFFERS.find(o => o.plan === 'ASSESSMENT_CENTER');
+  const pkg = (service, company, o, n) => service.checkout({ companyId: company, offerId: o.id, termsRevision: o.termsRevision,
+    requestId: req(n), packageCode: o.plan });
+  const balance = async c => (await db.query('select available from private.sc19_balances where company_id=$1', [c])).rows[0]?.available ?? 0;
+  const count = async table => (await db.query(`select count(*)::int n from ${table}`)).rows[0].n;
+
+  // Pre-migration schema: a live order is refused by the database BEFORE any Stripe session exists.
+  await assert.rejects(preselekcja(live, A, 1));
+  await assert.rejects(pkg(live, A, ac, 2));
+  assert.equal(created.length, 0, 'no Stripe session was created');
+  assert.equal(await count('private.sc19_payment_orders'), 0);
+  assert.equal(await count('sc19_stripe.package_orders'), 0);
+  await assert.rejects(asRole(`insert into sc19_stripe.customers(company_id,mode,customer_id) values ($1,'live','cus_fixturelive0')`, [A]), /row-level security/);
+
+  // Migration: erasure signature unchanged, not re-runnable, rollback (no live records yet) and re-apply.
+  const signature = (await db.query('select private.erasure_schema_signature() s')).rows[0].s;
+  await db.query(liveMigration);
+  assert.equal((await db.query('select private.erasure_schema_signature() s')).rows[0].s, signature, 'erasure signature unchanged');
+  await assert.rejects(db.query(liveMigration), /already_installed/);
+  await db.query('rollback');
+  await db.query(liveRollback);
+  await assert.rejects(asRole(`insert into sc19_stripe.customers(company_id,mode,customer_id) values ($1,'live','cus_fixturelive0')`, [A]), /row-level security/);
+  assert.equal((await db.query(`select count(*)::int n from pg_policies where policyname like 'stripe_receipt_scope_%'`)).rows[0].n, 0);
+  await db.query(liveMigration);
+  // Same grants as before: adapter role only, nothing for the API roles; security definer with an empty search_path.
+  for (const fn of ['sc19_stripe.grant_package(uuid,text)', 'sc19_stripe.close_expired_order(uuid,text)',
+    'sc19_stripe.replace_customer(uuid,text,text,text)', 'sc19_stripe.buyer(uuid)']) {
+    assert.equal((await db.query(`select has_function_privilege('sc19_p24_checkout',$1,'execute') r`, [fn])).rows[0].r, true, fn);
+    for (const role of ['anon', 'authenticated'])
+      assert.equal((await db.query(`select has_function_privilege($1,$2,'execute') r`, [role, fn])).rows[0].r, false, `${role} ${fn}`);
+    assert.deepEqual((await db.query(`select prosecdef, proconfig from pg_proc where oid=$1::regprocedure`, [fn])).rows,
+      [{ prosecdef: true, proconfig: ['search_path=""'] }], fn);
+  }
+
+  // LIVE PRESELEKCJA: order in live mode, buyer data, granted once.
+  const p = await preselekcja(live, A, 3);
+  assert.deepEqual((await db.query('select mode, provider, account, amount_minor from private.sc19_payment_orders where id=$1', [p.orderId])).rows,
+    [{ mode: 'live', provider: 'stripe', account: 'ktig-consulting', amount_minor: 30000 }]);
+  assert.deepEqual(buyers.at(-1), { companyName: 'Firma A', nip: '7394002294' });
+  assert.equal((await deliver(live, p, 30000)).state, 'applied');
+  assert.equal((await deliverAgain(live, p, 30000, `pi_fixturelive${payments.n}`)).state, 'already_applied');
+  assert.equal(await balance(A), 60);
+  assert.equal(await count('private.sc19_payment_grants'), 1);
+  assert.deepEqual(JSON.parse((await db.query('select payment_key from private.sc19_payment_grants')).rows[0].payment_key).slice(0, 3),
+    ['stripe', 'ktig-consulting', 'live']);
+
+  // LIVE ASSESSMENT CENTER: buyer data for an unpaid LIVE package order, catalog price, granted once with the entitlement.
+  const a = await pkg(live, A, ac, 4);
+  assert.equal(a.amountMinor, 149900);
+  assert.deepEqual(buyers.at(-1), { companyName: 'Firma A', nip: '7394002294' });
+  assert.equal((await db.query('select mode from sc19_stripe.package_orders where id=$1', [a.orderId])).rows[0].mode, 'live');
+  assert.equal((await deliver(live, a, 149900)).state, 'applied');
+  assert.equal((await deliverAgain(live, a, 149900, `pi_fixturelive${payments.n}`)).state, 'already_applied');
+  assert.equal(await balance(A), 110);
+  assert.deepEqual((await db.query(`select code, available from sc19_commerce.entitlements where company_id=$1`, [A])).rows,
+    [{ code: 'package:ASSESSMENT_CENTER', available: 1 }]);
+  await db.query('select private.ac_package_required($1)', [A]);
+
+  // LIVE customers: stored and replaced like test ones; another account is still refused.
+  await asRole(`insert into sc19_stripe.customers(company_id,mode,customer_id) values ($1,'live','cus_fixturelive1')`, [A]);
+  assert.equal((await asRole(`select sc19_stripe.replace_customer($1,'live','cus_fixturelive1','cus_fixturelive2') v`, [A])).rows[0].v, 'cus_fixturelive2');
+  await assert.rejects(asRole(`select sc19_stripe.replace_customer($1,'other','cus_fixturelive2','cus_fixturelive3')`, [A]), /stripe_customer_invalid/);
+  await assert.rejects(asRole(`insert into private.sc19_payment_orders(id,company_id,buyer_id,request_id,offer_id,offer_revision,terms_revision,
+    amount_minor,currency,credits,provider,account,mode,status,checkout_deadline_ms) values (gen_random_uuid(),$1,$2,gen_random_uuid(),
+    'preselekcja-60-2026-11-r3','preselekcja-60-v3','preselekcja-terms-2026-11-v3',30000,'PLN',60,'stripe','another-account','live','awaiting_payment',1)`,
+    [B, OWNER]), /row-level security/);
+  await assert.rejects(asRole(`insert into sc19_stripe.package_orders
+    (id,company_id,buyer_id,request_id,package_code,offer_id,offer_revision,terms_revision,amount_minor,currency,credits,provider,account,mode,status,checkout_deadline_ms)
+    values (gen_random_uuid(),$1,$2,gen_random_uuid(),'WERYFIKACJA','x','x','x',61500,'PLN',60,'stripe','another-account','live','awaiting_payment',1)`,
+    [B, OWNER]), /row-level security/);
+
+  // A LIVE package order: a TEST-scoped receipt key never grants it; the test service refuses it (scope); it closes when expired.
+  const w = await pkg(live, A, wer, 5);
+  await assert.rejects(tryAsRole(`select sc19_stripe.grant_package($1,$2)`, [w.orderId, JSON.stringify(['stripe', 'ktig-consulting', 'test', 'pi_fixturecross1'])]),
+    /stripe_package_grant_invalid/);
+  await assert.rejects(tryAsRole(`select sc19_stripe.grant_package($1,'pi_fixturecross1')`, [w.orderId]), /stripe_package_grant_invalid/);
+  await assert.rejects(deliver(testMode, w, 61500), e => e.code === 'SC19_PAYMENT_SCOPE_MISMATCH');
+  assert.equal(await balance(A), 110);
+  assert.equal(await count('sc19_stripe.package_grants'), 1);
+  assert.equal((await asRole('select sc19_stripe.close_expired_order($1,$2) v', [w.orderId, w.sessionId])).rows[0].v, true);
+  assert.equal((await db.query('select status from sc19_stripe.package_orders where id=$1', [w.orderId])).rows[0].status, 'expired');
+  assert.equal((await asRole('select sc19_stripe.close_expired_order($1,$2) v', [w.orderId, w.sessionId])).rows[0].v, false);
+
+  // TEST mode on company B is unchanged after the migration, and a LIVE-scoped receipt never settles a test order.
+  const tp = await preselekcja(testMode, B, 6);
+  assert.equal((await db.query('select mode from private.sc19_payment_orders where id=$1', [tp.orderId])).rows[0].mode, 'test');
+  await assert.rejects(tryAsRole(`insert into private.sc19_payment_grants(payment_key,order_id) values ($1,$2)`,
+    [JSON.stringify(['stripe', 'ktig-consulting', 'live', 'pi_fixturecross2']), tp.orderId]), /row-level security/);
+  await assert.rejects(tryAsRole(`insert into private.sc19_payment_grants(payment_key,order_id) values ('pi_fixturecross2',$1)`, [tp.orderId]),
+    /row-level security/);
+  await assert.rejects(deliver(live, tp, 30000), e => e.code === 'SC19_PAYMENT_SCOPE_MISMATCH');
+  assert.equal(await balance(B), 0);
+  assert.equal((await deliver(testMode, tp, 30000)).state, 'applied');
+  assert.equal(await balance(B), 60);
+  const tw = await pkg(testMode, B, wer, 7);
+  await assert.rejects(tryAsRole(`select sc19_stripe.grant_package($1,$2)`, [tw.orderId, JSON.stringify(['stripe', 'ktig-consulting', 'live', 'pi_fixturecross3'])]),
+    /stripe_package_grant_invalid/);
+  await assert.rejects(deliver(live, tw, 61500), e => e.code === 'SC19_PAYMENT_SCOPE_MISMATCH');
+  assert.equal((await deliver(testMode, tw, 61500)).state, 'applied');
+  assert.equal(await balance(B), 120);
+  assert.equal(await count('sc19_stripe.package_grants'), 2);
+  assert.equal(await count('private.sc19_payment_grants'), 2);
+  // Every receipt carries its own order's mode.
+  assert.deepEqual((await db.query(`select o.mode, g.payment_key from private.sc19_payment_grants g join private.sc19_payment_orders o on o.id=g.order_id
+    union all select o.mode, g.payment_key from sc19_stripe.package_grants g join sc19_stripe.package_orders o on o.id=g.order_id`)).rows
+    .map(r => JSON.parse(r.payment_key)[2] === r.mode), [true, true, true, true]);
+
+  // API roles still see nothing.
+  for (const role of ['anon', 'authenticated']) {
+    await db.query('begin'); await db.query(`set local role ${role}`);
+    await assert.rejects(db.query('select * from sc19_stripe.package_orders'), /permission denied/);
+    await db.query('rollback');
+    await db.query('begin'); await db.query(`set local role ${role}`);
+    await assert.rejects(db.query('select * from sc19_stripe.customers'), /permission denied/);
+    await db.query('rollback');
+  }
+
+  // Rollback refuses while live records exist; the erasure signature never moved.
+  await assert.rejects(db.query(liveRollback), /rollback_refused_live_records_exist/);
+  await db.query('rollback').catch(() => {});
+  assert.equal((await db.query('select private.erasure_schema_signature() s')).rows[0].s, signature);
+});

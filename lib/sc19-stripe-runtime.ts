@@ -4,7 +4,8 @@
  * Przelewy24 sandbox used, sc19_p24_preview / sc19_p24_checkout), never a service
  * key. Migration 20261121110000_r7_stripe_checkout.sql lets those roles handle
  * TEST-mode Stripe orders and read the buyer's company name and NIP through one
- * security-definer function.
+ * security-definer function; 20261122100000_r7_stripe_live_orders.sql adds
+ * LIVE-mode orders of the same account (live checkouts open on production only).
  *
  * Sales switch: the existing SC19_PACKAGES_ENABLED (=== 'true') opens new
  * checkouts, exactly as for the previous adapter. Webhooks keep settling orders
@@ -17,7 +18,7 @@ import { composeSc19PaymentRuntime } from './sc19-payment-runtime.ts';
 import type { PaymentOrder, PaymentMode } from './sc19-payments.ts';
 import { Sc19PaymentError } from './sc19-payments.ts';
 import { createStripeProvider, readStripeBuyerCompany, STRIPE_CHECKOUT_ORIGIN, type StripeCustomerStore } from './sc19-stripe-provider.ts';
-import type { Sc19StripeConfig } from './sc19-stripe-config.ts';
+import { stripeLiveApproved, type Sc19StripeConfig } from './sc19-stripe-config.ts';
 import { stripePackageExtension } from './sc19-stripe-packages.ts';
 
 let pool: Pool | undefined;
@@ -86,8 +87,9 @@ export async function stripeRuntime(config: Sc19StripeConfig) {
   checkoutOrigins: [STRIPE_CHECKOUT_ORIGIN],
   // R7: WERYFIKACJA and ASSESSMENT CENTER orders (sc19_stripe.package_orders), Stripe only.
   storeExtension: stripePackageExtension,
-  // Live payments stay closed (AGENTS.md, payment path): a live key never opens a checkout.
-  liveApproved: false,
+  // R7 live (owner decision 20.11.2026, point 5): a live key opens checkouts on the
+  // production deployment only; on Preview a live key is refused by the config gate.
+  liveApproved: stripeLiveApproved(config),
   enabled: process.env.SC19_PACKAGES_ENABLED === 'true',
   // R5 W2b: the CV pool from the slider is accepted (and validated) only with the
   // slider flag on; default off keeps the request shape unchanged.

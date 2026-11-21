@@ -9,12 +9,13 @@ import { createSc19Payments, Sc19PaymentError } from '../lib/sc19-payments.ts';
 import { createSc19PaymentHttp } from '../lib/sc19-payment-http.ts';
 import { createStripeProvider, stripeModeOf, verifyStripeSignature, stripeForm, STRIPE_CHECKOUT_ORIGIN } from '../lib/sc19-stripe-provider.ts';
 import { STRIPE_APP, STRIPE_CATALOG, checkCvCount, packagesForPool, stripePoolQuote, stripeQuote } from '../lib/stripe-catalog.ts';
-import { sc19StripeGate } from '../lib/sc19-stripe-config.ts';
+import { sc19StripeGate, stripeLiveApproved } from '../lib/sc19-stripe-config.ts';
 import { STRIPE_PACKAGE_OFFERS } from '../lib/sc19-stripe-packages.ts';
 
 const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const SECRET = 'sk_test_' + 'a'.repeat(24);
 const WHSEC = 'whsec_' + 'b'.repeat(32);
+const LIVE_SECRET = 'sk_live_' + 'a'.repeat(24);
 const ORIGIN = 'https://skillcheck.pl';
 const scope = { provider: 'stripe', account: 'ktig-consulting', mode: 'test' };
 const offer = () => ({ id: 'preselection-v1', revision: 'revision-v1', plan: 'PRESELEKCJA', active: true, approved: true,
@@ -22,14 +23,14 @@ const offer = () => ({ id: 'preselection-v1', revision: 'revision-v1', plan: 'PR
 const buy = (extra = {}) => ({ companyId: id(1), offerId: 'preselection-v1', requestId: id(10), termsRevision: 'terms-v1',
   packageCode: 'PRESELEKCJA', ...extra });
 
-function fakeStripe() {
+function fakeStripe(o = {}) {
   const s = { customers: new Map(), sessions: new Map(), prices: [], keys: new Map(), calls: [], seq: 0 };
   const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
   const missing = () => json({ error: { code: 'resource_missing' } }, 404);
   s.fetch = async (url, init) => {
     const u = new URL(url); const method = init.method; const body = Object.fromEntries(new URLSearchParams(init.body ?? ''));
     const key = init.headers['Idempotency-Key'];
-    assert.equal(init.headers.Authorization, `Bearer ${SECRET}`);
+    assert.equal(init.headers.Authorization, `Bearer ${o.secret ?? SECRET}`);
     assert.equal(init.headers['Stripe-Version'], '2026-10-28.endive');
     s.calls.push({ method, path: u.pathname, query: Object.fromEntries(u.searchParams), body, key });
     if (key && s.keys.has(key)) return json(s.keys.get(key));
@@ -56,8 +57,8 @@ function fakeStripe() {
       const unit = body['line_items[0][price]'] ? s.prices.find(p => p.id === body['line_items[0][price]']).unit_amount
         : Number(body['line_items[0][price_data][unit_amount]']);
       const metadata = {}; for (const [k, v] of Object.entries(body)) { const mm = /^metadata\[(.+)\]$/.exec(k); if (mm) metadata[mm[1]] = v; }
-      const sid = `cs_test_fake${++s.seq}session`;
-      const session = { id: sid, object: 'checkout.session', mode: body.mode, currency: body.currency, livemode: false,
+      const sid = `cs_${o.live ? 'live' : 'test'}_fake${++s.seq}session`;
+      const session = { id: sid, object: 'checkout.session', mode: body.mode, currency: body.currency, livemode: o.live === true,
         customer: body.customer, client_reference_id: body.client_reference_id, metadata, amount_total: unit * qty,
         url: `${STRIPE_CHECKOUT_ORIGIN}/c/pay/${sid}#fidkdWxOYHwnPyd1blpxYHZxWjA0`, status: 'open', payment_status: 'unpaid', payment_intent: null, params: body };
       s.sessions.set(sid, session); remember(session);
@@ -78,7 +79,10 @@ function fakeStripe() {
 }
 
 function harness(opts = {}) {
-  const stripe = fakeStripe();
+  // R7 live: the same harness with a live key, live scope and live approval.
+  const secretKey = opts.live ? LIVE_SECRET : SECRET;
+  const hscope = opts.live ? { ...scope, mode: 'live' } : scope;
+  const stripe = fakeStripe({ secret: secretKey, live: opts.live === true });
   const st = { offer: offer(), orders: new Map(), requests: new Map(), grants: new Map(), credits: new Map(),
     entitlements: new Map(), customers: new Map(), paidHook: [], nip: '7394002294', closures: [] };
   let tail = Promise.resolve();
@@ -119,10 +123,11 @@ function harness(opts = {}) {
     async save(c, mode, cid) { const k = `${c}:${mode}`; if (!st.customers.has(k)) st.customers.set(k, cid); return st.customers.get(k); },
     async replace(c, mode, stale, cid) { const k = `${c}:${mode}`; if (st.customers.get(k) === stale) st.customers.set(k, cid); return st.customers.get(k); },
   };
-  const provider = createStripeProvider({ secretKey: SECRET, webhookSecret: WHSEC, mode: 'test', appOrigin: ORIGIN, scope,
+  const provider = createStripeProvider({ secretKey, webhookSecret: WHSEC, mode: hscope.mode, appOrigin: ORIGIN, scope: hscope,
     customers, fetch: stripe.fetch, nowMs: () => opts.now ?? Date.now(),
     async buyer(order) { assert.equal(order.buyerId, id(2)); return { email: 'buyer@example.test', companyName: 'Firma Testowa', nip: st.nip }; } });
-  const service = createSc19Payments({ store, provider, scope, checkoutOrigins: [STRIPE_CHECKOUT_ORIGIN], enabled: true, liveApproved: false, cvPoolEnabled: opts.cvPoolEnabled === true,
+  const service = createSc19Payments({ store, provider, scope: hscope, checkoutOrigins: [STRIPE_CHECKOUT_ORIGIN], enabled: true,
+    liveApproved: opts.live === true, cvPoolEnabled: opts.cvPoolEnabled === true,
     authenticate: async () => ({ userId: id(2) }), onPaid: async order => { st.paidHook.push(order.id); } });
   return { st, stripe, service, provider };
 }
@@ -734,7 +739,7 @@ test('configuration gate: keys from env only, test keys only on Preview, pinned 
   assert.equal(sc19StripeGate({ ...production, VERCEL: undefined }).reason, 'not_vercel');
 });
 
-test('a live key never opens a checkout (live payments stay closed)', async () => {
+test('without live approval a live key never opens a checkout', async () => {
   const stripe = fakeStripe();
   const liveKey = 'sk_live_' + 'a'.repeat(24);
   const liveScope = { ...scope, mode: 'live' };
@@ -745,6 +750,117 @@ test('a live key never opens a checkout (live payments stay closed)', async () =
   assert.equal(service.checkoutEnabled, false);
   await assert.rejects(service.checkout(buy()), e => e.code === 'SC19_PAYMENTS_DISABLED');
   assert.equal(stripe.calls.length, 0);
+});
+
+// R7 live (owner decision 20.11.2026, point 5): live payments open with live keys on
+// the production deployment only; Preview never takes real money.
+const gateEnv = () => {
+  const base = { VERCEL: '1', STRIPE_WEBHOOK_SECRET: WHSEC };
+  return {
+    preview: { ...base, STRIPE_SECRET_KEY: SECRET, VERCEL_ENV: 'preview', VERCEL_GIT_COMMIT_REF: 'integration',
+      NEXT_PUBLIC_SUPABASE_URL: 'https://orbyscrupgnupifzlqxp.supabase.co', VERCEL_BRANCH_URL: 'core-git-integration.vercel.app',
+      SC19_P24_PREVIEW_DATABASE_URL: 'postgresql://sc19_p24_preview.orbyscrupgnupifzlqxp:pw@aws-1-eu-west-1.pooler.supabase.com:6543/postgres' },
+    production: { ...base, STRIPE_SECRET_KEY: LIVE_SECRET, VERCEL_ENV: 'production', VERCEL_GIT_COMMIT_REF: 'main',
+      NEXT_PUBLIC_SUPABASE_URL: 'https://wsvjawuikxfzjyivxgsu.supabase.co', NEXT_PUBLIC_SITE_URL: 'https://skillcheck.pl',
+      SC19_P24_CHECKOUT_DATABASE_URL: 'postgresql://sc19_p24_checkout.wsvjawuikxfzjyivxgsu:pw@aws-1-eu-west-1.pooler.supabase.com:6543/postgres' },
+  };
+};
+
+test('R7 live: live key + production → live approved; live key on Preview refused; test keys never live', () => {
+  const { preview, production } = gateEnv();
+  // Live key on production: configuration in live mode, live checkouts approved.
+  const prod = sc19StripeGate(production);
+  assert.equal(prod.ok, true); assert.equal(prod.config.mode, 'live'); assert.equal(prod.config.deployment, 'production');
+  assert.equal(stripeLiveApproved(prod.config, production), true);
+  for (const key of ['sk_live_', 'rk_live_'].map(p => p + 'c'.repeat(24))) {
+    const g = sc19StripeGate({ ...production, STRIPE_SECRET_KEY: key });
+    assert.equal(g.ok, true); assert.equal(stripeLiveApproved(g.config, production), true, key.slice(0, 8));
+  }
+  // Live key on Preview: no configuration at all (the test project never takes real money).
+  for (const key of ['sk_live_', 'rk_live_'].map(p => p + 'c'.repeat(24))) {
+    const g = sc19StripeGate({ ...preview, STRIPE_SECRET_KEY: key });
+    assert.equal(g.ok, false); assert.equal(g.reason, 'stripe_mode'); assert.equal(g.shape, 'live_key_on_preview');
+  }
+  // Test key: unchanged on Preview and on production, never live-approved.
+  const p = sc19StripeGate(preview);
+  assert.equal(p.ok, true); assert.equal(p.config.mode, 'test'); assert.equal(stripeLiveApproved(p.config, preview), false);
+  const prodTest = sc19StripeGate({ ...production, STRIPE_SECRET_KEY: SECRET });
+  assert.equal(prodTest.ok, true); assert.equal(prodTest.config.mode, 'test');
+  assert.equal(stripeLiveApproved(prodTest.config, production), false);
+  // Second guard: a live configuration outside a production environment is never approved.
+  for (const env of [{ ...production, VERCEL_ENV: 'preview' }, { ...production, VERCEL_ENV: 'development' },
+    { ...production, VERCEL_ENV: undefined }, { ...production, VERCEL: undefined }])
+    assert.equal(stripeLiveApproved(prod.config, env), false, JSON.stringify([env.VERCEL, env.VERCEL_ENV]));
+  assert.equal(stripeLiveApproved({ ...prod.config, deployment: 'preview' }, production), false);
+  assert.equal(stripeLiveApproved({ ...prod.config, appOrigin: 'https://core-git-integration.vercel.app' }, production), false);
+  // Other production pins still hold for a live key.
+  assert.equal(sc19StripeGate({ ...production, VERCEL_GIT_COMMIT_REF: 'integration' }).reason, 'git_ref');
+  assert.equal(sc19StripeGate({ ...production, NEXT_PUBLIC_SUPABASE_URL: 'https://orbyscrupgnupifzlqxp.supabase.co' }).reason, 'supabase_url');
+});
+
+test('R7 live: the Stripe runtime derives live approval from the configuration, no extra switch; sales switch kept', () => {
+  const runtime = readFileSync(new URL('../lib/sc19-stripe-runtime.ts', import.meta.url), 'utf8');
+  assert.match(runtime, /liveApproved: stripeLiveApproved\(config\),/);
+  assert.doesNotMatch(runtime, /liveApproved: (true|false)/);
+  assert.match(runtime, /enabled: process\.env\.SC19_PACKAGES_ENABLED === 'true',/);
+  assert.doesNotMatch(runtime + readFileSync(new URL('../lib/sc19-stripe-config.ts', import.meta.url), 'utf8'), /STRIPE_PRODUCTION_APPROVED/);
+});
+
+test('R7 live: a live key with live approval opens a checkout; the live webhook grants once; test events are refused', async () => {
+  const { st, stripe, service } = harness({ live: true });
+  assert.equal(service.checkoutEnabled, true);
+  const r = await service.checkout(buy());
+  const order = st.orders.get(r.orderId);
+  assert.equal(order.scope.mode, 'live'); assert.equal(order.amountMinor, 30000);
+  assert.match(order.sessionId, /^cs_live_/);
+  assert.equal(st.credits.get(id(1)) ?? 0, 0);
+  // A test-mode event (other key's world) for the same session is refused before anything is granted.
+  stripe.pay(order.sessionId);
+  const testEvent = signed(completed(stripe.sessions.get(order.sessionId)));
+  await assert.rejects(service.notification(testEvent.raw, testEvent.header), e => e.code === 'SC19_PAYMENT_NOTIFICATION_INVALID');
+  assert.equal(st.credits.get(id(1)) ?? 0, 0);
+  const ev = signed(completed(stripe.sessions.get(order.sessionId), { livemode: true }));
+  assert.equal((await service.notification(ev.raw, ev.header)).state, 'applied');
+  assert.equal((await service.notification(ev.raw, ev.header)).state, 'already_applied');
+  assert.equal(st.credits.get(id(1)), 60);
+  // The receipt key carries the live scope (the database checks it against the order's mode).
+  assert.deepEqual([...st.grants.keys()].map(k => JSON.parse(k).slice(0, 3)), [['stripe', 'ktig-consulting', 'live']]);
+  assert.deepEqual(st.paidHook, [r.orderId]);
+  // ASSESSMENT CENTER in live mode: catalog price, granted once with its entitlement.
+  const acOffer = STRIPE_PACKAGE_OFFERS.find(o => o.plan === 'ASSESSMENT_CENTER');
+  const a = await service.checkout(buy({ offerId: acOffer.id, termsRevision: acOffer.termsRevision, requestId: id(11), packageCode: 'ASSESSMENT_CENTER' }));
+  const ao = st.orders.get(a.orderId);
+  assert.equal(ao.amountMinor, 149900); assert.equal(ao.scope.mode, 'live');
+  stripe.pay(ao.sessionId);
+  const aev = signed(completed(stripe.sessions.get(ao.sessionId), { livemode: true }));
+  assert.equal((await service.notification(aev.raw, aev.header)).state, 'applied');
+  assert.equal(st.entitlements.get(`${id(1)}:package:ASSESSMENT_CENTER`), 1);
+  assert.equal(st.credits.get(id(1)), 110);
+});
+
+test('R7 live: a live and a test configuration never settle each other\'s orders', async () => {
+  const live = harness({ live: true });
+  const r = await live.service.checkout(buy());
+  const liveOrder = live.st.orders.get(r.orderId);
+  live.stripe.pay(liveOrder.sessionId);
+  // The live order handed to a TEST-mode service (same store shape): scope mismatch, nothing granted.
+  const test = harness();
+  test.st.orders.set(liveOrder.id, structuredClone(liveOrder));
+  test.stripe.sessions.set(liveOrder.sessionId, { ...live.stripe.sessions.get(liveOrder.sessionId), livemode: false });
+  test.stripe.pay(liveOrder.sessionId);
+  const ev = signed(completed(test.stripe.sessions.get(liveOrder.sessionId)));
+  await assert.rejects(test.service.notification(ev.raw, ev.header), e => e.code === 'SC19_PAYMENT_SCOPE_MISMATCH');
+  assert.equal(test.st.grants.size, 0); assert.equal(test.st.credits.get(id(1)) ?? 0, 0);
+  // And the reverse: a test order on the live service.
+  const other = harness();
+  const t2 = await other.service.checkout(buy({ requestId: id(12) }));
+  const testOrder = other.st.orders.get(t2.orderId);
+  live.st.orders.set(testOrder.id, structuredClone(testOrder));
+  live.stripe.sessions.set(testOrder.sessionId, { ...other.stripe.sessions.get(testOrder.sessionId), livemode: true });
+  live.stripe.pay(testOrder.sessionId);
+  const ev2 = signed(completed(live.stripe.sessions.get(testOrder.sessionId), { livemode: true }));
+  await assert.rejects(live.service.notification(ev2.raw, ev2.header), e => e.code === 'SC19_PAYMENT_SCOPE_MISMATCH');
+  assert.equal(live.st.grants.size, 0);
 });
 
 test('form encoding and source hygiene: no key in code, no Stripe invoices, P24 adapter untouched', () => {
@@ -770,6 +886,19 @@ test('form encoding and source hygiene: no key in code, no Stripe invoices, P24 
   assert.doesNotMatch(packages.replace(rebuild, ''), /\b(drop|truncate|delete\s+from|update\s+\w|rename|alter\s+column)\b/i);
   assert.match(packages, /mode = 'test' and provider = 'stripe'/);
   assert.doesNotMatch(packages, /\bto\s+(anon|authenticated)\b/i);
+  // R7 live: the live migration changes policies and function bodies only — no data,
+  // no table, no price, nothing for the API roles; the receipt key is checked against
+  // the order's own mode in both settlement paths.
+  const liveSource = readFileSync(new URL('../supabase/migrations/20261122100000_r7_stripe_live_orders.sql', import.meta.url), 'utf8');
+  const live = liveSource.replace(/--[^\n]*/g, '').replace(/\$\$[\s\S]*?\$\$/g, '');
+  assert.doesNotMatch(live, /\b(truncate|delete\s+from|update\s+\w|rename|alter\s+(table|column))\b/i);
+  assert.doesNotMatch(live, /\bdrop\s+(?!policy if exists)/i, 'only policies are dropped (and recreated)');
+  assert.doesNotMatch(live, /\b(grant|create\s+(table|role|index))\b/i);
+  assert.doesNotMatch(live, /\bto\s+(anon|authenticated|public)\b/i);
+  assert.doesNotMatch(live, /amount_minor|price_list/);
+  assert.equal((liveSource.match(/starts_with\([^,]+, '\["'\|\|o\.provider\|\|'","'\|\|o\.account\|\|'","'\|\|o\.mode\|\|'",'\)/g) ?? []).length, 2);
+  assert.equal((liveSource.match(/set search_path=''/g) ?? []).length, 4);
+  assert.equal((liveSource.match(/security definer/g) ?? []).length, 4);
 });
 
 // R7 (issue #367, R7-STRIPE-EXPIRED-SESSION): an expired, unpaid session closes the

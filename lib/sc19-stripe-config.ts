@@ -10,11 +10,14 @@
  * Keys: STRIPE_SECRET_KEY (mode from its prefix sk_/rk_ + live/test) and
  * STRIPE_WEBHOOK_SECRET. Values are never returned in a refusal or logged.
  *
- * LIVE: this file may return a live configuration (the key decides the mode), but
- * the runtime is composed with liveApproved=false and the database policies accept
- * only mode='test' orders, so a live key cannot open a checkout or create an order.
- * Opening live payments is a separate reviewed change after the owner's decision
- * (AGENTS.md, „Continuous release policy”, payment path).
+ * LIVE (owner decision 20.11.2026, 18:29, point 5, docs/DECYZJE.md): the key decides
+ * the mode. A live key is refused on Preview (live_key_on_preview: the test project
+ * never takes real money) and accepted only on the production deployment, where
+ * stripeLiveApproved() opens live checkouts. No separate approval switch: live
+ * payments work once the owner enters live keys (and SC19_PACKAGES_ENABLED stays the
+ * sales switch). The database accepts live orders from migration
+ * 20261122100000_r7_stripe_live_orders.sql on; before it a live order is refused
+ * before any Stripe session is created.
  */
 import type { PaymentMode } from './sc19-payments.ts';
 import { publicShape, restrictedDatabaseUrl } from './sc19-payment-preview.ts';
@@ -80,4 +83,13 @@ export function sc19StripeGate(env: NodeJS.ProcessEnv, requestOrigin?: string): 
 export function sc19StripeConfig(env: NodeJS.ProcessEnv, requestOrigin?: string): Sc19StripeConfig | null {
   const gate = sc19StripeGate(env, requestOrigin);
   return gate.ok ? gate.config : null;
+}
+
+/** R7 live: a live checkout may open only with a live key on the PRODUCTION deployment
+ * (https://skillcheck.pl, branch main, production Supabase), never on Preview or
+ * anywhere else. The configuration gate already pins all of that; this repeats the
+ * deployment check against the environment as a second, independent guard. */
+export function stripeLiveApproved(config: Sc19StripeConfig, env: NodeJS.ProcessEnv = process.env): boolean {
+  return config.mode === 'live' && config.deployment === 'production' && config.appOrigin === productionOrigin &&
+    env.VERCEL === '1' && env.VERCEL_ENV === 'production';
 }

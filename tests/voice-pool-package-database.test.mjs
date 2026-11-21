@@ -436,9 +436,13 @@ test('R6-2 packages: FREE 1, paid 10, idempotent, tenant-isolated, owner-only', 
       values($1,$2,$3,$4,$5,'synthetic-offer','r1','t1',$6,'PLN',$7,'stripe','ktig-consulting','test','awaiting_payment',$8,$9,1)`,
     [id, company, users.owner, randomUUID(), code, stripeGross(code, credits), credits, sid, `https://example.invalid/${sid}`]);
     if (status === 'paid') {
-      const key = `pi_synthetic_${id.replace(/-/g, '')}`;
+      // The receipt key in the application's format (lib/sc19-payments.ts): from
+      // 20261122100000_r7_stripe_live_orders.sql on, grant_package checks that it
+      // carries the order's own provider, account and mode.
+      const paymentId = `pi_synthetic_${id.replace(/-/g, '')}`;
+      const key = JSON.stringify(['stripe', 'ktig-consulting', 'test', paymentId]);
       assert.equal(await one('select sc19_stripe.grant_package($1,$2) as v', [id, key]), null);
-      await db.query("update sc19_stripe.package_orders set status='paid', payment_id=$2 where id=$1", [id, key]);
+      await db.query("update sc19_stripe.package_orders set status='paid', payment_id=$2 where id=$1", [id, paymentId]);
     }
     return id;
   };
