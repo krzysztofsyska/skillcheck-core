@@ -622,6 +622,18 @@ export type Database = {
           category: 'payment_fee' | 'sms' | 'email' | 'other'; amount_minor: number; note: string | null; supersedes: string | null;
           superseded: boolean; created_at: string }[];
       };
+      /** R7 (20261121140000_r7_voice_cost_cap_operator_view.sql): operator only (42501 otherwise), read only. */
+      r7_operator_voice_cost_cap: {
+        Args: Record<PropertyKey, never>;
+        Returns: { month: string; cap_grosze: number; call_reserve_grosze: number; recorded_cost_grosze: number;
+          in_flight_grosze: number; month_to_date_grosze: number; remaining_grosze: number; new_calls_blocked: boolean;
+          reserve_exceeded: boolean; alert_recorded_at: string | null }[];
+      };
+      r7_operator_voice_owner_alerts: {
+        Args: { result_limit?: number };
+        Returns: { month: string; cause: 'dispatch' | 'call_cost' | 'reserve_exceeded'; cap_grosze: number;
+          month_to_date_grosze: number; recorded_at: string }[];
+      };
       sc021_operator_add_other_cost: {
         Args: { request_key: string; period_month: string; target_company: string; package_code: string | null; category: string;
           amount_minor: number; note: string | null; supersedes: string | null };

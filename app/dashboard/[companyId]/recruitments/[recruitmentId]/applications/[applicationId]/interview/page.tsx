@@ -6,6 +6,8 @@ import { loadScreeningContext, ScreeningNotFoundError } from '../../../../../../
 import { screeningStatus, screeningPath, isUuid, type ScreeningRoute } from '../../../../../../../../lib/screening-ui';
 import { buildInterviewGaps } from '../../../../../../../../lib/interview-gaps';
 import { voicePlanPreviewEnabled } from '../../../../../../../../lib/voice/plan-preview';
+import { loadVoiceOrderCheck, voiceOrderAllowed, voiceOrderMessages, voicePoolLabel } from '../../../../../../../../lib/voice/order-check';
+import { VoiceOrderPanel } from './voice-order-panel';
 import styles from '../screening/screening.module.css';
 
 const kinds = { task: 'Zadanie', kpi: 'Miernik sukcesu', competency: 'Kompetencja' };
@@ -14,7 +16,7 @@ const verdictLabels = { partial: 'Częściowo potwierdzone', missing: 'Brak info
 export default async function CandidateInterview({ params }: { params: Promise<ScreeningRoute> }) {
   const route = await params;
   const { companyId, recruitmentId } = route;
-  const { client } = await companyAccess(companyId);
+  const { client, canEdit } = await companyAccess(companyId);
   if (!Object.values(route).every(isUuid)) notFound();
   const context = await loadScreeningContext(client, route).catch(error => {
     if (error instanceof ScreeningNotFoundError) notFound();
@@ -35,6 +37,8 @@ export default async function CandidateInterview({ params }: { params: Promise<S
   const matrix = buildInterviewGaps(rows.data ?? []);
   const stale = !!analysis && screeningStatus(analysis, fingerprint) === 'stale';
   const base = `/dashboard/${companyId}/recruitments/${recruitmentId}`;
+  // R6: voice interview pool and cost-cap check, Preview only (never in Production), owner or recruiter only.
+  const voiceOrder = voiceOrderAllowed({ route, canEdit }) ? await loadVoiceOrderCheck(client, route) : null;
 
   return <main className={`workspace ${styles.screening}`}><section>
     <Link href={base}>← Rekrutacja</Link>
@@ -66,6 +70,9 @@ export default async function CandidateInterview({ params }: { params: Promise<S
       </article>)}
       <p>Brak informacji w CV oznacza brak danych, a nie ocenę negatywną. Zapisz odpowiedź i to, czego nadal nie udało się ustalić.</p>
     </>}
+
+    {voiceOrder && <VoiceOrderPanel companyId={companyId} recruitmentId={recruitmentId} applicationId={route.applicationId}
+      pool={voicePoolLabel(voiceOrder)} notice={voiceOrder.state === 'ready' ? null : voiceOrderMessages[voiceOrder.state]} />}
 
     <h2>Dalsze kroki</h2>
     <ul>

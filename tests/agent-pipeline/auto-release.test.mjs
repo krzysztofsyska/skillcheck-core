@@ -91,14 +91,11 @@ test('payments, sends, pipeline/secrets paths need owner consent', () => {
     deny(i => { i.promotion.manifest.files.push(f); }, c);
   assert.deepEqual(classifyReleaseFiles(['app/page.tsx']).reasons, []);
 });
-test('payment-path freeze (owner 2026-11-15) denies purchase flow, prices, catalog and orders', () => {
+test('payment-path freeze removed (owner 2026-11-19): purchase flow, prices, catalog and orders release', () => {
   for (const f of ['app/kup/preselekcja/page.tsx', 'lib/sc19-catalog-orders.ts', 'lib/sc19-offer-catalog-runtime.ts',
     'lib/sc19-offer-amounts.ts', 'lib/sc19-package-sizes.ts', 'lib/preselekcja-offer.ts',
     'app/components/marketing/package-comparison.tsx', 'app/checkout/route.ts', 'lib/stripe/client.ts',
-    'supabase/migrations/20261107164252_sc019_catalog_orders.sql', 'app/cennik/page.tsx', 'lib/Prices.ts'])
-    assert.ok(classifyReleaseFiles([f]).reasons.includes(`PAYMENT_PATH_FREEZE:${f}`), f);
-  deny(i => { i.promotion.manifest.files.push('lib/sc19-catalog-orders.ts'); }, 'PAYMENT_PATH_FREEZE');
-  for (const f of ['app/page.tsx', 'lib/screening-ai.ts', 'lib/interview-gaps.ts', 'app/kupon.tsx', 'lib/reorder.ts', 'docs/offerings.md'])
+    'app/cennik/page.tsx', 'lib/Prices.ts', 'app/page.tsx', 'lib/screening-ai.ts', 'docs/offerings.md'])
     assert.deepEqual(classifyReleaseFiles([f]).reasons, [], f);
 });
 test('missing, stale or failing CI/review/auto-review deny', () => {

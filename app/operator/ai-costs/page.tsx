@@ -8,7 +8,9 @@ import {
   AI_COST_NOTICES, COST_GROUPINGS, MARGIN_GROUPINGS, MARGIN_STATUS, OTHER_COST_CATEGORIES, PACKAGE_CODES,
   describeCostMicros, describeReasons, formatMicros, formatPln, formatRate, parseGrouping, parsePeriod, type CostGrouping, type CostMicros, type MarginGrouping,
 } from '../../../lib/ai-cost-dashboard';
+import { loadVoiceCostCap } from '../../../lib/voice/cost-cap-operator';
 import { addFxRate, addOtherCost } from './actions';
+import { VoiceCostCapSection } from './voice-cost-cap';
 import styles from '../sales/sales.module.css';
 import own from './ai-costs.module.css';
 
@@ -39,6 +41,8 @@ export default async function OperatorAiCostsPage({ searchParams }: {
   // Other cost lines: optional company filter and pages of 100 in a stable order.
   const costCompany = typeof params.oc === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(params.oc) ? params.oc : null;
   const costPage = Math.min(Math.max(Number.parseInt(params.op ?? '0', 10) || 0, 0), 9999);
+  // R7: the voice cost cap and its owner alerts (operator-gated functions, read only).
+  const voiceCapRead = loadVoiceCostCap(client);
   const [costTotal, costRows, marginTotal, marginRows, rates, otherCosts, companies] = await Promise.all([
     client.rpc('sc021_operator_ai_costs', { ...range, group_by: 'total' }),
     client.rpc('sc021_operator_ai_costs', { ...range, group_by: view }),
@@ -49,6 +53,8 @@ export default async function OperatorAiCostsPage({ searchParams }: {
     client.rpc('sc19_operator_companies', { search: companySearch || null }),
   ]);
   if ([costTotal, costRows, marginTotal, marginRows, rates, otherCosts].some(r => r.error?.code === '42501')) notFound();
+  const voiceCap = await voiceCapRead;
+  if (voiceCap === 'forbidden') notFound();
   if (costTotal.error || costRows.error || marginTotal.error || marginRows.error || !costTotal.data || !costRows.data
     || !marginTotal.data || !marginRows.data) throw new Error('Nie udało się odczytać kosztów AI.');
   const total = costTotal.data[0] ?? null;
@@ -101,6 +107,8 @@ export default async function OperatorAiCostsPage({ searchParams }: {
       {margin && <p>Marża w okresie: <strong>{formatPln(margin.margin_minor)}</strong> — {MARGIN_STATUS[margin.margin_status]}
         {margin.reasons.length > 0 && <span className={styles.hint}> ({describeReasons(margin.reasons)})</span>}</p>}
     </section>
+
+    <VoiceCostCapSection view={voiceCap} />
 
     <section aria-labelledby="margin">
       <h2 id="margin">Marża według: {MARGIN_GROUPINGS[marginView].toLowerCase()}</h2>

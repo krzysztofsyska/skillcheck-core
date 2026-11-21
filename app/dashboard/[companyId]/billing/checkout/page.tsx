@@ -1,9 +1,9 @@
 import Link from 'next/link';
 import { companyAccess } from '../../../../../lib/company-access';
-import { sc19SandboxPaymentConfig } from '../../../../../lib/sc19-payment-preview.ts';
+import { sc19StripeConfig } from '../../../../../lib/sc19-stripe-config.ts';
 import Checkout from './checkout';
 import CatalogOrders from './catalog-orders';
-export default async function CheckoutPage({params,searchParams}: {params: Promise<{companyId: string}>;searchParams:Promise<{p24?:string|string[];recruitmentId?:string|string[];catalogStatus?:string}>}) {
+export default async function CheckoutPage({params,searchParams}: {params: Promise<{companyId: string}>;searchParams:Promise<{stripe?:string|string[];recruitmentId?:string|string[];catalogStatus?:string}>}) {
   const {companyId}=await params;
   const {company,user,client}=await companyAccess(companyId);
   // Same flag as billing/page.tsx and billing/actions.ts. With packages off the
@@ -11,24 +11,27 @@ export default async function CheckoutPage({params,searchParams}: {params: Promi
   // guard it would render a full priced order summary for a package that is not
   // being sold yet.
   const enabled=process.env.SC19_PACKAGES_ENABLED==='true';
-  const sandbox = !!sc19SandboxPaymentConfig(process.env);
+  // R7: Stripe is the only payment provider (Przelewy24 removed, owner decision
+  // 19.11.2026). Without a Stripe configuration the offer is shown with „wkrótce”.
+  const stripeConfig = sc19StripeConfig(process.env);
   const query=await searchParams;
-  const returnId = query?.p24;
+  const returnId = query?.stripe;
   // Never follow a caller-provided URL. Reconstruct an in-tenant link from a UUID only;
   // the recruitment page enforces the user's company membership on arrival.
   const recruitmentId=query?.recruitmentId;
   const backToRecruitment=typeof recruitmentId==='string' &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(recruitmentId);
-  const returning = sandbox && company.owner_id === user.id && typeof returnId === 'string' &&
+  const returning = !!stripeConfig && company.owner_id === user.id && typeof returnId === 'string' &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(returnId);
   return <main className="container" style={{maxWidth:800,margin:'40px auto',padding:24}}>
     <Link href={backToRecruitment ? `/dashboard/${companyId}/recruitments/${recruitmentId}` : `/dashboard/${companyId}`}>
       ← {backToRecruitment ? 'Wróć do rekrutacji' : 'Panel firmy'}
     </Link>
-    <h1>Pakiet PRESELEKCJA</h1>
-    {!enabled && returning ? <Checkout companyId={companyId} recruitmentId={backToRecruitment ? recruitmentId : undefined} sandbox statusOnly/> : !enabled ? <p className="notice" role="status">Uruchomienie pakietów FREE i PRESELEKCJA jest przygotowywane. Zakup nie jest jeszcze dostępny.</p> : <>
+    <h1>{stripeConfig ? 'Zakup pakietu' : 'Pakiet PRESELEKCJA'}</h1>
+    {!enabled && returning ? <Checkout companyId={companyId} recruitmentId={backToRecruitment ? recruitmentId : undefined} statusOnly/> : !enabled ? <p className="notice" role="status">Uruchomienie pakietów FREE i PRESELEKCJA jest przygotowywane. Zakup nie jest jeszcze dostępny.</p> : <>
       <p>Jednorazowy zakup analiz CV. Wyniki wymagają oceny rekrutera.</p>
-      {company.owner_id===user.id ? <Checkout companyId={companyId} recruitmentId={backToRecruitment ? recruitmentId : undefined} sandbox={sandbox}/> :
+      {company.owner_id===user.id ? <Checkout companyId={companyId} recruitmentId={backToRecruitment ? recruitmentId : undefined}
+          testMode={stripeConfig?.mode === 'test'} cvPoolEnabled={process.env.PRICING_CV_SLIDER_ENABLED==='true'}/> :
         <p role="status">Zamówienie może złożyć właściciel firmy.</p>}
     </>}
     {enabled && process.env.SC19_CATALOG_ORDERS_ENABLED==='true' && <CatalogOrders client={client} companyId={companyId}

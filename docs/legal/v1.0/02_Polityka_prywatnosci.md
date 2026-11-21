@@ -43,13 +43,13 @@ Dane mogą otrzymać wyłącznie podmioty, które pomagają nam świadczyć usł
 - Plus Five Five, Inc. (Resend) – wysyłka automatycznych wiadomości e-mail,
 - Fakturownia – wystawianie faktur i faktur proforma oraz ich przesyłanie do KSeF,
 - OpenAI Ireland Ltd – analiza AI tekstu przekazanego przez firmę (dotyczy danych powierzonych; dane nie są wykorzystywane do trenowania modeli),
-- PayPro S.A. (Przelewy24) – obsługa płatności online; PayPro S.A. przetwarza dane płatnicze również jako odrębny administrator,
+- Stripe Payments Europe, Limited – obsługa płatności online; Stripe przetwarza dane płatnicze również jako odrębny administrator,
 - biuro rachunkowe, bank i doradcy prawni – w zakresie niezbędnym do realizacji ich zadań,
 - organy publiczne – gdy wymagają tego przepisy.
 
 # 6. Przekazywanie danych poza EOG
 
-Niektórzy dostawcy (Vercel, Resend, OpenAI) mogą przetwarzać dane lub zapewniać dostęp do nich spoza Europejskiego Obszaru Gospodarczego, w szczególności w USA. W takich przypadkach transfer odbywa się na podstawie decyzji Komisji Europejskiej stwierdzającej odpowiedni stopień ochrony (EU–US Data Privacy Framework) lub standardowych klauzul umownych przyjętych przez Komisję Europejską. Kopię zabezpieczeń możesz otrzymać, kontaktując się z nami.
+Niektórzy dostawcy (Vercel, Resend, OpenAI, Stripe) mogą przetwarzać dane lub zapewniać dostęp do nich spoza Europejskiego Obszaru Gospodarczego, w szczególności w USA. W takich przypadkach transfer odbywa się na podstawie decyzji Komisji Europejskiej stwierdzającej odpowiedni stopień ochrony (EU–US Data Privacy Framework) lub standardowych klauzul umownych przyjętych przez Komisję Europejską. Kopię zabezpieczeń możesz otrzymać, kontaktując się z nami.
 
 # 7. Jak długo przechowujemy dane
 
