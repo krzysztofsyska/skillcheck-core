@@ -82,6 +82,9 @@ export type InvoiceStore = Readonly<{
   invoice(orderId: string): Promise<{ status: string; fakturowniaId: number | null } | null>;
   /** The PAID LIVE Stripe order holding this PaymentIntent, or null. */
   orderByPayment(paymentIntentId: string): Promise<PaymentOrder | null>;
+  /** True while the LIVE Stripe order with this id exists and is still awaiting its
+   * payment settlement (the refund event came before the payment was applied). */
+  awaitingSettlement(orderId: string): Promise<boolean>;
   /** Records the cumulative refunded total (never lower than before); returns the stored total. */
   recordRefund(order: PaymentOrder, refundedTotal: number, nowMs: number): Promise<number>;
   /** One correction attempt per order at a time: the lease on the order's refund row.
@@ -197,7 +200,10 @@ export async function handleRefund(refund: RefundEvent,
   const { paymentIntentId, orderId, refundedTotal } = refund;
   if (!(await deps.store.installed())) return 'disabled';
   const order = await deps.store.orderByPayment(paymentIntentId);
-  if (!order || order.id !== orderId || !liveStripe(order)) return 'ignored';
+  // The payment of a verified order of ours is not settled yet (the refund event came
+  // first): ask Stripe to deliver again instead of losing the refund (Codex P2, PR #591).
+  if (!order) return (await deps.store.awaitingSettlement(orderId)) ? 'retry' : 'ignored';
+  if (order.id !== orderId || !liveStripe(order)) return 'ignored';
   if (!Number.isSafeInteger(refundedTotal) || refundedTotal <= 0 || refundedTotal > order.amountMinor) return 'ignored';
   const now = (deps.now ?? Date.now)();
   await deps.store.recordRefund(order, refundedTotal, now);
@@ -222,15 +228,27 @@ async function issueCorrection(order: PaymentOrder, deps: InvoiceDeps, now: numb
   let attempt: number | 'issued' = 0;
   try {
     if (original.status !== 'issued' || !original.fakturowniaId) throw new InvoiceWait('INVOICE_NOT_ISSUED');
-    const rows = await deps.store.corrections(order.id);
+    const facts = await deps.paymentFacts(order);
+    checkFacts(order, facts);
+    // Codex P1 (PR #591): a correction attempt whose outcome is unknown (lost response,
+    // failed record) may exist in Fakturownia. Under the order's lease, look every such
+    // attempt up by its oid and record it before computing the next document, so a
+    // larger refund never corrects the same amount twice.
+    let rows = await deps.store.corrections(order.id);
+    for (const r of rows.filter(x => x.status !== 'issued')) {
+      const found = await findByOid(client, `core-korekta:${order.id}:${r.refundedTotal}`, facts.paidAtMs, now);
+      if (!found) continue;
+      if (found.kind !== 'correction' || (parseSignedMinor(found.priceGross) ?? 0) >= 0)
+        throw new FakturowniaError('FAKTUROWNIA_RESPONSE_INVALID');
+      await deps.store.correctionIssued(order.id, r.refundedTotal, found, now);
+    }
+    rows = await deps.store.corrections(order.id);
     if (rows.some(r => r.status === 'issued' && r.refundedTotal >= refundedTotal)) return 'already_issued';
     attempt = await deps.store.startCorrection(order.id, refundedTotal, now);
     if (attempt === 'issued') return 'already_issued';
     const previous = Math.max(0, ...rows.filter(r => r.status === 'issued').map(r => r.refundedTotal));
     const registration = await deps.store.buyer(order.id);
     if (!registration?.nip || registration.nip === SELLER_NIP) throw new InvoiceWait('INVOICE_BUYER_INCOMPLETE');
-    const facts = await deps.paymentFacts(order);
-    checkFacts(order, facts);
     const before = order.amountMinor - previous, after = order.amountMinor - refundedTotal;
     const oid = `core-korekta:${order.id}:${refundedTotal}`;
     let invoice: FakturowniaInvoice;
@@ -350,6 +368,12 @@ export function postgresInvoiceStore(query: Query, toOrder: (row: Record<string,
       const rows = await query(`select * from private.sc19_payment_orders where payment_id=$1 and provider='stripe'
         and account='ktig-consulting' and mode='live' and status='paid'`, [paymentIntentId]);
       return rows.length === 1 ? toOrder(rows[0]) : null;
+    },
+    async awaitingSettlement(orderId) {
+      const rows = await query(`select 1 from private.sc19_payment_orders where id=$1 and provider='stripe'
+        and account='ktig-consulting' and mode='live' and status='awaiting_payment'
+        and checkout_url is distinct from 'sc19:expired'`, [orderId]);
+      return rows.length === 1;
     },
     async recordRefund(order, refundedTotal, nowMs) {
       const rows = await query(`insert into sc19_stripe.refunds(order_id, company_id, payment_id, refunded_total, updated_at)

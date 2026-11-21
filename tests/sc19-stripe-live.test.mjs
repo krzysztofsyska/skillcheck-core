@@ -94,7 +94,8 @@ function memoryStore(order, nip = BUYER_NIP) {
     async issued(orderId, inv, method) { Object.assign(m.invoices.get(orderId), { status: 'issued', fakturowniaId: inv.id, method }); },
     async failed(orderId, code) { const r = m.invoices.get(orderId); if (r.status === 'pending') Object.assign(r, { status: 'failed', code }); },
     async invoice(orderId) { const r = m.invoices.get(orderId); return r ? { status: r.status, fakturowniaId: r.fakturowniaId ?? null } : null; },
-    async orderByPayment(pi) { return pi === order.paymentId ? structuredClone(order) : null; },
+    async orderByPayment(pi) { return pi === order.paymentId && !m.unsettled ? structuredClone(order) : null; },
+    async awaitingSettlement(orderId) { return orderId === order.id && m.unsettled === true; },
     async recordRefund(o, total) { const r = m.refunds.get(o.id) ?? { total: 0, lease: 0 }; r.total = Math.max(r.total, total); m.refunds.set(o.id, r); return r.total; },
     async leaseCorrection(orderId, nowMs, leaseMs) { const r = m.refunds.get(orderId); if (r.lease >= nowMs) return 'busy'; r.lease = nowMs + leaseMs; return r.total; },
     async releaseCorrection(orderId) { m.refunds.get(orderId).lease = 0; },
@@ -458,4 +459,68 @@ test('stripe-ops setup: idempotent products, prices from the price list, webhook
   s.prices[0].unit_amount = 29900;
   assert.equal((await stripeOpsSetup(LIVE, 'live', s.fetch)).products[0].price, 'mismatch');
   assert.equal(s.prices.length, 3);
+});
+
+test('Codex P1 (#591): a correction whose response was lost is found by oid before a larger refund; the total is corrected once', async () => {
+  const { order, fakt, mem, deps } = setup();
+  assert.equal(await issueOrderInvoice(order, deps), 'issued');
+  const refund = total => handleRefund({ paymentIntentId: order.paymentId, orderId: order.id, refundedTotal: total }, deps);
+  fakt.loseResponse = true;
+  assert.equal(await refund(10000), 'retry');
+  assert.equal(fakt.docs.filter(d => d.kind === 'correction').length, 1, 'Fakturownia issued it, the app did not hear back');
+  assert.equal(await refund(30000), 'issued');
+  const corrections = fakt.docs.filter(d => d.kind === 'correction');
+  assert.deepEqual(corrections.map(d => d.price_gross), ['-100.00', '-200.00']);
+  assert.equal(corrections.reduce((sum, d) => sum + Number(d.price_gross), 0), -300, 'refund of 300 zł corrected as 300 zł in total');
+  const second = fakt.posts.filter(p => p.kind === 'correction').at(-1);
+  assert.equal(second.positions[0].correction_before_attributes.total_price_gross, '500.00');
+  assert.equal(second.positions[0].correction_after_attributes.total_price_gross, '300.00');
+  assert.deepEqual([...mem.corrections.values()].map(c => [c.total, c.status]), [[10000, 'issued'], [30000, 'issued']]);
+  // The current total already issued (lost response, then the same refund again): no new document.
+  const again = setup();
+  assert.equal(await issueOrderInvoice(again.order, again.deps), 'issued');
+  again.fakt.loseResponse = true;
+  const r2 = total => handleRefund({ paymentIntentId: again.order.paymentId, orderId: again.order.id, refundedTotal: total }, again.deps);
+  assert.equal(await r2(10000), 'retry');
+  assert.equal(await r2(10000), 'already_issued');
+  assert.equal(again.fakt.docs.filter(d => d.kind === 'correction').length, 1);
+});
+
+test('Codex P2 (#591): a refund that arrives before the payment is settled asks Stripe to redeliver instead of being lost', async () => {
+  const { order, fakt, mem, deps, p } = setup();
+  mem.unsettled = true;
+  assert.equal(await handleRefund({ paymentIntentId: order.paymentId, orderId: order.id, refundedTotal: 10000 }, deps), 'retry');
+  const ev = signed({ id: 'evt_fakerefund2', type: 'charge.refunded', livemode: true,
+    data: { object: { id: 'ch_fake1', payment_intent: order.paymentId, metadata: {} } } });
+  await assert.rejects(stripeRefundEvent(() => p.verifyRefund(ev.raw, ev.header), deps), e => e.code === 'SC19_PAYMENT_RETRY');
+  assert.equal(mem.refunds.size, 0); assert.equal(fakt.posts.length, 0);
+  // Not ours / unknown order: still ignored.
+  assert.equal(await handleRefund({ paymentIntentId: order.paymentId, orderId: id(98), refundedTotal: 10000 }, deps), 'ignored');
+  // Once settled, the redelivery issues the invoice and the correction.
+  mem.unsettled = false;
+  assert.equal(await handleRefund({ paymentIntentId: order.paymentId, orderId: order.id, refundedTotal: 10000 }, deps), 'issued');
+  assert.deepEqual(fakt.posts.map(x => x.kind), ['vat', 'correction']);
+});
+
+test('Codex P2 (#591): a failed read before the invoice hook answers retry after the grant; the redelivery runs the hook', async () => {
+  const st = { order: paidOrder({ status: 'awaiting_payment', paymentId: null }), grants: 0, calls: 0, hook: [] };
+  const store = { async transaction(fn) {
+    // 1: settlement pre-read, 2: grant, 3: afterPaid read (fails once).
+    if (++st.calls === 3) throw Error('connection lost');
+    return fn({
+      async order() { return structuredClone(st.order); },
+      async grantOnce() { st.grants++; return st.grants > 1 ? st.order.id : null; },
+      async saveOrder(o) { st.order = structuredClone(o); },
+    });
+  } };
+  const providerFake = { async verifyAndRetrieve() { return { eventId: 'evt_fake2', orderId: st.order.id, sessionId: st.order.sessionId,
+    paymentId: 'pi_fakeintent1', scope: liveScope, amountMinor: 60000, currency: 'PLN', status: 'paid' }; } };
+  const service = createSc19Payments({ store, provider: providerFake, scope: liveScope, checkoutOrigins: [STRIPE_CHECKOUT_ORIGIN],
+    enabled: true, liveApproved: true, authenticate: async () => null,
+    onPaid: async o => { st.hook.push(['paid', o.id]); }, onPaidAgain: async o => { st.hook.push(['again', o.id]); } });
+  const raw = new TextEncoder().encode('{}');
+  await assert.rejects(service.notification(raw, 'sig'), e => e.code === 'SC19_PAYMENT_RETRY');
+  assert.equal(st.order.status, 'paid', 'the grant stays'); assert.equal(st.grants, 1); assert.deepEqual(st.hook, []);
+  assert.equal((await service.notification(raw, 'sig')).state, 'already_applied');
+  assert.deepEqual(st.hook, [['again', st.order.id]]);
 });

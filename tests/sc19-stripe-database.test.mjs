@@ -897,6 +897,9 @@ test('R7 live: LIVE PRESELEKCJA orders through the adapter role (packages stay T
   // The real invoice store on the adapter role. The fixture company has the seller's NIP: a control purchase.
   const order = orderRow((await db.query('select * from private.sc19_payment_orders where id=$1', [hosted.orderId])).rows[0]);
   const store = postgresInvoiceStore(roleQuery, orderRow);
+  // A paid order is not awaiting settlement; an unknown id neither (Codex P2, PR #591).
+  assert.equal(await store.awaitingSettlement(hosted.orderId), false);
+  assert.equal(await store.awaitingSettlement(req(98)), false);
   const posts = [];
   const fakturownia = createFakturowniaClient({ account: 'ktig', token: 'synthetic-token-123' }, async (_u, init) => {
     const { invoice } = JSON.parse(init.body); posts.push(invoice);

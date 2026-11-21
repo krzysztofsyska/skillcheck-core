@@ -544,12 +544,14 @@ export function createSc19Payments(deps: PaymentDependencies) {
   }
 
   /** Post-grant hook (see PaymentDependencies.onPaid). The grant has committed;
-   * nothing here can roll it back. 'retry' only makes the provider deliver again. */
-  async function afterPaid(hook: (order: PaymentOrder) => Promise<void | 'retry'>, orderId: string) {
+   * nothing here can roll it back. 'retry' only makes the provider deliver again;
+   * a failed read of the order (or a throwing hook) asks for that too, because the
+   * provider's redelivery is the only way the hook runs again (Codex P2, PR #591). */
+  async function afterPaid(hook: (order: PaymentOrder) => Promise<void | 'retry'>, orderId: string): Promise<void | 'retry'> {
     try {
       const order = await deps.store.transaction(tx => tx.order(orderId));
       if (order && order.status === 'paid') return await hook(clone(order));
-    } catch { console.error('SC19_PAYMENT_AFTER_PAID_FAILED'); }
+    } catch { console.error('SC19_PAYMENT_AFTER_PAID_FAILED'); return 'retry'; }
   }
 
   // Called only after the HTTP handler has authorized a read of THIS order.
