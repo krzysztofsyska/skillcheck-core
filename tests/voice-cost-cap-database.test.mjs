@@ -10,7 +10,9 @@
 // a rejected/abandoned claim is released on the ledger itself, so an SC-010
 // erasure of the claim leaves the month's sum unchanged; another company can
 // neither read nor change a charge;
-// API roles see nothing; the manual rollback restores the R20 claim guard.
+// API roles see nothing; the manual rollback restores the R20 claim guard; only the
+// platform operator reads the month and the owner alerts through the two read-only
+// panel functions (20261121140000_r7_voice_cost_cap_operator_view.sql).
 // Native disposable PostgreSQL only; synthetic data; no provider, no network.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -35,6 +37,8 @@ import {
 
 const migration = new URL('../supabase/migrations/20261121120000_r7_voice_cost_cap.sql', import.meta.url);
 const rollback = new URL('../supabase/rollbacks/20261121120000_r7_voice_cost_cap_down.sql', import.meta.url);
+const viewMigration = new URL('../supabase/migrations/20261121140000_r7_voice_cost_cap_operator_view.sql', import.meta.url);
+const viewRollback = new URL('../supabase/rollbacks/20261121140000_r7_voice_cost_cap_operator_view_down.sql', import.meta.url);
 const r20Guard = 'e5404e835bbead0b47dbc9a686d8d8f6302e9f3ddc3498f4e6b7d57009b62a7f';
 const r7Guard = '3e2933f68d3bac861ea364d52099b6b3d18a956c7c1c73eae2b3714032441f34';
 const r7Added = "  -- R7 (20261121120000): the monthly voice cost cap reserves this call's upper bound\n" +
@@ -505,6 +509,69 @@ test('R7: the monthly voice cost cap refuses new dispatches in the database and 
     const o = await order(next, pool3);
     await assert.rejects(claim(next, o.operationId), capped);
     assert.equal(networkCalls, 0);
+  });
+
+  // R7 owner alert in the app (20261121140000_r7_voice_cost_cap_operator_view.sql): the
+  // platform operator reads the month's numbers and the recorded alerts; nobody else does.
+  await t.test('operator panel view: only the platform operator reads the cap and the owner alerts, read only', async () => {
+    const operator = users.outsider;
+    const fns = ['public.r7_operator_voice_cost_cap()', 'public.r7_operator_voice_owner_alerts(integer)'];
+    await h.asAdmin();
+    for (const f of fns) {
+      assert.equal(await one('select has_function_privilege($1,$2,$3) as v', ['authenticated', f, 'execute']), true, f);
+      for (const role of ['anon', 'service_role']) {
+        if (!await one('select to_regrole($1) is not null as v', [role])) continue;
+        assert.equal(await one('select has_function_privilege($1,$2,$3) as v', [role, f, 'execute']), false, `${role} ${f}`);
+      }
+      assert.equal(await one("select prosecdef and proconfig=array['search_path=\"\"'] as v from pg_proc where oid=$1::regprocedure", [f]), true, f);
+    }
+    for (const role of ['anon', 'authenticated', 'service_role']) {
+      if (!await one('select to_regrole($1) is not null as v', [role])) continue;
+      assert.equal(await one("select has_schema_privilege($1,'voice_budget','usage') as v", [role]), false, role);
+    }
+    const expectedStatus = (await db.query('select * from voice_budget.month_status(clock_timestamp())')).rows;
+    const expectedAlerts = (await db.query('select * from voice_budget.list_owner_alerts(120)')).rows;
+    assert.ok(expectedAlerts.length >= 2, 'earlier steps recorded alerts in more than one month');
+    const before = await charges();
+    await db.query('insert into public.platform_operators(user_id) values($1) on conflict(user_id) do update set revoked_at=null', [operator]);
+
+    await h.asUser(operator);
+    assert.deepEqual((await db.query('select * from public.r7_operator_voice_cost_cap()')).rows, expectedStatus);
+    assert.deepEqual((await db.query('select * from public.r7_operator_voice_owner_alerts(120)')).rows, expectedAlerts);
+    const limited = (await db.query('select * from public.r7_operator_voice_owner_alerts(1)')).rows;
+    assert.deepEqual(limited, expectedAlerts.slice(0, 1), 'newest month first, limit honoured');
+    assert.deepEqual(Object.keys(limited[0]).sort(), ['cap_grosze', 'cause', 'month', 'month_to_date_grosze', 'recorded_at'],
+      'amounts and months only: no company, candidate or call identifiers');
+    // The operator still has no direct access to the closed schema.
+    await assert.rejects(db.query('select * from voice_budget.owner_alerts'), e => e.code === '42501');
+
+    // A company owner (not an operator), an anonymous caller and a revoked operator are refused.
+    for (const [who, role] of [[users.owner, 'authenticated'], [null, 'anon']]) {
+      await h.asUser(who, role);
+      for (const sql of ['select * from public.r7_operator_voice_cost_cap()', 'select * from public.r7_operator_voice_owner_alerts(12)'])
+        await assert.rejects(db.query(sql), e => e.code === '42501', `${role}: ${sql}`);
+    }
+    await h.asAdmin();
+    await db.query('update public.platform_operators set revoked_at=now() where user_id=$1', [operator]);
+    await h.asUser(operator);
+    await assert.rejects(db.query('select * from public.r7_operator_voice_cost_cap()'), message('42501', 'sc19_operator_forbidden'));
+    await assert.rejects(db.query('select * from public.r7_operator_voice_owner_alerts(12)'), message('42501', 'sc19_operator_forbidden'));
+    assert.equal(await charges(), before, 'reading writes nothing');
+    await h.asAdmin();
+    assert.equal(await one('select private.erasure_schema_signature() as v'), signature);
+    // Its rollback removes only the two functions (twice is a no-op); the cap keeps working.
+    const viewSql = await readFile(viewMigration, 'utf8'), viewDown = await readFile(viewRollback, 'utf8');
+    const present = () => one(`select count(*)::int as v from pg_proc where proname in ('r7_operator_voice_cost_cap','r7_operator_voice_owner_alerts')`);
+    await db.query(viewDown);
+    assert.equal(await present(), 0);
+    await db.query(viewDown);
+    assert.equal(await one('select private.erasure_schema_signature() as v'), signature);
+    assert.deepEqual((await db.query('select * from voice_budget.list_owner_alerts(120)')).rows, expectedAlerts, 'alerts kept');
+    await db.query(viewSql);
+    assert.equal(await present(), 2);
+    await assert.rejects(db.query(viewSql), message('55000', 'r7_voice_cost_cap_operator_view_already_installed'));
+    await db.query('rollback');
+    assert.equal(await present(), 2);
   });
 
   await t.test('settings, charges and alerts cannot be deleted or rewritten', async () => {

@@ -192,6 +192,8 @@ type ExpectedFunctions =
   | "sc021_operator_add_fx_rate"
   | "sc021_operator_other_costs"
   | "sc021_operator_add_other_cost"
+  | "r7_operator_voice_cost_cap"
+  | "r7_operator_voice_owner_alerts"
   | "ac_session_create"
   | "ac_session_add_stage"
   | "ac_session_remove_last_stage"

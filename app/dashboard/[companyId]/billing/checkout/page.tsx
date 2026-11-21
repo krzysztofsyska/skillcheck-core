@@ -31,7 +31,7 @@ export default async function CheckoutPage({params,searchParams}: {params: Promi
     {!enabled && returning ? <Checkout companyId={companyId} recruitmentId={backToRecruitment ? recruitmentId : undefined} statusOnly/> : !enabled ? <p className="notice" role="status">Uruchomienie pakietów FREE i PRESELEKCJA jest przygotowywane. Zakup nie jest jeszcze dostępny.</p> : <>
       <p>Jednorazowy zakup analiz CV. Wyniki wymagają oceny rekrutera.</p>
       {company.owner_id===user.id ? <Checkout companyId={companyId} recruitmentId={backToRecruitment ? recruitmentId : undefined}
-          testMode={stripeConfig?.mode === 'test'}/> :
+          testMode={stripeConfig?.mode === 'test'} cvPoolEnabled={process.env.PRICING_CV_SLIDER_ENABLED==='true'}/> :
         <p role="status">Zamówienie może złożyć właściciel firmy.</p>}
     </>}
     {enabled && process.env.SC19_CATALOG_ORDERS_ENABLED==='true' && <CatalogOrders client={client} companyId={companyId}
