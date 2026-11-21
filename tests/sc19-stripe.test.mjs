@@ -60,7 +60,10 @@ function fakeStripe() {
       const session = { id: sid, object: 'checkout.session', mode: body.mode, currency: body.currency, livemode: false,
         customer: body.customer, client_reference_id: body.client_reference_id, metadata, amount_total: unit * qty,
         url: `${STRIPE_CHECKOUT_ORIGIN}/c/pay/${sid}#fidkdWxOYHwnPyd1blpxYHZxWjA0`, status: 'open', payment_status: 'unpaid', payment_intent: null, params: body };
-      s.sessions.set(sid, session); return remember(session);
+      s.sessions.set(sid, session); remember(session);
+      // R7: Stripe created the session, but the response never reaches the app.
+      if (s.loseCreate) { s.loseCreate = false; throw new TypeError('fetch failed'); }
+      return json(session);
     }
     if (method === 'GET' && path === '/v1/checkout/sessions') {
       return json({ has_more: false, data: [...s.sessions.values()].filter(x => x.customer === u.searchParams.get('customer')) });
@@ -104,6 +107,7 @@ function harness(opts = {}) {
         if (cur.status === 'expired' && cur.sessionId === sid) return 'already_closed';
         if (cur.status !== 'awaiting_payment' || cur.sessionId !== sid || [...st.grants.values()].includes(o.id))
           throw new Sc19PaymentError('SC19_PAYMENT_RECONCILIATION_REQUIRED');
+        if (opts.closeUnsupported) return 'unsupported';
         st.orders.set(o.id, { ...cur, status: 'expired' }); st.closures.push(o.id);
         return 'closed';
       } }),
@@ -880,4 +884,103 @@ test('an expired event for an unknown order or another bound session is acknowle
   const ev2 = signed(expiredEvent(unknown));
   assert.equal((await service.notification(ev2.raw, ev2.header)).state, 'ignored');
   assert.deepEqual(st.closures, []);
+});
+
+// R7 (#566 thread r4649510672): Stripe created the session but the response was lost
+// before bindHosted, so the order has no session. Once Stripe confirms that the order's
+// only session expired unpaid, the order is closed (no grant) and stops blocking.
+async function lostCreate(h, req = buy()) {
+  h.stripe.loseCreate = true;
+  await assert.rejects(h.service.checkout(req));
+  const order = [...h.st.orders.values()].find(o => o.requestId === req.requestId);
+  assert.equal(order.sessionId, null); assert.equal(order.status, 'awaiting_payment');
+  const session = [...h.stripe.sessions.values()].find(x => x.metadata.order_id === order.id);
+  return { order, session };
+}
+const pastDeadline = (st, orderId) => { st.orders.get(orderId).checkoutDeadlineMs = Date.now() - 1; };
+
+test('lost create response: checkout.session.expired binds that session and closes the order; nothing granted; buying again works', async () => {
+  const h = harness(); const { st, stripe, service } = h;
+  const { order, session } = await lostCreate(h);
+  // Still open: the expired event is not trusted, the API re-read says open.
+  const early = signed(expiredEvent(session));
+  assert.equal((await service.notification(early.raw, early.header)).state, 'ignored');
+  assert.equal(st.orders.get(order.id).status, 'awaiting_payment');
+  expire(stripe, session.id);
+  const ev = signed(expiredEvent(session));
+  assert.equal((await service.notification(ev.raw, ev.header)).state, 'closed');
+  assert.equal((await service.notification(ev.raw, ev.header)).state, 'already_closed');
+  const closed = st.orders.get(order.id);
+  assert.equal(closed.status, 'expired'); assert.equal(closed.sessionId, session.id);
+  assert.deepEqual(st.closures, [order.id]);
+  assert.equal(st.credits.get(id(1)) ?? 0, 0); assert.equal(st.grants.size, 0); assert.deepEqual(st.paidHook, []);
+  await assert.rejects(service.checkout(buy()), e => e.code === 'SC19_PAYMENT_SESSION_EXPIRED');
+  const next = await service.checkout(buy({ requestId: id(13) }));
+  assert.notEqual(next.orderId, order.id);
+  stripe.pay(next.sessionId);
+  const paid = signed(completed(stripe.sessions.get(next.sessionId)));
+  assert.equal((await service.notification(paid.raw, paid.header)).state, 'applied');
+  assert.equal(st.credits.get(id(1)), 60);
+});
+
+test('lost create response: the buyer\'s retry after the session expired closes the order instead of replaying the dead session', async () => {
+  for (const code of ['PRESELEKCJA', 'WERYFIKACJA']) {
+    const h = harness(); const { st, stripe, service } = h;
+    const o = code === 'PRESELEKCJA' ? null : STRIPE_PACKAGE_OFFERS.find(x => x.plan === code);
+    const req = n => o ? { companyId: id(1), offerId: o.id, termsRevision: o.termsRevision, requestId: id(n), packageCode: code } : buy({ requestId: id(n) });
+    const { order, session } = await lostCreate(h, req(30));
+    expire(stripe, session.id); pastDeadline(st, order.id);
+    await assert.rejects(service.checkout(req(30)), e => e.code === 'SC19_PAYMENT_SESSION_EXPIRED', code);
+    assert.equal(st.orders.get(order.id).status, 'expired', code);
+    assert.equal(st.orders.get(order.id).sessionId, session.id, code);
+    assert.equal(sessionPosts(stripe), 1, `${code}: no new Stripe session for the closed order`);
+    assert.equal(st.credits.get(id(1)) ?? 0, 0, code); assert.equal(st.entitlements.size, 0, code);
+    const next = await service.checkout(req(31));
+    assert.notEqual(next.orderId, order.id, code); assert.ok(next.url, code);
+  }
+});
+
+test('lost create response: never closed while a session can still be paid, for another session, or on a database without the closing function', async () => {
+  // Open session after the deadline: re-bound and returned, not closed.
+  {
+    const h = harness(); const { st, service } = h;
+    const { order, session } = await lostCreate(h);
+    pastDeadline(st, order.id);
+    assert.equal((await service.checkout(buy())).sessionId, session.id);
+    assert.equal(st.orders.get(order.id).status, 'awaiting_payment'); assert.deepEqual(st.closures, []);
+  }
+  // Two sessions for the order (one expired, one open): Stripe's list is not one
+  // expired session, so an expired event for the old one closes nothing.
+  {
+    const h = harness(); const { st, stripe, service } = h;
+    const { order, session } = await lostCreate(h);
+    expire(stripe, session.id);
+    stripe.sessions.set('cs_test_fakesecondopen', { ...session, id: 'cs_test_fakesecondopen', status: 'open', url: session.url });
+    const ev = signed(expiredEvent(session));
+    assert.equal((await service.notification(ev.raw, ev.header)).state, 'ignored');
+    assert.equal(st.orders.get(order.id).status, 'awaiting_payment'); assert.equal(st.orders.get(order.id).sessionId, null);
+  }
+  // An expired event naming another expired session of the same order id is not the order's only session.
+  {
+    const h = harness(); const { st, stripe, service } = h;
+    const { order, session } = await lostCreate(h);
+    expire(stripe, session.id);
+    const forged = { ...session, id: 'cs_test_fakeforgedexp', customer: 'cus_fakeelsewhere' };
+    stripe.sessions.set(forged.id, forged);
+    const ev = signed(expiredEvent(forged));
+    assert.equal((await service.notification(ev.raw, ev.header)).state, 'ignored');
+    assert.equal(st.orders.get(order.id).sessionId, null); assert.deepEqual(st.closures, []);
+  }
+  // Pre-migration database (no closing function): fail closed, the order stays unbound.
+  for (const opts of [{ noClose: true }, { closeUnsupported: true }]) {
+    const h = harness(opts); const { st, stripe, service } = h;
+    const { order, session } = await lostCreate(h);
+    expire(stripe, session.id); pastDeadline(st, order.id);
+    await assert.rejects(service.checkout(buy()), e => e.code === 'SC19_PAYMENT_RECONCILIATION_REQUIRED');
+    const ev = signed(expiredEvent(session));
+    assert.equal((await service.notification(ev.raw, ev.header)).state, 'ignored');
+    assert.equal(st.orders.get(order.id).sessionId, null, 'binding rolled back');
+    assert.equal(st.orders.get(order.id).checkoutUrl, null);
+    assert.equal(st.orders.get(order.id).status, 'awaiting_payment');
+  }
 });

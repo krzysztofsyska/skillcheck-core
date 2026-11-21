@@ -130,6 +130,7 @@ export class StripeApiError extends Error {
 
 export function createStripeProvider(options: StripeProviderOptions): PaymentProvider & Readonly<{
   expiredSession(order: PaymentOrder): Promise<boolean>;
+  expiredUnboundSession(order: PaymentOrder): Promise<string | null>;
 }> {
   const { secretKey, webhookSecret, mode, appOrigin, scope } = options;
   if (stripeModeOf(secretKey) !== mode || mode !== scope.mode || typeof webhookSecret !== 'string' ||
@@ -321,6 +322,24 @@ export function createStripeProvider(options: StripeProviderOptions): PaymentPro
     return session.status === 'expired' && session.payment_status !== 'paid';
   }
 
+  /** R7: the create response was lost, so the order has no stored session. Returns
+   * the id of its session only when Stripe lists exactly one session for this order
+   * (complete list, no further page) and confirms it expired unpaid. Read only. */
+  async function expiredUnboundSession(order: PaymentOrder): Promise<string | null> {
+    if (order.sessionId !== null || !sameScope(order.scope, scope)) return null;
+    const customer = await options.customers.find(order.companyId, mode);
+    if (!customer) return null;
+    const list = await call('GET', '/v1/checkout/sessions', { customer, limit: 100 });
+    if (!list || !Array.isArray(list.data)) return fail('SC19_PAYMENT_RETRY');
+    if (list.has_more === true) return null;
+    const mine = (list.data as Json[]).filter(s => obj(s) && meta(s).app === STRIPE_APP && meta(s).order_id === order.id);
+    if (mine.length !== 1) return null;
+    const s = mine[0];
+    if (typeof s.id !== 'string' || !sessionIdShape.test(s.id) || s.client_reference_id !== order.id ||
+        meta(s).company_id !== order.companyId || s.livemode !== live || s.mode !== 'payment') return null;
+    return s.status === 'expired' && s.payment_status !== 'paid' ? s.id : null;
+  }
+
   async function verifyAndRetrieve(raw: Uint8Array, signature: string): Promise<VerifiedPayment | null> {
     if (!verifyStripeSignature(raw, signature, webhookSecret, Math.floor(now() / 1000)))
       return fail('SC19_PAYMENT_NOTIFICATION_INVALID');
@@ -363,7 +382,7 @@ export function createStripeProvider(options: StripeProviderOptions): PaymentPro
       status: paid ? 'paid' : session.payment_status === 'unpaid' ? 'pending' : 'failed' };
   }
 
-  return Object.freeze({ createCheckout, lookupCheckout, expiredSession, verifyAndRetrieve });
+  return Object.freeze({ createCheckout, lookupCheckout, expiredSession, expiredUnboundSession, verifyAndRetrieve });
 }
 
 function sameScope(a: PaymentScope, b: PaymentScope) {
