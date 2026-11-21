@@ -975,3 +975,53 @@ test('R7 live: rollback on a database without live records restores the TEST-onl
   // Applying it again works (the rollback left nothing behind).
   await db.query(liveMigration);
 });
+
+const windowMigration = readFileSync(new URL('../supabase/migrations/20261122110000_r7_invoice_attempt_window.sql', import.meta.url), 'utf8');
+const windowRollback = readFileSync(new URL('../supabase/rollbacks/20261122110000_r7_invoice_attempt_window_down.sql', import.meta.url), 'utf8');
+test('R7 live (Codex P2 on #594): attempt times are recorded through the adapter role only when the columns exist; rollback',
+  { skip: !url && 'SC19_TEST_DATABASE_URL required' }, async t => {
+  const { postgresInvoiceStore } = await import('../lib/sc19-stripe-invoices.ts');
+  const { orderRow } = await import('../lib/sc19-payment-postgres.ts');
+  const u = new URL(url);
+  if (!['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname)) throw Error('Disposable loopback database required');
+  const root = new pg.Client({ connectionString: u.href }); await root.connect();
+  const name = 'r7window_' + randomBytes(6).toString('hex');
+  await root.query(`create database "${name}"`); u.pathname = '/' + name;
+  const db = new pg.Client({ connectionString: u.href }); await db.connect();
+  const pool = new pg.Pool({ connectionString: u.href, max: 3 });
+  t.after(async () => { await pool.end(); await db.end(); await root.query(`drop database "${name}"`); await root.end(); });
+  await db.query(fullFixture);
+  await db.query(guardFn); await db.query(guardTrigger);
+  await db.query(gateFn);
+  for (const m of [migration, packagesMigration, expiredMigration, overageMigration, liveMigration]) await db.query(m);
+  const A = '00000000-0000-4000-8000-000000000001';
+  const roleQuery = async (sql, values) => { const c = await pool.connect(); try { await c.query('set role sc19_p24_checkout'); return (await c.query(sql, values)).rows; } finally { await c.query('reset role'); c.release(); } };
+  const order = (n) => ({ id: `00000000-0000-4000-8000-0000000006${String(n).padStart(2, '0')}`, companyId: A, paymentId: `pi_fakewin${n}x` });
+  // Before the migration: claims work, no window is known.
+  const before = postgresInvoiceStore(roleQuery, orderRow);
+  assert.equal(await before.claim(order(1), Date.UTC(2026, 10, 20), 60_000), 1);
+  assert.deepEqual(await before.invoiceWindow(order(1).id), { firstAttemptMs: null, lastAttemptMs: null });
+  const signature = (await db.query('select private.erasure_schema_signature() s')).rows[0].s;
+  await db.query(windowMigration);
+  assert.equal((await db.query('select private.erasure_schema_signature() s')).rows[0].s, signature);
+  await assert.rejects(db.query(windowMigration), /already_installed/);
+  await db.query('rollback');
+  const store = postgresInvoiceStore(roleQuery, orderRow);
+  const t1 = Date.UTC(2026, 10, 20, 10), t2 = Date.UTC(2026, 10, 21, 10);
+  assert.equal(await store.claim(order(2), t1, 60_000), 1);
+  await store.failed(order(2).id, 'FAKTUROWNIA_UNAVAILABLE', t1);
+  assert.equal(await store.claim(order(2), t2, 60_000), 2);
+  assert.deepEqual(await store.invoiceWindow(order(2).id), { firstAttemptMs: t1, lastAttemptMs: t2 });
+  // Corrections (row references the invoice row).
+  assert.equal(await store.startCorrection(order(2).id, 10000, t1), 1);
+  await store.correctionFailed(order(2).id, 10000, 'FAKTUROWNIA_TIMEOUT', t1);
+  assert.equal(await store.startCorrection(order(2).id, 10000, t2), 2);
+  assert.deepEqual(await store.corrections(order(2).id), [{ refundedTotal: 10000, status: 'pending', firstAttemptMs: t1, lastAttemptMs: t2 }]);
+  // Rollback refused while attempt times are recorded; on a clean database it removes the columns.
+  await assert.rejects(db.query(windowRollback), /rollback_refused/);
+  await db.query('rollback');
+  await db.query('update sc19_stripe.invoice_corrections set first_attempt_at=null, last_attempt_at=null');
+  await db.query('update sc19_stripe.invoices set first_attempt_at=null, last_attempt_at=null');
+  await db.query(windowRollback);
+  assert.equal((await db.query(`select count(*)::int n from information_schema.columns where table_schema='sc19_stripe' and column_name='first_attempt_at'`)).rows[0].n, 0);
+});

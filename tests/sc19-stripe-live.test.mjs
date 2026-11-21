@@ -45,7 +45,7 @@ function fakeStripe(order, opts = {}) {
       assert.equal(u.searchParams.get('expand[0]'), 'latest_charge');
       return json({ id: order.paymentId, livemode: true, status: 'succeeded', currency: 'pln', amount_received: opts.amountReceived ?? order.amountMinor,
         metadata: { app: s.app, order_id: order.id },
-        latest_charge: { id: 'ch_fake1', created: 1_795_000_000, amount_refunded: s.refunded, payment_method_details: s.method } });
+        latest_charge: { id: 'ch_fake1', created: opts.chargeCreated ?? 1_795_000_000, amount_refunded: s.refunded, payment_method_details: s.method } });
     }
     return json({ error: { code: 'resource_missing' } }, 404);
   };
@@ -57,7 +57,7 @@ const provider = (stripe, order) => createStripeProvider({ secretKey: LIVE, webh
 
 /** Fakturownia: documents by oid, unique; optional failures. */
 function fakeFakturownia() {
-  const f = { docs: [], posts: [], fail: 0, loseResponse: false, seq: 100 };
+  const f = { docs: [], posts: [], fail: 0, loseResponse: false, seq: 100, listings: [] };
   f.fetch = async (url, init) => {
     const u = new URL(url);
     if (init.method === 'POST') {
@@ -65,12 +65,18 @@ function fakeFakturownia() {
       if (f.fail > 0) { f.fail--; return json({}, 503); }
       if (f.docs.some(d => d.oid === invoice.oid)) return json({ code: 'error', message: 'oid' }, 422);
       const doc = { id: ++f.seq, kind: invoice.kind, status: 'paid', number: `FV ${f.seq}/2026`, oid: invoice.oid,
-        price_gross: invoice.positions[0].total_price_gross, paid: invoice.paid, currency: 'PLN', issue_date: '2026-11-22' };
+        price_gross: invoice.positions[0].total_price_gross, paid: invoice.paid, currency: 'PLN', issue_date: invoice.issue_date };
       f.docs.push(doc);
       if (f.loseResponse) { f.loseResponse = false; throw new TypeError('fetch failed'); }
       return json(doc);
     }
-    if (u.pathname === '/invoices.json') return json(f.docs);
+    if (u.pathname === '/invoices.json') {
+      // Like Fakturownia: issue_date between date_from and date_to, 100 per page.
+      f.listings.push([u.searchParams.get('date_from'), u.searchParams.get('date_to')]);
+      const from = u.searchParams.get('date_from') ?? '0000', to = u.searchParams.get('date_to') ?? '9999';
+      const page = Number(u.searchParams.get('page') ?? 1);
+      return json(f.docs.filter(d => d.issue_date >= from && d.issue_date <= to).slice((page - 1) * 100, page * 100));
+    }
     return json({}, 404);
   };
   f.client = createFakturowniaClient({ account: 'ktig', token: 'synthetic-token-123' }, f.fetch);
@@ -78,7 +84,7 @@ function fakeFakturownia() {
 }
 /** Mirrors sc19_stripe.invoices / refunds / invoice_corrections (migration 20261122090000). */
 function memoryStore(order, nip = BUYER_NIP) {
-  const m = { invoices: new Map(), refunds: new Map(), corrections: new Map(), now: 0 };
+  const m = { invoices: new Map(), refunds: new Map(), corrections: new Map(), now: 0, clock: () => 1_795_000_100_000 };
   m.store = {
     async installed() { return true; },
     async buyer(orderId) { return orderId === order.id ? { name: 'Firma Kupująca sp. z o.o.', nip } : null; },
@@ -87,7 +93,7 @@ function memoryStore(order, nip = BUYER_NIP) {
       m.invoices.set(o.id, row);
       if (row.status === 'issued' || row.status === 'skipped') return row.status;
       if (row.status === 'pending' && row.lease >= nowMs) return 'busy';
-      Object.assign(row, { status: 'pending', attempts: row.attempts + 1, lease: nowMs + leaseMs });
+      Object.assign(row, { status: 'pending', attempts: row.attempts + 1, lease: nowMs + leaseMs, first: row.first ?? nowMs, last: nowMs });
       return row.attempts;
     },
     async skip(orderId, code) { Object.assign(m.invoices.get(orderId), { status: 'skipped', code }); },
@@ -99,10 +105,12 @@ function memoryStore(order, nip = BUYER_NIP) {
     async recordRefund(o, total) { const r = m.refunds.get(o.id) ?? { total: 0, lease: 0 }; r.total = Math.max(r.total, total); m.refunds.set(o.id, r); return r.total; },
     async leaseCorrection(orderId, nowMs, leaseMs) { const r = m.refunds.get(orderId); if (r.lease >= nowMs) return 'busy'; r.lease = nowMs + leaseMs; return r.total; },
     async releaseCorrection(orderId) { m.refunds.get(orderId).lease = 0; },
-    async corrections(orderId) { return [...m.corrections.values()].filter(c => c.orderId === orderId).map(c => ({ refundedTotal: c.total, status: c.status })); },
+    async corrections(orderId) { return [...m.corrections.values()].filter(c => c.orderId === orderId)
+      .map(c => ({ refundedTotal: c.total, status: c.status, firstAttemptMs: c.first ?? null, lastAttemptMs: c.last ?? null })); },
+    async invoiceWindow(orderId) { const r = m.invoices.get(orderId); return { firstAttemptMs: r?.first ?? null, lastAttemptMs: r?.last ?? null }; },
     async startCorrection(orderId, total) {
       const k = `${orderId}:${total}`; const r = m.corrections.get(k) ?? { orderId, total, status: 'pending', attempts: 0 };
-      m.corrections.set(k, r); if (r.status === 'issued') return 'issued'; r.status = 'pending'; return ++r.attempts;
+      m.corrections.set(k, r); if (r.status === 'issued') return 'issued'; r.status = 'pending'; r.first ??= m.clock(); r.last = m.clock(); return ++r.attempts;
     },
     async correctionIssued(orderId, total, inv) { Object.assign(m.corrections.get(`${orderId}:${total}`), { status: 'issued', fakturowniaId: inv.id }); },
     async correctionFailed(orderId, total, code) { Object.assign(m.corrections.get(`${orderId}:${total}`), { status: 'failed', code }); },
@@ -115,7 +123,7 @@ function setup(opts = {}) {
   const fakt = fakeFakturownia();
   const mem = memoryStore(order, opts.nip);
   const p = provider(stripe, order);
-  const deps = { fakturownia: opts.noFakturownia ? null : fakt.client, store: mem.store, paymentFacts: o => p.paymentFacts(o), now: () => 1_795_000_100_000 };
+  const deps = { fakturownia: opts.noFakturownia ? null : fakt.client, store: mem.store, paymentFacts: o => p.paymentFacts(o), now: () => mem.clock() };
   return { order, stripe, fakt, mem, p, deps };
 }
 
@@ -204,9 +212,13 @@ test('invoice: only live, paid PRESELEKCJA Stripe payments; test payments, other
     assert.equal(await issueOrderInvoice(order, deps), 'not_applicable', JSON.stringify(extra));
     assert.equal(fakt.posts.length, 0);
   }
+  // Codex P2 on #594: a paid LIVE sale without a Fakturownia configuration is retried, not acknowledged.
   const off = setup({ noFakturownia: true });
-  assert.equal(await issueOrderInvoice(off.order, off.deps), 'disabled');
+  assert.equal(await issueOrderInvoice(off.order, off.deps), 'retry');
+  assert.equal(await afterStripePayment(off.order, off.deps), 'retry');
   assert.equal(off.mem.invoices.size, 0);
+  const offTest = setup({ noFakturownia: true, order: { scope: { ...liveScope, mode: 'test' } } });
+  assert.equal(await afterStripePayment(offTest.order, offTest.deps), undefined, 'test mode unchanged');
   // Stripe disagrees with the order (amount): no document.
   const wrong = setup({ amountReceived: 1 });
   assert.equal(await issueOrderInvoice(wrong.order, wrong.deps), 'retry');
@@ -523,4 +535,46 @@ test('Codex P2 (#591): a failed read before the invoice hook answers retry after
   assert.equal(st.order.status, 'paid', 'the grant stays'); assert.equal(st.grants, 1); assert.deepEqual(st.hook, []);
   assert.equal((await service.notification(raw, 'sig')).state, 'already_applied');
   assert.deepEqual(st.hook, [['again', st.order.id]]);
+});
+
+test('Codex P2 on #594: a missing Fakturownia configuration retries the invoice and the correction of a paid LIVE order; restored, both are issued once', async () => {
+  const { order, fakt, mem, deps, p, stripe } = setup();
+  stripe.refunded = 10000;
+  const off = { ...deps, fakturownia: null };
+  const refund = (d, total) => handleRefund({ paymentIntentId: order.paymentId, orderId: order.id, refundedTotal: total }, d);
+  assert.equal(await refund(off, 10000), 'retry');
+  assert.equal(mem.refunds.get(order.id).total, 10000, 'the refund itself is recorded');
+  const ev = signed({ id: 'evt_fakerefund3', type: 'charge.refunded', livemode: true, data: { object: { id: 'ch_fake1', payment_intent: order.paymentId, metadata: {} } } });
+  await assert.rejects(stripeRefundEvent(() => p.verifyRefund(ev.raw, ev.header), off), e => e.code === 'SC19_PAYMENT_RETRY');
+  assert.equal(fakt.posts.length, 0);
+  // Unknown order and the seller's own purchase: unchanged.
+  assert.equal(await handleRefund({ paymentIntentId: 'pi_fakeother9', orderId: order.id, refundedTotal: 100 }, off), 'ignored');
+  const ktig = setup({ nip: SELLER_NIP });
+  assert.equal(await issueOrderInvoice(ktig.order, { ...ktig.deps, fakturownia: null }), 'skipped');
+  // Configuration back: the redelivery issues the invoice and the correction, once.
+  assert.equal(await refund(deps, 10000), 'issued');
+  assert.equal(await refund(deps, 10000), 'already_issued');
+  assert.deepEqual(fakt.posts.map(x => x.kind), ['vat', 'correction']);
+});
+
+test('Codex P2 on #594: a lost document is searched only around its attempt days, so a busy account (2500 documents since the payment) still finds it', async () => {
+  // Paid on 2026-01-15, refunded and corrected in November; 2500 other documents in between.
+  const { order, fakt, mem, deps } = setup({ chargeCreated: Date.UTC(2026, 0, 15) / 1000 });
+  for (let i = 0; i < 2500; i++) fakt.docs.push({ id: 10_000 + i, kind: 'vat', status: 'paid', number: `X ${i}`, oid: `other:${i}`,
+    price_gross: '1.00', paid: '1.00', currency: 'PLN', issue_date: '2026-06-01' });
+  // The invoice: response lost on the first attempt, found on the second.
+  fakt.loseResponse = true;
+  assert.equal(await issueOrderInvoice(order, deps), 'retry');
+  assert.equal(await issueOrderInvoice(order, deps), 'issued');
+  assert.equal(fakt.docs.filter(d => d.oid === `core:${order.id}`).length, 1);
+  // A correction whose response is lost, then a larger refund: reconciled within its attempt days.
+  const refund = total => handleRefund({ paymentIntentId: order.paymentId, orderId: order.id, refundedTotal: total }, deps);
+  fakt.loseResponse = true;
+  assert.equal(await refund(10000), 'retry');
+  assert.equal(await refund(30000), 'issued');
+  assert.deepEqual(fakt.docs.filter(d => d.kind === 'correction').map(d => d.price_gross), ['-100.00', '-200.00']);
+  assert.equal([...mem.corrections.values()].every(c => c.status === 'issued'), true);
+  // Every search window is the attempt day ±1, never the payment date in January.
+  assert.ok(fakt.listings.length > 0);
+  for (const [from, to] of fakt.listings) { assert.equal(from >= '2026-11-01', true, from); assert.equal(to <= '2026-11-30', true, to); }
 });

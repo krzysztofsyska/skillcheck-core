@@ -68,6 +68,9 @@ export type StripePaymentFacts = Readonly<{
   email: string; address: Readonly<{ street: string; postCode: string; city: string }>;
 }>;
 export type InvoiceRowState = 'issued' | 'skipped' | 'busy';
+/** When the application tried to issue a document (migration 20261122110000); null =
+ * unknown (an older row, or a database without the columns). */
+export type AttemptWindow = Readonly<{ firstAttemptMs: number | null; lastAttemptMs: number | null }>;
 export type InvoiceStore = Readonly<{
   /** False on a database without migration 20261122090000: then nothing is issued or recorded. */
   installed(): Promise<boolean>;
@@ -91,7 +94,9 @@ export type InvoiceStore = Readonly<{
    * Returns the stored cumulative refunded total, or 'busy'. */
   leaseCorrection(orderId: string, nowMs: number, leaseMs: number): Promise<number | 'busy'>;
   releaseCorrection(orderId: string): Promise<void>;
-  corrections(orderId: string): Promise<Array<{ refundedTotal: number; status: string }>>;
+  corrections(orderId: string): Promise<Array<{ refundedTotal: number; status: string } & AttemptWindow>>;
+  /** First and last attempt times of the order's invoice (both null when unknown). */
+  invoiceWindow(orderId: string): Promise<AttemptWindow>;
   /** Insert-if-absent of the correction row for this total; its attempt number, or 'issued'. */
   startCorrection(orderId: string, refundedTotal: number, nowMs: number): Promise<number | 'issued'>;
   correctionIssued(orderId: string, refundedTotal: number, invoice: FakturowniaInvoice, nowMs: number): Promise<void>;
@@ -114,9 +119,15 @@ class InvoiceWait extends Error {
 const codeOf = (e: unknown) => e instanceof FakturowniaError || e instanceof InvoiceWait ? e.code : 'INVOICE_INTERNAL';
 
 /** A rejected create may mean „this oid already exists” after a lost response:
- * find that one document; never issue a second. */
-async function findByOid(client: FakturowniaClient, oid: string, fromMs: number, nowMs: number) {
-  const from = warsawDate(fromMs - 2 * DAY), to = warsawDate(nowMs + DAY);
+ * find that one document; never issue a second. The search covers only the days the
+ * application tried to issue it (first attempt day −1 to last attempt day +1; Codex P2
+ * on #594), not the account's whole history since the payment. Without recorded
+ * attempt times it falls back to the payment date … now. */
+function searchWindow(window: AttemptWindow | null, paidAtMs: number, nowMs: number) {
+  return { fromMs: window?.firstAttemptMs ?? paidAtMs, toMs: window?.lastAttemptMs ?? nowMs };
+}
+async function findByOid(client: FakturowniaClient, oid: string, window: { fromMs: number; toMs: number }) {
+  const from = warsawDate(window.fromMs - DAY), to = warsawDate(window.toMs + DAY);
   const matches: FakturowniaInvoice[] = [];
   for (let page = 1; page <= 20; page++) {
     const batch = await client.invoicesIssuedBetween(from, to, page);
@@ -144,7 +155,6 @@ function checkFacts(order: PaymentOrder, facts: StripePaymentFacts) {
 /** The VAT invoice of one paid order. Idempotent; safe to call on every delivery. */
 export async function issueOrderInvoice(order: PaymentOrder, deps: InvoiceDeps): Promise<InvoiceOutcome> {
   if (!liveStripe(order)) return 'not_applicable';
-  if (!deps.fakturownia) return 'disabled';
   const now = (deps.now ?? Date.now)();
   if (!(await deps.store.installed())) return 'disabled';
   const registration = await deps.store.buyer(order.id);
@@ -157,6 +167,11 @@ export async function issueOrderInvoice(order: PaymentOrder, deps: InvoiceDeps):
     await deps.store.skip(order.id, 'SELLER_CONTROL_PURCHASE', now);
     return 'skipped';
   }
+  // A paid LIVE sale whose Fakturownia configuration is missing or broken (removed
+  // after the sale): ask Stripe to deliver again, so the invoice is issued once the
+  // configuration is back, instead of acknowledging it for good (Codex P2 on #594).
+  const client = deps.fakturownia;
+  if (!client) { console.error('SC19_STRIPE_INVOICE_FAILED', 'FAKTUROWNIA_NOT_CONFIGURED'); return 'retry'; }
   const attempt = await deps.store.claim(order, now, LEASE_MS);
   if (attempt === 'issued') return 'already_issued';
   if (attempt === 'skipped') return 'skipped';
@@ -168,7 +183,6 @@ export async function issueOrderInvoice(order: PaymentOrder, deps: InvoiceDeps):
     checkFacts(order, facts);
     method = facts.method;
     const oid = `core:${order.id}`;
-    const client = deps.fakturownia;
     let invoice: FakturowniaInvoice;
     try {
       invoice = await client.createStripeInvoice({ oid, grossMinor: order.amountMinor, itemName: invoiceItemName(order),
@@ -177,7 +191,7 @@ export async function issueOrderInvoice(order: PaymentOrder, deps: InvoiceDeps):
         buyer: buyerOf({ name: registration.name, nip: registration.nip }, facts) });
     } catch (e) {
       if (!(e instanceof FakturowniaError) || e.code !== 'FAKTUROWNIA_REQUEST_REJECTED') throw e;
-      const existing = await findByOid(client, oid, facts.paidAtMs, now);
+      const existing = await findByOid(client, oid, searchWindow(await deps.store.invoiceWindow(order.id), facts.paidAtMs, now));
       if (!existing) throw e;
       if (existing.kind !== 'vat' || parseSignedMinor(existing.priceGross) !== order.amountMinor)
         throw new FakturowniaError('FAKTUROWNIA_RESPONSE_INVALID');
@@ -207,7 +221,8 @@ export async function handleRefund(refund: RefundEvent,
   if (!Number.isSafeInteger(refundedTotal) || refundedTotal <= 0 || refundedTotal > order.amountMinor) return 'ignored';
   const now = (deps.now ?? Date.now)();
   await deps.store.recordRefund(order, refundedTotal, now);
-  if (!deps.fakturownia) return 'disabled';
+  // Without a Fakturownia configuration the invoice step answers 'retry' (or 'skipped'
+  // for the seller's own purchase), so the refund is redelivered, not lost.
   // The original invoice first (it may still be waiting for a retry).
   const original = await issueOrderInvoice(order, deps);
   if (original === 'skipped') return 'skipped';
@@ -219,7 +234,8 @@ export async function handleRefund(refund: RefundEvent,
  * to the CURRENT cumulative refunded total (a later, larger refund supersedes an
  * earlier one that was not corrected yet, so documents never overlap). */
 async function issueCorrection(order: PaymentOrder, deps: InvoiceDeps, now: number): Promise<InvoiceOutcome> {
-  const client = deps.fakturownia!;
+  const client = deps.fakturownia;
+  if (!client) return 'retry';
   const original = await deps.store.invoice(order.id);
   if (!original || original.status === 'skipped') return 'skipped';
   const leased = await deps.store.leaseCorrection(order.id, now, LEASE_MS);
@@ -236,7 +252,7 @@ async function issueCorrection(order: PaymentOrder, deps: InvoiceDeps, now: numb
     // larger refund never corrects the same amount twice.
     let rows = await deps.store.corrections(order.id);
     for (const r of rows.filter(x => x.status !== 'issued')) {
-      const found = await findByOid(client, `core-korekta:${order.id}:${r.refundedTotal}`, facts.paidAtMs, now);
+      const found = await findByOid(client, `core-korekta:${order.id}:${r.refundedTotal}`, searchWindow(r, facts.paidAtMs, now));
       if (!found) continue;
       if (found.kind !== 'correction' || (parseSignedMinor(found.priceGross) ?? 0) >= 0)
         throw new FakturowniaError('FAKTUROWNIA_RESPONSE_INVALID');
@@ -260,7 +276,8 @@ async function issueCorrection(order: PaymentOrder, deps: InvoiceDeps, now: numb
         buyer: buyerOf({ name: registration.name, nip: registration.nip }, facts) });
     } catch (e) {
       if (!(e instanceof FakturowniaError) || e.code !== 'FAKTUROWNIA_REQUEST_REJECTED') throw e;
-      const existing = await findByOid(client, oid, facts.paidAtMs, now);
+      const current = (await deps.store.corrections(order.id)).find(r => r.refundedTotal === refundedTotal) ?? null;
+      const existing = await findByOid(client, oid, searchWindow(current, facts.paidAtMs, now));
       if (!existing) throw e;
       if (existing.kind !== 'correction' || parseSignedMinor(existing.priceGross) !== after - before)
         throw new FakturowniaError('FAKTUROWNIA_RESPONSE_INVALID');
@@ -322,6 +339,14 @@ const iso = (ms: number) => new Date(ms).toISOString();
  * sc19_p24_preview), never a service key. `toOrder` maps an order row. */
 export function postgresInvoiceStore(query: Query, toOrder: (row: Record<string, unknown>) => PaymentOrder): InvoiceStore {
   let ready: Promise<boolean> | undefined;
+  // Attempt-time columns (migration 20261122110000); without them nothing is recorded.
+  let dates: Promise<boolean> | undefined;
+  const hasDates = () => (dates ??= query(`select count(*)::int as n from information_schema.columns
+    where table_schema='sc19_stripe' and table_name in ('invoices','invoice_corrections') and column_name='first_attempt_at'`, [])
+    .then(r => Number(r[0]?.n) === 2));
+  const windowOf = (r: Record<string, unknown> | undefined): AttemptWindow => ({
+    firstAttemptMs: r?.first_attempt_at ? new Date(String(r.first_attempt_at)).getTime() : null,
+    lastAttemptMs: r?.last_attempt_at ? new Date(String(r.last_attempt_at)).getTime() : null });
   const claimRow = async (key: string, values: unknown[], nowMs: number, leaseMs: number) => {
     const rows = await query(`update sc19_stripe.invoices set status='pending', attempts=attempts+1,
       lease_until=$${values.length + 1}::timestamptz + make_interval(secs => $${values.length + 2}::double precision / 1000),
@@ -344,7 +369,17 @@ export function postgresInvoiceStore(query: Query, toOrder: (row: Record<string,
     async claim(order, nowMs, leaseMs) {
       await query(`insert into sc19_stripe.invoices(order_id, company_id, payment_id, mode) values ($1,$2,$3,'live')
         on conflict (order_id) do nothing`, [order.id, order.companyId, order.paymentId]);
-      return claimRow('order_id=$1', [order.id], nowMs, leaseMs);
+      const attempt = await claimRow('order_id=$1', [order.id], nowMs, leaseMs);
+      // Recorded under the lease and BEFORE Fakturownia is called.
+      if (typeof attempt === 'number' && await hasDates())
+        await query(`update sc19_stripe.invoices set first_attempt_at=coalesce(first_attempt_at,$2), last_attempt_at=$2
+          where order_id=$1 and status='pending'`, [order.id, iso(nowMs)]);
+      return attempt;
+    },
+    async invoiceWindow(orderId) {
+      if (!(await hasDates())) return windowOf(undefined);
+      const rows = await query('select first_attempt_at, last_attempt_at from sc19_stripe.invoices where order_id=$1', [orderId]);
+      return windowOf(rows[0]);
     },
     async skip(orderId, code, nowMs) {
       await query(`update sc19_stripe.invoices set status='skipped', error_code=$2, lease_until=null, changed_at=$3
@@ -393,14 +428,18 @@ export function postgresInvoiceStore(query: Query, toOrder: (row: Record<string,
       await query('update sc19_stripe.refunds set lease_until=null where order_id=$1', [orderId]);
     },
     async corrections(orderId) {
-      const rows = await query('select refunded_total, status from sc19_stripe.invoice_corrections where order_id=$1', [orderId]);
-      return rows.map(r => ({ refundedTotal: Number(r.refunded_total), status: String(r.status) }));
+      const rows = await query(`select refunded_total, status${await hasDates() ? ', first_attempt_at, last_attempt_at' : ''}
+        from sc19_stripe.invoice_corrections where order_id=$1`, [orderId]);
+      return rows.map(r => ({ refundedTotal: Number(r.refunded_total), status: String(r.status), ...windowOf(r) }));
     },
     async startCorrection(orderId, refundedTotal, nowMs) {
       await query(`insert into sc19_stripe.invoice_corrections(order_id, refunded_total, changed_at) values ($1,$2,$3)
         on conflict (order_id, refunded_total) do nothing`, [orderId, refundedTotal, iso(nowMs)]);
       const rows = await query(`update sc19_stripe.invoice_corrections set status='pending', attempts=attempts+1, changed_at=$3
         where order_id=$1 and refunded_total=$2 and status<>'issued' returning attempts`, [orderId, refundedTotal, iso(nowMs)]);
+      if (rows[0] && await hasDates())
+        await query(`update sc19_stripe.invoice_corrections set first_attempt_at=coalesce(first_attempt_at,$3), last_attempt_at=$3
+          where order_id=$1 and refunded_total=$2 and status='pending'`, [orderId, refundedTotal, iso(nowMs)]);
       return rows[0] ? Number(rows[0].attempts) : 'issued';
     },
     async correctionIssued(orderId, refundedTotal, invoice, nowMs) {
