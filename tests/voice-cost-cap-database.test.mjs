@@ -174,7 +174,10 @@ test('R7: the monthly voice cost cap refuses new dispatches in the database and 
     for (const f of fns) {
       assert.deepEqual(f.proconfig, ['search_path=""'], f.sig);
       assert.ok(f.trig || f.prosecdef, `${f.sig} is security definer`);
-      assert.ok(f.acl === null || f.acl === '{postgres=X/postgres}', `${f.sig} owner only: ${f.acl}`);
+      // R6-1e part 2 (20261121220000): the Retell webhook role records the real call cost; nothing else is granted.
+      const expected = f.sig === 'voice_budget.record_call_cost(uuid,uuid,integer)'
+        ? '{postgres=X/postgres,retell_webhook=X/postgres}' : '{postgres=X/postgres}';
+      assert.ok(f.acl === null || f.acl === expected, `${f.sig} owner only: ${f.acl}`);
     }
     for (const role of ['anon', 'authenticated', 'service_role']) {
       if (!await one('select to_regrole($1) is not null as v', [role])) continue;
