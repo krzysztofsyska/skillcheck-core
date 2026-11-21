@@ -4,7 +4,7 @@
  * Provider verification MUST authenticate the raw notification and retrieve payment truth.
  */
 import { randomUUID } from 'node:crypto';
-import { MAX_PACKAGES, STRIPE_CATALOG, checkCvCount, isStripePackageCode, type StripePackageCode } from './stripe-catalog.ts';
+import { MAX_PACKAGES, STRIPE_CATALOG, checkCvCount, isStripePackageCode, stripePoolQuote, type StripePackageCode } from './stripe-catalog.ts';
 
 export type PaymentMode = 'test' | 'live';
 export type PaymentScope = Readonly<{ provider: string; account: string; mode: PaymentMode }>;
@@ -176,9 +176,21 @@ function offerValid(offer: PaymentOffer | null, id: string, terms: string): offe
     Number.isSafeInteger(offer.validUntilMs) && offer.validUntilMs > Date.now();
 }
 
+/** The offer is the catalog's base package (R7 pool pricing is anchored on it). */
+const catalogBase = (offer: PaymentOffer) =>
+  offer.amountMinor === STRIPE_CATALOG[offer.plan].grossMinor && offer.credits === STRIPE_CATALOG[offer.plan].cvCredits;
+/** R7: a WERYFIKACJA / ASSESSMENT CENTER order with a CV pool above the base, priced
+ * by the server (stripePoolQuote) for exactly that pool. */
+function poolOrder(offer: PaymentOffer, order: PaymentOrder): boolean {
+  if (offer.plan === 'PRESELEKCJA' || orderPackage(order) !== offer.plan || order.credits === offer.credits) return false;
+  const quote = stripePoolQuote(offer.plan, order.credits);
+  return !!quote && catalogBase(offer) && quote.cvCredits === order.credits && quote.grossMinor === order.amountMinor;
+}
 /** How many whole packages of `offer` the order holds, or null when its amount and
- * credits are not the same whole multiple of the offer (a changed price). */
+ * credits are not the same whole multiple of the offer (a changed price). An R7
+ * above-base pool order of WERYFIKACJA / ASSESSMENT CENTER is one package. */
 function packagesOf(offer: PaymentOffer, order: PaymentOrder): number | null {
+  if (poolOrder(offer, order)) return 1;
   const n = order.credits / offer.credits;
   return orderPackage(order) === offer.plan &&
     Number.isSafeInteger(n) && n >= 1 && n <= Math.min(MAX_PACKAGES, STRIPE_CATALOG[offer.plan].maxPackages) &&
@@ -188,7 +200,8 @@ function packagesOf(offer: PaymentOffer, order: PaymentOrder): number | null {
  * pre-R7 behaviour); `packageCode` must name the offer's package (checked against
  * the offer below). A catalog package that is not on sale („wkrótce”) is refused
  * with its own code; more packages than the package allows is invalid. */
-function purchaseShape(req: Record<string, unknown>, cvPoolEnabled: boolean): { packages: number | null; packageCode: StripePackageCode | null } {
+function purchaseShape(req: Record<string, unknown>, cvPoolEnabled: boolean):
+    { packages: number | null; packageCode: StripePackageCode | null; cvPool: number | null } {
   let packageCode: StripePackageCode | null = null;
   if ('packageCode' in req) {
     if (!isStripePackageCode(req.packageCode)) return deny('SC19_PAYMENT_INVALID');
@@ -206,13 +219,17 @@ function purchaseShape(req: Record<string, unknown>, cvPoolEnabled: boolean): { 
   // must be a value the slider can produce for this package, and the server turns
   // it into whole packages itself (checkCvCount). With the slider flag off the
   // field does not exist (pre-W2b behaviour).
+  // R7: for WERYFIKACJA / ASSESSMENT CENTER the checked count is the order's CV pool
+  // (one package; above the base the server prices it with stripePoolQuote).
+  let cvPool: number | null = null;
   if ('cvCount' in req) {
     if (!cvPoolEnabled) return deny('SC19_PAYMENT_INVALID');
     const checked = checkCvCount(packageCode ?? 'PRESELEKCJA', req.cvCount, packages);
     if (!checked.ok) throw new Sc19PaymentError('SC19_PAYMENT_CV_COUNT_INVALID', checked.message);
     packages = checked.packages;
+    if (packageCode !== null && packageCode !== 'PRESELEKCJA') cvPool = Number(req.cvCount);
   }
-  return { packages, packageCode };
+  return { packages, packageCode, cvPool };
 }
 const requiredKeys = ['companyId', 'offerId', 'requestId', 'termsRevision'] as const;
 function checkoutShape(input: unknown): input is Record<string, unknown> {
@@ -399,15 +416,20 @@ export function createSc19Payments(deps: PaymentDependencies) {
         !stringId(req.offerId) || !stringId(req.termsRevision)) return deny('SC19_PAYMENT_INVALID');
     const companyId = req.companyId, requestId = req.requestId;
     const offerId = req.offerId, terms = req.termsRevision;
-    const { packages, packageCode } = purchaseShape(req, cvPoolEnabled);
+    const { packages, packageCode, cvPool } = purchaseShape(req, cvPoolEnabled);
     // With explicit packages, an existing order counts as "the same purchase" only
     // when it holds exactly that many whole packages of its own offer revision.
     // A named package must be the existing order's package.
     const samePackages = async (tx: PaymentTransaction, existing: PaymentOrder) => {
       if (packageCode !== null && orderPackage(existing) !== packageCode) return false;
-      if (packages === null) return true;
+      if (packages === null && orderPackage(existing) === 'PRESELEKCJA') return true;
       const offer = await tx.offer(existing.offerId);
-      return !!offer && offer.revision === existing.offerRevision && packagesOf(offer, existing) === packages;
+      if (!offer || offer.revision !== existing.offerRevision) return false;
+      if (packages !== null && packagesOf(offer, existing) !== packages) return false;
+      // R7: one WERYFIKACJA / ASSESSMENT CENTER package is the same purchase only
+      // with the same CV pool (no `cvCount` = the base pool), also when the
+      // request names no package count.
+      return offer.plan === 'PRESELEKCJA' || existing.credits === (cvPool ?? offer.credits);
     };
     const auth = await deps.authenticate();
     if (!auth || typeof auth.userId !== 'string' || !uuid.test(auth.userId)) return deny('SC19_PAYMENT_FORBIDDEN');
@@ -445,10 +467,19 @@ export function createSc19Payments(deps: PaymentDependencies) {
       if ((packageCode ?? 'PRESELEKCJA') !== offer.plan) return deny('SC19_PAYMENT_INVALID');
       const units = packages ?? 1;
       if (units > STRIPE_CATALOG[offer.plan].maxPackages) return deny('SC19_PAYMENT_INVALID');
+      let amountMinor = offer.amountMinor * units, credits = offer.credits * units;
+      if (cvPool !== null && cvPool !== offer.credits) {
+        // R7: an above-base pool of one WERYFIKACJA / ASSESSMENT CENTER package. The
+        // amount is the pricing engine's for exactly that pool, never the client's;
+        // the offer must be the catalog's base package it is computed from.
+        const quote = stripePoolQuote(offer.plan, cvPool);
+        if (!quote || units !== 1 || !catalogBase(offer)) return deny('SC19_PAYMENT_OFFER_UNAVAILABLE');
+        amountMinor = quote.grossMinor; credits = quote.cvCredits;
+      }
       const created: PaymentOrder = Object.freeze({
         id: randomUUID(), companyId, buyerId: userId, requestId, offerId,
         offerRevision: offer.revision, termsRevision: offer.termsRevision,
-        amountMinor: offer.amountMinor * units, currency: 'PLN', credits: offer.credits * units,
+        amountMinor, currency: 'PLN', credits,
         scope, status: 'awaiting_payment', sessionId: null, checkoutUrl: null, paymentId: null,
         checkoutDeadlineMs: Math.min(offer.validUntilMs, Date.now() + 30 * 60_000),
         ...(offer.plan === 'PRESELEKCJA' ? {} : { packageCode: offer.plan }),

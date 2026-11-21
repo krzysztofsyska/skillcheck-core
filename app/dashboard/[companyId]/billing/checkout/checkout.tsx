@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { sc19OfferAmounts } from '../../../../../lib/sc19-offer-amounts';
-import { CV_POOL_STEP, MAX_PACKAGES, STRIPE_CATALOG, isStripePackageCode, packagesForPool, type StripePackageCode } from '../../../../../lib/stripe-catalog';
+import { CV_POOL_STEP, MAX_PACKAGES, STRIPE_CATALOG, STRIPE_VAT_BASIS_POINTS, isStripePackageCode, packagesForPool, stripePoolQuote, type StripePackageCode } from '../../../../../lib/stripe-catalog';
 type Offer={id:string;revision:string;packageCode?:string;amountMinor:number;currency:string;credits:number;
   termsRevision:string;termsText:string;validUntilMs:number;
   netMinor?:number|null;vatMinor?:number|null;vatBasisPoints?:number|null};
@@ -32,6 +32,11 @@ const packageExtras:Record<StripePackageCode,string>={PRESELEKCJA:'',
 /** Packages not offered right now (not on sale, or no migration yet): shown as „wkrótce”. */
 const soonPackages=(offers:Offer[])=>[STRIPE_CATALOG.WERYFIKACJA,STRIPE_CATALOG.ASSESSMENT_CENTER]
   .filter(p=>!offers.some(o=>offerPackage(o)===p.code));
+/** R7: net surcharge per extra CV, read from the engine (one step above the base), never typed in. */
+const overageNetPerCv=(code:StripePackageCode)=>{
+  const base=stripePoolQuote(code,STRIPE_CATALOG[code].cvCredits),next=stripePoolQuote(code,STRIPE_CATALOG[code].cvCredits+CV_POOL_STEP);
+  return base&&next?(next.netMinor-base.netMinor)/CV_POOL_STEP:null;
+};
 const offerPackage=(o:{packageCode?:unknown}|undefined):StripePackageCode=>o&&isStripePackageCode(o.packageCode)?o.packageCode:'PRESELEKCJA';
 const uuid = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
 const contextKey = (companyId: string, orderId: string) => `sc19:recruitment:${companyId.toLowerCase()}:${orderId.toLowerCase()}`;
@@ -43,25 +48,40 @@ const cvCountInvalid='Wybrana pula CV nie jest dozwolona. Wybierz pulę CV ponow
  * numbers only). Rendered as text, never as HTML; anything else falls back. */
 const cvCountMessage=(value:unknown)=>typeof value==='string'&&value.length>0&&value.length<=300?value:cvCountInvalid;
 export default function Checkout({companyId,recruitmentId,statusOnly=false,testMode=false,cvPoolEnabled=false}: {companyId:string;recruitmentId?:string;statusOnly?:boolean;testMode?:boolean;
-  /** R5 W2b: PRICING_CV_SLIDER_ENABLED. On: the PRESELEKCJA order also sends the
-   * chosen CV pool (`cvCount`) and the server checks it. Off: request unchanged. */
+  /** R5 W2b: PRICING_CV_SLIDER_ENABLED. On: the order also sends the chosen CV pool
+   * (`cvCount`) and the server checks it; WERYFIKACJA and ASSESSMENT CENTER may take a
+   * pool above the base, priced by the server (R7). Off: request unchanged. */
   cvPoolEnabled?:boolean}) {
   // PRESELEKCJA is sold in whole packages of 60 CV; the slider picks a pool (co 5)
   // and the server recomputes the amount from the package count.
   const [pool,setPool]=useState(STRIPE_CATALOG.PRESELEKCJA.cvCredits);
+  // R7: WERYFIKACJA / ASSESSMENT CENTER pool (flag on only); null = the base pool.
+  const [packagePool,setPackagePool]=useState<number|null>(null);
   const [offers,setOffers]=useState<Offer[]>([]),[selected,setSelected]=useState('');
   const [accepted,setAccepted]=useState(false),[busy,setBusy]=useState(false);
   const [loading,setLoading]=useState(true),[message,setMessage]=useState('');
   const [checkoutAvailable,setCheckoutAvailable]=useState(true);
-  const [orderId,setOrderId]=useState(''),[paidOrder,setPaidOrder]=useState<{offerId:string;termsRevision:string;packages:number|null}|null>(null);
+  const [orderId,setOrderId]=useState(''),[paidOrder,setPaidOrder]=useState<{offerId:string;termsRevision:string;part:string}|null>(null);
   const [requestIds]=useState(()=>new Map<string,string>());
   const [returnedRecruitment,setReturnedRecruitment]=useState<string|null>(null);
   const selectedOffer=offers.find(o=>o.id===selected);
   const code=offerPackage(selectedOffer);
+  // R7: with the flag on, WERYFIKACJA and ASSESSMENT CENTER take a CV pool from the base
+  // up to the catalog maximum (co 5). The price shown is the same engine computation the
+  // server charges (stripePoolQuote); the server recomputes it and never takes it from here.
+  const poolPackage=cvPoolEnabled&&code!=='PRESELEKCJA'&&!!STRIPE_CATALOG[code].overage;
+  const chosenPool=packagePool??STRIPE_CATALOG[code].cvCredits;
+  const poolQuote=poolPackage?stripePoolQuote(code,chosenPool):null;
+  const perCvNet=poolPackage?overageNetPerCv(code):null;
   // PRESELEKCJA: whole packages from the pool; WERYFIKACJA and ASSESSMENT CENTER: one package.
-  const packages=code==='PRESELEKCJA'?packagesForPool(pool):1;
-  const offer=selectedOffer&&packages?{...selectedOffer,amountMinor:selectedOffer.amountMinor*packages,credits:selectedOffer.credits*packages,
+  const packages=code==='PRESELEKCJA'?packagesForPool(pool):poolPackage&&!poolQuote?null:1;
+  // At the base pool the offer itself is shown (its price is the package price).
+  const offer=selectedOffer&&poolQuote&&poolQuote.overageCv>0?{...selectedOffer,amountMinor:poolQuote.grossMinor,credits:poolQuote.cvCredits,
+    netMinor:poolQuote.netMinor,vatMinor:poolQuote.grossMinor-poolQuote.netMinor,vatBasisPoints:STRIPE_VAT_BASIS_POINTS}
+    :selectedOffer&&packages?{...selectedOffer,amountMinor:selectedOffer.amountMinor*packages,credits:selectedOffer.credits*packages,
     netMinor:null,vatMinor:null}:selectedOffer;
+  // Request key part: the package count, plus the CV pool for a pool package (flag on only).
+  const requestPart=(n:number|null,cv:number|null)=>cv===null?`${n}`:`${n}:cv${cv}`;
   const amounts=offer&&breakdown(offer);
   async function loadOffers(signal?: AbortSignal) {
     setLoading(true);setAccepted(false);setOffers([]);setSelected('');
@@ -127,7 +147,9 @@ export default function Checkout({companyId,recruitmentId,statusOnly=false,testM
       const paidCode=offerPackage(data);
       const paidPackages=Number.isSafeInteger(data.credits/STRIPE_CATALOG[paidCode].cvCredits)
         ?data.credits/STRIPE_CATALOG[paidCode].cvCredits:null;
-      setPaidOrder(data.status==='paid'?{offerId:data.offerId,termsRevision:data.termsRevision,packages:paidPackages}:null);
+      const paidPool=cvPoolEnabled&&paidCode!=='PRESELEKCJA'&&!!STRIPE_CATALOG[paidCode].overage&&Number.isSafeInteger(data.credits)?data.credits:null;
+      setPaidOrder(data.status==='paid'?{offerId:data.offerId,termsRevision:data.termsRevision,
+        part:requestPart(paidPool===null?paidPackages:1,paidPool)}:null);
       setMessage(data.status==='expired' ? sessionExpired : data.status==='paid' ? (paidCode==='PRESELEKCJA' ? `Płatność potwierdzona. Przyznano ${data.credits} analiz CV.`
         : `Płatność potwierdzona. Przyznano pakiet ${STRIPE_CATALOG[paidCode].name} i ${data.credits} analiz CV.`) :
         'Czekamy na potwierdzenie płatności. Kredyty zostaną przyznane po jej weryfikacji.');
@@ -136,7 +158,7 @@ export default function Checkout({companyId,recruitmentId,statusOnly=false,testM
   }
   function nextPurchase() {
     if(!paidOrder)return;
-    const key=`sc19:request:${companyId}:${paidOrder.offerId}:${paidOrder.termsRevision}:${paidOrder.packages}`;
+    const key=`sc19:request:${companyId}:${paidOrder.offerId}:${paidOrder.termsRevision}:${paidOrder.part}`;
     requestIds.delete(key);
     try {
       sessionStorage.removeItem(key);
@@ -156,15 +178,15 @@ export default function Checkout({companyId,recruitmentId,statusOnly=false,testM
     try {
       // Best-effort retry hint. The durable server invariant also protects new
       // tabs/devices and browsers where sessionStorage is missing or evicted.
-      const key=`sc19:request:${companyId}:${offer.id}:${offer.termsRevision}:${packages}`;
+      const key=`sc19:request:${companyId}:${offer.id}:${offer.termsRevision}:${requestPart(packages,poolPackage?chosenPool:null)}`;
       let requestId=requestIds.get(key);
       try {requestId ??= sessionStorage.getItem(key) ?? undefined;} catch { /* optional */ }
       requestId ??= crypto.randomUUID();requestIds.set(key,requestId);
       try {sessionStorage.setItem(key,requestId);} catch { /* optional */ }
-      // R5 W2b: with the slider flag on, the PRESELEKCJA pool goes with the order.
-      // The server derives the packages from it and refuses a mismatch; it never
-      // sets the price. Other packages have no slider, so nothing extra is sent.
-      const cvCount=cvPoolEnabled&&code==='PRESELEKCJA'?{cvCount:pool}:{};
+      // R5 W2b: with the slider flag on, the chosen pool goes with the order. The
+      // server derives the packages (PRESELEKCJA) or the pool price (WERYFIKACJA,
+      // ASSESSMENT CENTER — R7) from it and refuses anything else; it never takes a price.
+      const cvCount=cvPoolEnabled&&code==='PRESELEKCJA'?{cvCount:pool}:poolPackage?{cvCount:chosenPool}:{};
       const response=await fetch('/api/billing/checkout',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({companyId,offerId:offer.id,termsRevision:offer.termsRevision,requestId,packages,packageCode:code,...cvCount})});
       // A killed invocation or a platform error answers with HTML, not JSON. Bare
@@ -229,7 +251,7 @@ export default function Checkout({companyId,recruitmentId,statusOnly=false,testM
     {testMode&&<p role="note">{stripeTestNotice}</p>}
     <p>Pakiet FREE nie wymaga płatności i nie korzysta z tego formularza.</p>
     {loading ? <p role="status">Wczytuję ofertę…</p> : offers.length>0 ? <>
-      <label>Wariant <select value={selected} disabled={busy} onChange={e=>{setSelected(e.target.value);setAccepted(false);}}>
+      <label>Wariant <select value={selected} disabled={busy} onChange={e=>{setSelected(e.target.value);setPackagePool(null);setAccepted(false);}}>
         {offers.map(o=><option key={o.id} value={o.id}>{`${STRIPE_CATALOG[offerPackage(o)].name}: `}{o.credits} analiz CV — {pln(o.amountMinor)} brutto</option>)}
       </select></label>
       {selectedOffer&&code==='PRESELEKCJA'&&<label>Pula CV (co {CV_POOL_STEP}) <input type="number" min={CV_POOL_STEP} step={CV_POOL_STEP}
@@ -237,6 +259,11 @@ export default function Checkout({companyId,recruitmentId,statusOnly=false,testM
         onChange={e=>{setPool(Number(e.target.value));setAccepted(false);}}/>
         <small>{packages ? `PRESELEKCJA sprzedajemy w całych pakietach po ${STRIPE_CATALOG.PRESELEKCJA.cvCredits} CV: ${packages} ${packages===1?'pakiet':'pakiety'} = ${packages*STRIPE_CATALOG.PRESELEKCJA.cvCredits} analiz CV.`
           : `Podaj wielokrotność ${CV_POOL_STEP}, od ${CV_POOL_STEP} do ${MAX_PACKAGES*STRIPE_CATALOG.PRESELEKCJA.cvCredits} CV.`}</small></label>}
+      {selectedOffer&&poolPackage&&<label>Pula CV (co {CV_POOL_STEP}) <input type="number" min={STRIPE_CATALOG[code].cvCredits} step={CV_POOL_STEP}
+        max={STRIPE_CATALOG[code].overage?.cvMax} value={chosenPool} disabled={busy}
+        onChange={e=>{setPackagePool(Number(e.target.value));setAccepted(false);}}/>
+        <small>{!poolQuote ? `Podaj liczbę CV co ${CV_POOL_STEP}, od ${STRIPE_CATALOG[code].cvCredits} do ${STRIPE_CATALOG[code].overage?.cvMax} CV.`
+          : `W cenie pakietu ${STRIPE_CATALOG[code].cvCredits} CV.${perCvNet!==null?` Każde dodatkowe CV: ${pln(perCvNet)} netto${poolQuote.overageCv>0?` (wybrano ${poolQuote.overageCv} dodatkowych)`:''}.`:''}`}</small></label>}
       {offer&&<><h2>{pln(offer.amountMinor)} brutto</h2><p>{offer.credits} analiz CV{packageExtras[code]?` • ${packageExtras[code]}`:''} • jednorazowo • analizy ważne 3 miesiące od przyznania</p>
         <table><caption>Podsumowanie zamówienia</caption><tbody>
           <tr><th scope="row">Pakiet</th><td>{STRIPE_CATALOG[code].name}</td></tr>
