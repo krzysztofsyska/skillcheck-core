@@ -4,7 +4,6 @@ on:
     paths:
       - 'lib/sc19-payment*.ts'
       - 'lib/sc19-offer-*.ts'
-      - 'lib/sc19-przelewy24-provider.ts'
       - 'lib/sc19-stripe-*.ts'
       - 'lib/stripe-catalog.ts'
       - 'tests/sc19-stripe*.mjs'
@@ -14,7 +13,6 @@ on:
       - 'app/api/billing/**'
       - 'app/dashboard/**/billing/checkout/**'
       - 'tests/sc-019-payment*.mjs'
-      - 'lib/sc19-p24-diagnostic.ts'
       - 'app/operator/billing/**'
       - 'tests/sc19-p24-diagnostic.test.mjs'
       - 'tests/sc-019-offer-catalog.test.mjs'
