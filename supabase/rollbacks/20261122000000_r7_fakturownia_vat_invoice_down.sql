@@ -11,7 +11,7 @@ begin
 end $guard$;
 
 drop function if exists sc19_stripe.finish_vat_invoice(uuid,text,bigint,text,text);
-drop function if exists sc19_stripe.claim_vat_invoice(uuid);
+drop function if exists sc19_stripe.claim_vat_invoice(uuid,uuid);
 drop table if exists sc19_stripe.vat_invoices;
 
 commit;

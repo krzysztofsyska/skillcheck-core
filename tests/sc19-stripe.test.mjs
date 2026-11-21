@@ -123,7 +123,8 @@ function harness(opts = {}) {
     customers, fetch: stripe.fetch, nowMs: () => opts.now ?? Date.now(),
     async buyer(order) { assert.equal(order.buyerId, id(2)); return { email: 'buyer@example.test', companyName: 'Firma Testowa', nip: st.nip }; } });
   const service = createSc19Payments({ store, provider, scope, checkoutOrigins: [STRIPE_CHECKOUT_ORIGIN], enabled: true, liveApproved: false, cvPoolEnabled: opts.cvPoolEnabled === true,
-    authenticate: async () => ({ userId: id(2) }), onPaid: async order => { st.paidHook.push(order.id); if (opts.onPaid) await opts.onPaid(order, provider); } });
+    authenticate: async () => ({ userId: id(2) }), onPaid: async order => { st.paidHook.push(order.id); if (opts.onPaid) await opts.onPaid(order, provider); },
+    ...(opts.onPaidAgain ? { onPaidAgain: order => opts.onPaidAgain(order, provider) } : {}) });
   return { st, stripe, service, provider };
 }
 
@@ -991,7 +992,7 @@ test('invoice: a failing Fakturownia, a throwing hook or a test order never undo
   const outcomes = [], fakturownia = [];
   const deps = { env: { FAKTUROWNIA_ACCOUNT: 'ktig', FAKTUROWNIA_API_TOKEN: 'tok_' + 'c'.repeat(20) },
     fetch: async (url, init) => { fakturownia.push(init.method); return { ok: false, status: 503, json: async () => ({}) }; },
-    store: { claim: async () => ({ outcome: 'claimed', companyName: 'Firma Testowa', nip: '7394002294' }), finish: async () => {} },
+    store: { claim: async () => ({ outcome: 'claimed', companyName: 'Firma Testowa', nip: '7394002294', amountMinor: 30000 }), finish: async () => {} },
     billingAddress: async () => ({ street: 'ul. Testowa 1', postCode: '00-001', city: 'Warszawa', country: 'PL' }), log: () => {} };
   for (const variant of ['live-503', 'throws', 'test-order']) {
     const { st, stripe, service } = harness({ onPaid: async order => {
@@ -1030,4 +1031,53 @@ test('invoice: billingAddress reads only the address of the paid session bound t
   await assert.rejects(provider.billingAddress({ ...order, id: id(99) }), e => e.code === 'SC19_PAYMENT_ORDER_MISMATCH');
   stripe.sessions.get(sid).customer_details.address.city = 'X\u0000';
   await assert.rejects(provider.billingAddress(order), e => e.code === 'SC19_PAYMENT_ADDRESS_INVALID');
+});
+
+test('invoice: a later delivery of a paid order retries only a "failed" invoice, never grants again', async () => {
+  const { issueStripeVatInvoice } = await import('../lib/sc19-stripe-invoice.ts');
+  // Fakturownia answers per scenario; the record follows sc19_stripe.claim_vat_invoice.
+  const run = async (answers) => {
+    const rows = new Map(), posts = [];
+    const store = { async claim(oid) {
+      const row = rows.get(oid);
+      if (!row) rows.set(oid, { status: 'issuing' });
+      else if (row.status === 'failed') row.status = 'issuing';
+      else return { outcome: row.status };
+      return { outcome: 'claimed', companyName: 'Firma Testowa', nip: '7394002294', amountMinor: 30000 };
+    }, async finish(oid, r) { rows.get(oid).status = r.status; } };
+    const deps = { env: { FAKTUROWNIA_ACCOUNT: 'ktig', FAKTUROWNIA_API_TOKEN: 'tok_' + 'c'.repeat(20) }, store, log: () => {},
+      billingAddress: async () => ({ street: 'ul. Testowa 1', postCode: '00-001', city: 'Warszawa', country: 'PL' }),
+      fetch: async (url, init) => {
+        const inv = JSON.parse(init.body).invoice; const status = answers[posts.length] ?? 201; posts.push(inv.oid);
+        return status === 201 ? { ok: true, status, json: async () => ({ id: 77, kind: 'vat', status: 'paid', number: 'FV 1', oid: inv.oid, price_gross: '300.00' }) }
+          : { ok: false, status, json: async () => ({}) };
+      } };
+    const hook = order => issueStripeVatInvoice({ ...order, scope: { ...order.scope, mode: 'live' } }, deps);
+    const { st, stripe, service } = harness({ onPaid: hook, onPaidAgain: hook });
+    const r = await service.checkout(buy());
+    const sid = st.orders.get(r.orderId).sessionId; stripe.pay(sid);
+    const event = completed(stripe.sessions.get(sid));
+    const first = signed(event);
+    assert.equal((await service.notification(first.raw, first.header)).state, 'applied');
+    for (const n of [1, 2]) {
+      const again = signed({ ...event, id: `evt_fakeagain${n}` });
+      assert.equal((await service.notification(again.raw, again.header)).state, 'already_applied');
+    }
+    assert.equal(st.credits.get(id(1)), 60, 'granted once');
+    assert.deepEqual(st.paidHook, [r.orderId], 'grant hook once');
+    return { posts, status: rows.get(r.orderId).status };
+  };
+  // 429 certainly created nothing: the next delivery issues it, the third does nothing.
+  const retried = await run([429]);
+  assert.equal(retried.status, 'issued');
+  assert.equal(retried.posts.length, 2);
+  assert.equal(new Set(retried.posts).size, 1, 'same oid every time');
+  // Outcome unknown (5xx): 'check', never called again by later deliveries.
+  const unsure = await run([503]);
+  assert.equal(unsure.status, 'check');
+  assert.equal(unsure.posts.length, 1);
+  // Issued on the first delivery: later deliveries make no call.
+  const issued = await run([]);
+  assert.equal(issued.status, 'issued');
+  assert.equal(issued.posts.length, 1);
 });

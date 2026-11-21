@@ -128,6 +128,11 @@ export type PaymentDependencies = Readonly<{
    * delivery that actually applied it (never for a duplicate). It must never undo
    * the grant: a failure is logged by a fixed code and the grant stays. */
   onPaid?(order: PaymentOrder): Promise<void>;
+  /** R7: runs for a later verified delivery of an order that is ALREADY paid (a
+   * Stripe redelivery or a resend), never for the delivery that applied the grant
+   * and never with any grant logic. Only for idempotent follow-up work (the VAT
+   * invoice re-claims solely a 'failed' record). Same error handling as onPaid. */
+  onPaidAgain?(order: PaymentOrder): Promise<void>;
   /** R5 W2b: accept an optional `cvCount` (the CV pool slider) in a checkout
    * request and validate it on the server. Off (the default) keeps the pre-W2b
    * request shape: a `cvCount` field is refused like any other unknown field. */
@@ -531,17 +536,18 @@ export function createSc19Payments(deps: PaymentDependencies) {
         typeof signature !== 'string' || signature.length === 0 || signature.length > 8192)
       return deny('SC19_PAYMENT_NOTIFICATION_INVALID');
     const result = await applySettlement(clone(await deps.provider.verifyAndRetrieve(new Uint8Array(raw), signature)));
-    if (result.state === 'applied') await afterPaid(result.orderId);
+    if (result.state === 'applied') await afterPaid(result.orderId, deps.onPaid);
+    else if (result.state === 'already_applied') await afterPaid(result.orderId, deps.onPaidAgain);
     return result;
   }
 
   /** Post-grant hook (see PaymentDependencies.onPaid). The grant has committed;
    * nothing here can roll it back, and the webhook is still acknowledged. */
-  async function afterPaid(orderId: string) {
-    if (!deps.onPaid) return;
+  async function afterPaid(orderId: string, hook: ((order: PaymentOrder) => Promise<void>) | undefined) {
+    if (!hook) return;
     try {
       const order = await deps.store.transaction(tx => tx.order(orderId));
-      if (order && order.status === 'paid') await deps.onPaid(clone(order));
+      if (order && order.status === 'paid') await hook(clone(order));
     } catch { console.error('SC19_PAYMENT_AFTER_PAID_FAILED'); }
   }
 

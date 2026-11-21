@@ -18,9 +18,12 @@
 --    automatically). Accounting record of a company, no candidate data, no buyer
 --    personal data (only ids, a status and a fixed error code). No foreign key
 --    (keeps the erasure inventory untouched, as sc19_stripe.customers).
---  * sc19_stripe.claim_vat_invoice(order) — claims the invoice of a PAID LIVE order
---    of the KTIG Stripe account, once: inserts 'issuing' (or re-claims a 'failed'
---    row) and returns the company name and NIP for the invoice. Anything else
+--  * sc19_stripe.claim_vat_invoice(order, company) — claims the invoice of a PAID
+--    LIVE order of the KTIG Stripe account and of that company, once, from either
+--    order store (private.sc19_payment_orders for PRESELEKCJA, sc19_stripe.
+--    package_orders for WERYFIKACJA / ASSESSMENT CENTER): inserts 'issuing' (or
+--    re-claims a 'failed' row) and returns the company name, NIP and the order's
+--    amount snapshot for the invoice. Anything else
 --    returns the current status and no buyer data. Concurrent calls serialize on
 --    the primary key / row lock, so exactly one caller gets 'claimed'.
 --  * sc19_stripe.finish_vat_invoice(order, status, id, number, code) — records the
@@ -38,6 +41,7 @@ begin;
 do $preflight$
 begin
  if to_regnamespace('sc19_stripe') is null or to_regclass('private.sc19_payment_orders') is null
+  or to_regclass('sc19_stripe.package_orders') is null
   or to_regclass('private.sc19_trial_approvals') is null or to_regclass('public.companies') is null then
   raise exception 'r7_vat_invoice_requires_stripe_checkout' using errcode='55000';end if;
  if to_regclass('sc19_stripe.vat_invoices') is not null then
@@ -61,18 +65,27 @@ create table sc19_stripe.vat_invoices (
 alter table sc19_stripe.vat_invoices enable row level security;
 revoke all on sc19_stripe.vat_invoices from public, anon, authenticated;
 
-create function sc19_stripe.claim_vat_invoice(target_order uuid)
-returns table(outcome text, company_name text, nip text)
+create function sc19_stripe.claim_vat_invoice(target_order uuid, target_company uuid)
+returns table(outcome text, company_name text, nip text, amount_minor integer)
 language plpgsql volatile security definer set search_path='' as $$
 declare
- target_company uuid;
+ order_amount integer;
+ sources integer;
  current_status text;
 begin
- select o.company_id into target_company from private.sc19_payment_orders o
-  where o.id = target_order and o.provider = 'stripe' and o.account = 'ktig-consulting'
-   and o.mode = 'live' and o.status = 'paid';
- if not found then
-  return query select 'not_eligible'::text, null::text, null::text; return;
+ -- Both order stores: PRESELEKCJA (private.sc19_payment_orders) and WERYFIKACJA /
+ -- ASSESSMENT CENTER (sc19_stripe.package_orders). Same rules for both: KTIG Stripe
+ -- account, LIVE, paid, of exactly this company. The amount is that order's snapshot.
+ select count(*), min(x.amount) into sources, order_amount from (
+  select o.amount_minor as amount from private.sc19_payment_orders o
+   where o.id = target_order and o.company_id = target_company and o.provider = 'stripe'
+    and o.account = 'ktig-consulting' and o.mode = 'live' and o.status = 'paid'
+  union all
+  select p.amount_minor from sc19_stripe.package_orders p
+   where p.id = target_order and p.company_id = target_company and p.provider = 'stripe'
+    and p.account = 'ktig-consulting' and p.mode = 'live' and p.status = 'paid') x;
+ if sources <> 1 then
+  return query select 'not_eligible'::text, null::text, null::text, null::integer; return;
  end if;
  insert into sc19_stripe.vat_invoices(order_id, status) values (target_order, 'issuing')
   on conflict (order_id) do nothing;
@@ -82,13 +95,13 @@ begin
    where order_id = target_order and status = 'failed' and attempts < 20;
   if not found then
    select v.status into current_status from sc19_stripe.vat_invoices v where v.order_id = target_order;
-   return query select current_status, null::text, null::text; return;
+   return query select current_status, null::text, null::text, null::integer; return;
   end if;
  end if;
- return query select 'claimed'::text, c.name, a.nip from public.companies c
+ return query select 'claimed'::text, c.name, a.nip, order_amount from public.companies c
   left join private.sc19_trial_approvals a on a.company_id = c.id where c.id = target_company;
 end $$;
-revoke all on function sc19_stripe.claim_vat_invoice(uuid) from public, anon, authenticated;
+revoke all on function sc19_stripe.claim_vat_invoice(uuid,uuid) from public, anon, authenticated;
 
 create function sc19_stripe.finish_vat_invoice(target_order uuid, final_status text, invoice_id bigint,
  invoice_no text, code text)
@@ -111,7 +124,7 @@ declare r text;
 begin
  foreach r in array array['sc19_p24_preview','sc19_p24_checkout'] loop
   continue when not exists(select 1 from pg_roles where rolname=r);
-  execute format('grant execute on function sc19_stripe.claim_vat_invoice(uuid) to %I', r);
+  execute format('grant execute on function sc19_stripe.claim_vat_invoice(uuid,uuid) to %I', r);
   execute format('grant execute on function sc19_stripe.finish_vat_invoice(uuid,text,bigint,text,text) to %I', r);
  end loop;
 end $roles$;

@@ -13,7 +13,7 @@ const file = name => readFileSync(new URL(`../supabase/${name}`, import.meta.url
 const checkout = file('migrations/20261121110000_r7_stripe_checkout.sql');
 const migration = file('migrations/20261122000000_r7_fakturownia_vat_invoice.sql');
 const rollback = file('rollbacks/20261122000000_r7_fakturownia_vat_invoice_down.sql');
-const A = '00000000-0000-4000-8000-000000000001';
+const A = '00000000-0000-4000-8000-000000000001', B = '00000000-0000-4000-8000-000000000003';
 const fixture = `
  do $$ declare r text; begin
   -- Roles are cluster-wide and other test files create them in parallel: tolerate the race.
@@ -26,7 +26,8 @@ const fixture = `
  create table public.companies(id uuid primary key, name text not null, owner_id uuid not null);
  create table private.sc19_trial_approvals(company_id uuid primary key references public.companies(id), nip text not null);
  create table private.sc19_payment_orders(id uuid primary key, company_id uuid not null, provider text not null,
-  account text not null, mode text not null, status text not null, session_id text, checkout_url text, payment_id text);
+  account text not null, mode text not null, status text not null, session_id text, checkout_url text, payment_id text,
+  amount_minor integer not null default 30000);
  alter table private.sc19_payment_orders enable row level security;
  grant usage on schema private to sc19_p24_checkout;
  create function private.erasure_schema_signature() returns text language sql stable as $f$
@@ -35,6 +36,14 @@ const fixture = `
   where n.nspname in ('public','private') and c.relkind='r' $f$;
  insert into public.companies values ('${A}','Firma A','00000000-0000-4000-8000-000000000002');
  insert into private.sc19_trial_approvals values ('${A}','7394002294');
+ insert into public.companies values ('${B}','Firma B','00000000-0000-4000-8000-000000000002');
+`;
+// After the Stripe checkout migration: the package order store of 20261121150000, reduced to
+// the columns the claim reads (the real table pins the same values by constraints).
+const packages = `
+ create table sc19_stripe.package_orders(id uuid primary key, company_id uuid not null, package_code text not null,
+  amount_minor integer not null, provider text not null check (provider='stripe'),
+  account text not null check (account='ktig-consulting'), mode text not null, status text not null);
 `;
 
 test('R7 VAT invoice record: live paid Stripe orders only, one claim, outcome recorded, adapter role has no table access, rollback',
@@ -49,6 +58,7 @@ test('R7 VAT invoice record: live paid Stripe orders only, one claim, outcome re
   t.after(async () => { await db.end(); await other.end(); await root.query(`drop database "${name}"`); await root.end(); });
   await db.query(fixture);
   await db.query(checkout);
+  await db.query(packages);
   const signature = (await db.query('select private.erasure_schema_signature() s')).rows[0].s;
   await db.query(migration);
   assert.equal((await db.query('select private.erasure_schema_signature() s')).rows[0].s, signature, 'erasure schema unchanged');
@@ -63,7 +73,11 @@ test('R7 VAT invoice record: live paid Stripe orders only, one claim, outcome re
   const addOrder = async (mode, status, provider = 'stripe', account = 'ktig-consulting') => (await db.query(
     `insert into private.sc19_payment_orders values (gen_random_uuid(),$1,$2,$3,$4,$5) returning id`,
     [A, provider, account, mode, status])).rows[0].id;
-  const claim = (id, client = db) => asRole(client, 'select * from sc19_stripe.claim_vat_invoice($1)', [id]).then(r => r.rows);
+  const claim = (id, client = db, company = A) => asRole(client, 'select * from sc19_stripe.claim_vat_invoice($1,$2)', [id, company]).then(r => r.rows);
+  const addPackage = async (code, amount, mode, status, company = A) => (await db.query(
+    `insert into sc19_stripe.package_orders values (gen_random_uuid(),$1,$2,$3,'stripe','ktig-consulting',$4,$5) returning id`,
+    [company, code, amount, mode, status])).rows[0].id;
+  const NONE = { outcome: 'not_eligible', company_name: null, nip: null, amount_minor: null };
   const finish = (id, ...args) => asRole(db, 'select sc19_stripe.finish_vat_invoice($1,$2,$3,$4,$5) ok', [id, ...args]).then(r => r.rows[0].ok);
   const row = async id => (await db.query('select status, attempts, fakturownia_id, invoice_number, error_code from sc19_stripe.vat_invoices where order_id=$1', [id])).rows[0];
 
@@ -71,7 +85,7 @@ test('R7 VAT invoice record: live paid Stripe orders only, one claim, outcome re
   for (const id of [await addOrder('test', 'paid'), await addOrder('live', 'awaiting_payment'),
     await addOrder('live', 'paid', 'przelewy24'), await addOrder('live', 'paid', 'stripe', 'other'),
     '00000000-0000-4000-8000-0000000000ff']) {
-    assert.deepEqual(await claim(id), [{ outcome: 'not_eligible', company_name: null, nip: null }]);
+    assert.deepEqual(await claim(id), [NONE]);
     assert.equal(await row(id), undefined);
   }
 
@@ -81,8 +95,24 @@ test('R7 VAT invoice record: live paid Stripe orders only, one claim, outcome re
   const outcomes = [x[0].outcome, y[0].outcome].sort();
   assert.deepEqual(outcomes, ['claimed', 'issuing']);
   const won = x[0].outcome === 'claimed' ? x[0] : y[0];
-  assert.deepEqual(won, { outcome: 'claimed', company_name: 'Firma A', nip: '7394002294' });
-  assert.deepEqual(await claim(live), [{ outcome: 'issuing', company_name: null, nip: null }]);
+  assert.deepEqual(won, { outcome: 'claimed', company_name: 'Firma A', nip: '7394002294', amount_minor: 30000 });
+  assert.deepEqual(await claim(live), [{ outcome: 'issuing', company_name: null, nip: null, amount_minor: null }]);
+  // Another company never claims (or learns anything about) this order.
+  const otherCompany = await addOrder('live', 'paid');
+  assert.deepEqual(await claim(otherCompany, db, B), [NONE]);
+  assert.equal(await row(otherCompany), undefined);
+
+  // WERYFIKACJA and ASSESSMENT CENTER orders (sc19_stripe.package_orders): the same rules.
+  for (const [code, amount] of [['WERYFIKACJA', 61500], ['ASSESSMENT_CENTER', 149900]]) {
+    for (const id of [await addPackage(code, amount, 'test', 'paid'), await addPackage(code, amount, 'live', 'awaiting_payment'),
+      await addPackage(code, amount, 'live', 'expired')]) assert.deepEqual(await claim(id), [NONE], code);
+    const pkg = await addPackage(code, amount, 'live', 'paid');
+    assert.deepEqual(await claim(pkg, db, B), [NONE], `${code}: other company`);
+    assert.deepEqual(await claim(pkg), [{ outcome: 'claimed', company_name: 'Firma A', nip: '7394002294', amount_minor: amount }], code);
+    assert.deepEqual(await claim(pkg), [{ outcome: 'issuing', company_name: null, nip: null, amount_minor: null }], code);
+    assert.equal(await finish(pkg, 'issued', 9, 'FV ' + code, null), true);
+    assert.equal((await row(pkg)).status, 'issued');
+  }
 
   // 'failed' (nothing created) may be claimed again; 'check' never; 'issued' is final.
   assert.equal(await finish(live, 'failed', null, null, 'FAKTUROWNIA_RATE_LIMITED'), true);
@@ -92,13 +122,13 @@ test('R7 VAT invoice record: live paid Stripe orders only, one claim, outcome re
   assert.equal((await row(live)).attempts, 2);
   assert.equal(await finish(live, 'issued', 5, 'FV 1/11/2026', null), true);
   assert.deepEqual(await row(live), { status: 'issued', attempts: 2, fakturownia_id: '5', invoice_number: 'FV 1/11/2026', error_code: null });
-  assert.deepEqual(await claim(live), [{ outcome: 'issued', company_name: null, nip: null }]);
+  assert.deepEqual(await claim(live), [{ outcome: 'issued', company_name: null, nip: null, amount_minor: null }]);
   assert.equal(await finish(live, 'failed', null, null, 'X'), false);
 
   const unsure = await addOrder('live', 'paid');
   await claim(unsure);
   assert.equal(await finish(unsure, 'check', null, null, 'FAKTUROWNIA_TIMEOUT'), true);
-  assert.deepEqual(await claim(unsure), [{ outcome: 'check', company_name: null, nip: null }]);
+  assert.deepEqual(await claim(unsure), [{ outcome: 'check', company_name: null, nip: null, amount_minor: null }]);
   assert.equal((await row(unsure)).attempts, 1);
 
   // Constraints: bad status, issued without id, error code shape.
@@ -113,7 +143,7 @@ test('R7 VAT invoice record: live paid Stripe orders only, one claim, outcome re
   await assert.rejects(asRole(db, `insert into sc19_stripe.vat_invoices(order_id,status) values (gen_random_uuid(),'issued')`), /permission denied/);
   await assert.rejects(asRole(db, 'select nip from private.sc19_trial_approvals'), /permission denied/);
   for (const role of ['anon', 'authenticated']) {
-    assert.equal((await db.query(`select has_function_privilege($1,'sc19_stripe.claim_vat_invoice(uuid)','execute') v`, [role])).rows[0].v, false);
+    assert.equal((await db.query(`select has_function_privilege($1,'sc19_stripe.claim_vat_invoice(uuid,uuid)','execute') v`, [role])).rows[0].v, false);
     assert.equal((await db.query(`select has_function_privilege($1,'sc19_stripe.finish_vat_invoice(uuid,text,bigint,text,text)','execute') v`, [role])).rows[0].v, false);
   }
   for (const fn of ['claim_vat_invoice', 'finish_vat_invoice'])
@@ -126,7 +156,7 @@ test('R7 VAT invoice record: live paid Stripe orders only, one claim, outcome re
   await db.query('delete from sc19_stripe.vat_invoices');
   await db.query(rollback);
   assert.equal((await db.query(`select to_regclass('sc19_stripe.vat_invoices') v`)).rows[0].v, null);
-  assert.equal((await db.query(`select to_regprocedure('sc19_stripe.claim_vat_invoice(uuid)') v`)).rows[0].v, null);
+  assert.equal((await db.query(`select to_regprocedure('sc19_stripe.claim_vat_invoice(uuid,uuid)') v`)).rows[0].v, null);
   // And applies again after the rollback.
   await db.query(migration);
 });

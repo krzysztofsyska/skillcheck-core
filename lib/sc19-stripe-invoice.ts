@@ -19,7 +19,11 @@
  *  - an outcome that might have created an invoice (timeout, 5xx, rejected request,
  *    unreadable answer) is recorded as 'check' and is NEVER retried automatically;
  *    only an outcome that certainly created nothing is 'failed' (re-claimable);
- *  - amounts come from the order snapshot (order.amountMinor), never recomputed;
+ *  - amounts come from the order snapshot (order.amountMinor, checked against the
+ *    stored order by the claim), never recomputed;
+ *  - a later verified delivery of an already paid order (Stripe redelivery or a
+ *    resend; PaymentDependencies.onPaidAgain) runs this again: only a 'failed'
+ *    record is claimed again, so it retries a transient failure and nothing else;
  *  - the invoice carries only company name and NIP (database), billing address
  *    (from the paid Checkout Session), item name and amount. No e-mail: nothing is
  *    sent to the buyer from here.
@@ -31,14 +35,14 @@ import { STRIPE_CATALOG } from './stripe-catalog.ts';
 import type { StripeBillingAddress } from './sc19-stripe-provider.ts';
 
 export type VatInvoiceClaim =
-  | Readonly<{ outcome: 'claimed'; companyName: string; nip: string | null }>
+  | Readonly<{ outcome: 'claimed'; companyName: string; nip: string | null; amountMinor: number | null }>
   | Readonly<{ outcome: 'not_eligible' | 'issuing' | 'issued' | 'failed' | 'check' }>;
 export type VatInvoiceFinish =
   | Readonly<{ status: 'issued'; invoiceId: number; invoiceNumber: string | null }>
   | Readonly<{ status: 'failed' | 'check'; code: string }>;
 /** Backed by sc19_stripe.claim_vat_invoice / finish_vat_invoice on the adapter role. */
 export type VatInvoiceStore = Readonly<{
-  claim(orderId: string): Promise<VatInvoiceClaim>;
+  claim(orderId: string, companyId: string): Promise<VatInvoiceClaim>;
   finish(orderId: string, result: VatInvoiceFinish): Promise<void>;
 }>;
 export type StripeInvoiceDeps = Readonly<{
@@ -84,7 +88,7 @@ export async function issueStripeVatInvoice(order: PaymentOrder, deps: StripeInv
   // 2. Claim before any call. Without the record (pre-migration database or DB down)
   //    there is no invoice: the exactly-once guarantee comes first.
   let claim: VatInvoiceClaim;
-  try { claim = await deps.store.claim(order.id); }
+  try { claim = await deps.store.claim(order.id, order.companyId); }
   catch { log('error', 'SC19_INVOICE_STORE_UNAVAILABLE', order.id); return { state: 'store_unavailable' }; }
   if (claim.outcome !== 'claimed') return { state: 'not_claimed', code: claim.outcome };
 
@@ -106,6 +110,8 @@ export async function issueStripeVatInvoice(order: PaymentOrder, deps: StripeInv
   // 4. Buyer data. B2B only: no NIP → no automatic invoice.
   if (!claim.nip || !/^[0-9]{10}$/.test(claim.nip)) return finish({ status: 'failed', code: 'SC19_INVOICE_NIP_MISSING' });
   if (!claim.companyName.trim()) return finish({ status: 'failed', code: 'SC19_INVOICE_BUYER_MISSING' });
+  // The amount is the stored order snapshot; the copy in hand must agree with it.
+  if (claim.amountMinor !== order.amountMinor) return finish({ status: 'failed', code: 'SC19_INVOICE_AMOUNT_MISMATCH' });
   let address: StripeBillingAddress;
   try { address = await deps.billingAddress(order); }
   catch { return finish({ status: 'failed', code: 'SC19_INVOICE_ADDRESS_UNAVAILABLE' }); }
@@ -132,12 +138,13 @@ export async function issueStripeVatInvoice(order: PaymentOrder, deps: StripeInv
 /** sc19_stripe.claim_vat_invoice / finish_vat_invoice (migration 20261122000000). */
 export function vatInvoiceStore(query: (sql: string, values: unknown[]) => Promise<Record<string, unknown>[]>): VatInvoiceStore {
   return {
-    async claim(orderId) {
-      const rows = await query('select outcome, company_name, nip from sc19_stripe.claim_vat_invoice($1)', [orderId]);
+    async claim(orderId, companyId) {
+      const rows = await query('select outcome, company_name, nip, amount_minor from sc19_stripe.claim_vat_invoice($1,$2)', [orderId, companyId]);
       const row = rows[0];
       if (!row || typeof row.outcome !== 'string') throw new Error('SC19_INVOICE_STORE_INVALID');
       if (row.outcome === 'claimed') return { outcome: 'claimed',
-        companyName: typeof row.company_name === 'string' ? row.company_name : '', nip: typeof row.nip === 'string' ? row.nip : null };
+        companyName: typeof row.company_name === 'string' ? row.company_name : '', nip: typeof row.nip === 'string' ? row.nip : null,
+        amountMinor: Number.isSafeInteger(row.amount_minor) ? row.amount_minor as number : null };
       if (['not_eligible', 'issuing', 'issued', 'failed', 'check'].includes(row.outcome))
         return { outcome: row.outcome as 'not_eligible' | 'issuing' | 'issued' | 'failed' | 'check' };
       throw new Error('SC19_INVOICE_STORE_INVALID');

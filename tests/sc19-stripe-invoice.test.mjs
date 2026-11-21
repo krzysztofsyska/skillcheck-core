@@ -23,9 +23,10 @@ const order = (extra = {}) => ({
   ...extra });
 
 /** Same rules as the SQL functions: one claim per order; only 'failed' is claimable again. */
-function memoryStore({ eligible = true, nip = NIP, companyName = COMPANY, broken = false } = {}) {
+function memoryStore({ eligible = true, nip = NIP, companyName = COMPANY, broken = false, amountMinor = 60000 } = {}) {
   const rows = new Map(); const finished = [];
-  return { rows, finished, async claim(id) {
+  return { rows, finished, claims: [], async claim(id, companyId) {
+    this.claims.push([id, companyId]);
     if (broken) throw new Error('relation does not exist');
     await Promise.resolve();
     if (!eligible) return { outcome: 'not_eligible' };
@@ -33,7 +34,7 @@ function memoryStore({ eligible = true, nip = NIP, companyName = COMPANY, broken
     if (!row) rows.set(id, { status: 'issuing', attempts: 1 });
     else if (row.status === 'failed') Object.assign(row, { status: 'issuing', attempts: row.attempts + 1, code: null });
     else return { outcome: row.status };
-    return { outcome: 'claimed', companyName, nip };
+    return { outcome: 'claimed', companyName, nip, amountMinor };
   }, async finish(id, result) {
     const row = rows.get(id);
     assert.equal(row.status, 'issuing', 'finish only on a claimed row');
@@ -105,6 +106,13 @@ test('live paid order → exactly one VAT invoice with the order amount, company
     ['buyer_city', 'buyer_company', 'buyer_country', 'buyer_email', 'buyer_name', 'buyer_post_code', 'buyer_street', 'buyer_tax_no']);
   assert.deepEqual(store.finished, [{ status: 'issued', invoiceId: 1001, invoiceNumber: 'FV 1/11/2026' }]);
   assert.deepEqual(logs, [['info', 'SC19_INVOICE_ISSUED', ORDER_ID]]);
+  assert.deepEqual(store.claims, [[ORDER_ID, order().companyId]], 'claimed for the order and its company');
+});
+
+test('the order copy must carry the stored amount snapshot, otherwise no call', async () => {
+  const { d, fak } = deps({ store: memoryStore({ amountMinor: 30000 }) });
+  assert.deepEqual(await issueStripeVatInvoice(order(), d), { state: 'failed', code: 'SC19_INVOICE_AMOUNT_MISMATCH' });
+  assert.equal(fak.calls.length, 0);
 });
 
 test('test-mode, unpaid or foreign orders → no claim, no Fakturownia call, no log', async () => {
@@ -223,9 +231,10 @@ test('item names and dates', () => {
 
 test('vatInvoiceStore maps the SQL functions and refuses unknown answers', async () => {
   const calls = [];
-  let answer = [{ outcome: 'claimed', company_name: COMPANY, nip: NIP }];
+  let answer = [{ outcome: 'claimed', company_name: COMPANY, nip: NIP, amount_minor: 60000 }];
   const store = vatInvoiceStore(async (sql, values) => { calls.push([sql, values]); return answer; });
-  assert.deepEqual(await store.claim(ORDER_ID), { outcome: 'claimed', companyName: COMPANY, nip: NIP });
+  assert.deepEqual(await store.claim(ORDER_ID, 'c1'), { outcome: 'claimed', companyName: COMPANY, nip: NIP, amountMinor: 60000 });
+  assert.deepEqual(calls[0][1], [ORDER_ID, 'c1']);
   answer = [{ outcome: 'issued', company_name: null, nip: null }];
   assert.deepEqual(await store.claim(ORDER_ID), { outcome: 'issued' });
   answer = [{ outcome: 'something' }];
@@ -235,6 +244,6 @@ test('vatInvoiceStore maps the SQL functions and refuses unknown answers', async
   await store.finish(ORDER_ID, { status: 'issued', invoiceId: 7, invoiceNumber: 'FV 1' });
   await store.finish(ORDER_ID, { status: 'check', code: 'FAKTUROWNIA_TIMEOUT' });
   assert.deepEqual(calls.slice(-2).map(c => c[1]), [[ORDER_ID, 'issued', 7, 'FV 1', null], [ORDER_ID, 'check', null, null, 'FAKTUROWNIA_TIMEOUT']]);
-  assert.match(calls[0][0], /sc19_stripe\.claim_vat_invoice\(\$1\)/);
+  assert.match(calls[0][0], /sc19_stripe\.claim_vat_invoice\(\$1,\$2\)/);
   assert.match(calls.at(-1)[0], /sc19_stripe\.finish_vat_invoice\(\$1,\$2,\$3,\$4,\$5\)/);
 });

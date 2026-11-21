@@ -76,6 +76,8 @@ export async function stripeRuntime(config: Sc19StripeConfig) {
     },
   };
   const scope = stripeScope(config.mode);
+  const invoiceDeps: StripeInvoiceDeps = { env: process.env, fetch: fakturowniaFetch, store: vatInvoiceStore(query),
+    billingAddress: paid => provider.billingAddress(paid) };
   const provider = createStripeProvider({
     secretKey: config.secretKey, webhookSecret: config.webhookSecret, mode: config.mode,
     appOrigin: config.appOrigin, scope, customers,
@@ -99,8 +101,10 @@ export async function stripeRuntime(config: Sc19StripeConfig) {
   // R5 W2b: the CV pool from the slider is accepted (and validated) only with the
   // slider flag on; default off keeps the request shape unchanged.
   cvPoolEnabled: process.env.PRICING_CV_SLIDER_ENABLED === 'true',
-  onPaid: order => afterStripePayment(order, { env: process.env, fetch: fakturowniaFetch, store: vatInvoiceStore(query),
-    billingAddress: paid => provider.billingAddress(paid) }),
+  onPaid: order => afterStripePayment(order, invoiceDeps),
+  // R7: a redelivered or resent webhook of a paid order retries ONLY a 'failed'
+  // invoice record (claim_vat_invoice refuses issued / issuing / check). No grant.
+  onPaidAgain: order => afterStripePayment(order, invoiceDeps),
   authenticate: async () => {
     const buyer = await user();
     return buyer?.email_confirmed_at && buyer.email ? { userId: buyer.id } : null;
