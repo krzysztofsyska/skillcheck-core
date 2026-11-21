@@ -175,6 +175,73 @@ export function createFakturowniaClient(config: FakturowniaConfig, fetchImpl: Fa
         throw new FakturowniaError('FAKTUROWNIA_RESPONSE_INVALID');
       return created;
     },
+    /** R7: ONE VAT invoice for a LIVE Stripe payment already confirmed by Stripe, marked
+     * paid in full, with the Stripe payment method and the PaymentIntent id. An
+     * accounting document (Fakturownia sends it to KSeF itself), so it is called only
+     * after the package was granted for a verified payment. `oid_unique` makes
+     * Fakturownia refuse a second document with the same oid. */
+    async createStripeInvoice(input: StripeInvoiceInput): Promise<FakturowniaInvoice> {
+      if (!/^core:[0-9a-f-]{36}$/.test(input.oid) || !Number.isSafeInteger(input.grossMinor) || input.grossMinor <= 0 ||
+          !Number.isSafeInteger(input.quantity) || input.quantity < 1 || input.quantity > 20 ||
+          !DATE.test(input.issueDate) || !DATE.test(input.paidDate) || !/^\d{10}$/.test(input.buyer.nip) ||
+          !STRIPE_REFERENCE.test(input.paymentReference) || !PAYMENT_TYPES.has(input.paymentType))
+        throw new FakturowniaError('FAKTUROWNIA_REQUEST_REJECTED');
+      const gross = formatMinor(input.grossMinor);
+      const invoice = {
+        kind: 'vat', oid: input.oid, oid_unique: 'yes', issue_date: input.issueDate, sell_date: input.paidDate,
+        status: 'paid', paid: gross, paid_date: input.paidDate, payment_type: input.paymentType, payment_to_kind: 'off',
+        ...buyerFields(input.buyer),
+        calculating_strategy: { position: 'keep_gross', sum: 'keep_gross', invoice_form_price_kind: 'gross' },
+        positions: [{ name: input.itemName, quantity: input.quantity, quantity_unit: 'szt.', tax: 23, total_price_gross: gross }],
+        description: `Opłacono online przez Stripe (${input.paymentLabel}). ID płatności Stripe: ${input.paymentReference}.`,
+        internal_note: `SkillCheck ${input.oid} ${input.paymentReference}`,
+      };
+      const created = parseInvoice(await call('POST', '/invoices.json', {}, { invoice }));
+      if (created.kind !== 'vat' || created.oid !== input.oid || parseSignedMinor(created.priceGross) !== input.grossMinor)
+        throw new FakturowniaError('FAKTUROWNIA_RESPONSE_INVALID');
+      return created;
+    },
+    /** R7: ONE correction invoice (kind `correction`) to an issued invoice after a Stripe
+     * refund, for one cumulative refunded total (`oid_unique`). before/after are the
+     * gross amounts of the invoice before and after this correction. */
+    async createCorrection(input: CorrectionInput): Promise<FakturowniaInvoice> {
+      if (!/^core-korekta:[0-9a-f-]{36}:\d{1,9}$/.test(input.oid) || !Number.isSafeInteger(input.originalId) || input.originalId <= 0 ||
+          !Number.isSafeInteger(input.quantity) || input.quantity < 1 || input.quantity > 20 ||
+          !Number.isSafeInteger(input.beforeGrossMinor) || !Number.isSafeInteger(input.afterGrossMinor) ||
+          input.afterGrossMinor < 0 || input.afterGrossMinor >= input.beforeGrossMinor || !DATE.test(input.issueDate) ||
+          !/^\d{10}$/.test(input.buyer.nip) || !STRIPE_REFERENCE.test(input.paymentReference) || !PAYMENT_TYPES.has(input.paymentType))
+        throw new FakturowniaError('FAKTUROWNIA_REQUEST_REJECTED');
+      const afterQuantity = input.afterGrossMinor === 0 ? 0 : input.quantity;
+      const delta = input.afterGrossMinor - input.beforeGrossMinor;
+      const side = (kind: 'correction_before' | 'correction_after', quantity: number, minor: number) =>
+        ({ name: input.itemName, quantity, quantity_unit: 'szt.', tax: 23, total_price_gross: formatMinor(minor), kind });
+      const invoice = {
+        kind: 'correction', oid: input.oid, oid_unique: 'yes', invoice_id: input.originalId, from_invoice_id: input.originalId,
+        correction_reason: input.reason, issue_date: input.issueDate, sell_date: input.issueDate,
+        status: 'paid', paid: formatMinor(delta), paid_date: input.issueDate, payment_type: input.paymentType, payment_to_kind: 'off',
+        ...buyerFields(input.buyer),
+        calculating_strategy: { position: 'keep_gross', sum: 'keep_gross', invoice_form_price_kind: 'gross' },
+        positions: [{ name: input.itemName, quantity: afterQuantity === 0 ? -input.quantity : input.quantity, quantity_unit: 'szt.',
+          tax: 23, total_price_gross: formatMinor(delta),
+          correction_before_attributes: side('correction_before', input.quantity, input.beforeGrossMinor),
+          correction_after_attributes: side('correction_after', afterQuantity, input.afterGrossMinor) }],
+        description: `Zwrot płatności przez Stripe. ID płatności Stripe: ${input.paymentReference}.`,
+        internal_note: `SkillCheck ${input.oid} ${input.paymentReference}`,
+      };
+      const created = parseInvoice(await call('POST', '/invoices.json', {}, { invoice }));
+      if (created.kind !== 'correction' || created.oid !== input.oid || parseSignedMinor(created.priceGross) !== delta)
+        throw new FakturowniaError('FAKTUROWNIA_RESPONSE_INVALID');
+      return created;
+    },
+    /** R7, read only: one page (max 100) of documents of any kind issued between the Warsaw dates. */
+    async invoicesIssuedBetween(dateFrom: string, dateTo: string, page: number): Promise<FakturowniaInvoice[]> {
+      if (!DATE.test(dateFrom) || !DATE.test(dateTo) || !Number.isSafeInteger(page) || page < 1 || page > 50)
+        throw new FakturowniaError('FAKTUROWNIA_REQUEST_REJECTED');
+      const data = await call('GET', '/invoices.json', { period: 'more', date_from: dateFrom, date_to: dateTo,
+        search_date_type: 'issue_date', per_page: '100', page: String(page) });
+      if (!Array.isArray(data)) throw new FakturowniaError('FAKTUROWNIA_RESPONSE_INVALID');
+      return data.map(parseInvoice);
+    },
     /** One page (max 100) of proformas issued between the given Warsaw dates. */
     async proformasIssuedBetween(dateFrom: string, dateTo: string, page: number): Promise<FakturowniaInvoice[]> {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(dateFrom) || !/^\d{4}-\d{2}-\d{2}$/.test(dateTo) || !Number.isSafeInteger(page) || page < 1 || page > 50)
@@ -192,13 +259,38 @@ export type ProformaInput = Readonly<{
   buyer: Readonly<{ name: string; nip: string; street: string; postCode: string; city: string; email: string }>;
 }>;
 
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+/** A Stripe PaymentIntent id, the payment reference on every R7 document. */
+const STRIPE_REFERENCE = /^pi_[A-Za-z0-9]{6,64}$/;
+/** Fakturownia `payment_type` values the R7 documents use (lib/sc19-stripe-invoices.ts). */
+const PAYMENT_TYPES = new Set(['card', 'BLIK', 'Przelewy24', 'Stripe']);
+type InvoiceParty = Readonly<{ name: string; nip: string; street: string; postCode: string; city: string; email: string }>;
+const buyerFields = (b: InvoiceParty) => ({ currency: 'PLN', lang: 'pl', buyer_company: '1', buyer_name: b.name,
+  buyer_tax_no: b.nip, buyer_street: b.street, buyer_post_code: b.postCode, buyer_city: b.city, buyer_country: 'PL',
+  buyer_email: b.email });
+export type StripeInvoiceInput = Readonly<{
+  oid: string; grossMinor: number; itemName: string; quantity: number; paymentType: string; paymentLabel: string;
+  issueDate: string; paidDate: string; paymentReference: string; buyer: InvoiceParty;
+}>;
+export type CorrectionInput = Readonly<{
+  oid: string; originalId: number; itemName: string; quantity: number; beforeGrossMinor: number; afterGrossMinor: number;
+  issueDate: string; paymentType: string; paymentReference: string; reason: string; buyer: InvoiceParty;
+}>;
+
 export type PaidInvoiceInput = Readonly<{
   oid: string; grossMinor: number; itemName: string; issueDate: string; paymentReference: string;
   buyer: Readonly<{ name: string; nip: string; street: string; postCode: string; city: string; email: string }>;
 }>;
 
 export function formatMinor(minor: number): string {
-  return `${Math.trunc(minor / 100)}.${String(minor % 100).padStart(2, '0')}`;
+  const sign = minor < 0 ? '-' : '', abs = Math.abs(minor);
+  return `${sign}${Math.trunc(abs / 100)}.${String(abs % 100).padStart(2, '0')}`;
+}
+/** Like parseMinor, but also a leading minus (correction documents): "-300.00" → -30000. */
+export function parseSignedMinor(value: string): number | null {
+  const negative = value.trim().startsWith('-');
+  const minor = parseMinor(negative ? value.trim().slice(1) : value);
+  return minor === null ? null : negative ? -minor : minor;
 }
 /** Strict "369.00" / "369,00" / "369" → 36900. Anything else → null. */
 export function parseMinor(value: string): number | null {

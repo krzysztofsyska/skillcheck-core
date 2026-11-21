@@ -12,12 +12,15 @@
  * a buyer's e-mail or NIP, or a Stripe response body. Failures are logged as a
  * fixed code plus the HTTP status and Stripe's own error code.
  *
- * No Stripe invoices: invoices will be issued from Fakturownia through the single
- * post-grant hook PaymentDependencies.onPaid (a later R7 step).
+ * No Stripe invoices: invoices are issued from Fakturownia through the single
+ * post-grant hook PaymentDependencies.onPaid (lib/sc19-stripe-invoices.ts), which
+ * reads the payment through paymentFacts(); charge.refunded is read through
+ * verifyRefund() for the correction invoice.
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { HostedCheckout, PaymentMode, PaymentOrder, PaymentProvider, PaymentScope, VerifiedPayment } from './sc19-payments.ts';
 import { Sc19PaymentError, orderPackage } from './sc19-payments.ts';
+import type { StripePaymentFacts } from './sc19-stripe-invoices.ts';
 import { STRIPE_APP, STRIPE_CATALOG, stripeLookupKey, stripePoolQuote, stripeQuote, type StripePackageCode } from './stripe-catalog.ts';
 
 export const STRIPE_API = 'https://api.stripe.com';
@@ -131,6 +134,8 @@ export class StripeApiError extends Error {
 export function createStripeProvider(options: StripeProviderOptions): PaymentProvider & Readonly<{
   expiredSession(order: PaymentOrder): Promise<boolean>;
   expiredUnboundSession(order: PaymentOrder): Promise<string | null>;
+  paymentFacts(order: PaymentOrder): Promise<StripePaymentFacts>;
+  verifyRefund(raw: Uint8Array, signature: string): Promise<StripeRefund | 'ignored' | null>;
 }> {
   const { secretKey, webhookSecret, mode, appOrigin, scope } = options;
   if (stripeModeOf(secretKey) !== mode || mode !== scope.mode || typeof webhookSecret !== 'string' ||
@@ -382,8 +387,68 @@ export function createStripeProvider(options: StripeProviderOptions): PaymentPro
       status: paid ? 'paid' : session.payment_status === 'unpaid' ? 'pending' : 'failed' };
   }
 
-  return Object.freeze({ createCheckout, lookupCheckout, expiredSession, expiredUnboundSession, verifyAndRetrieve });
+  /** R7, READ ONLY: what Stripe confirms about the payment of a PAID order, for its
+   * VAT invoice: the PaymentIntent (ours, succeeded, the order's exact amount), the
+   * payment method of its charge and the billing details from the Checkout session. */
+  async function paymentFacts(order: PaymentOrder): Promise<StripePaymentFacts> {
+    if (!sameScope(order.scope, scope) || !order.sessionId || !order.paymentId || !intentIdShape.test(order.paymentId))
+      return fail('SC19_PAYMENT_ORDER_MISMATCH');
+    const session = await call('GET', `/v1/checkout/sessions/${encodeURIComponent(order.sessionId)}`);
+    const intent = await call('GET', `/v1/payment_intents/${encodeURIComponent(order.paymentId)}`, { expand: ['latest_charge'] });
+    const sessionIntent = obj(session?.payment_intent) ? (session!.payment_intent as Json).id : session?.payment_intent;
+    if (!session || session.id !== order.sessionId || session.livemode !== live || meta(session).app !== STRIPE_APP ||
+        meta(session).order_id !== order.id || sessionIntent !== order.paymentId || session.payment_status !== 'paid')
+      return fail('SC19_PAYMENT_ORDER_MISMATCH');
+    const charge = intent && obj(intent.latest_charge) ? intent.latest_charge : null;
+    if (!intent || intent.id !== order.paymentId || intent.livemode !== live || intent.status !== 'succeeded' ||
+        intent.currency !== 'pln' || intent.amount_received !== order.amountMinor || meta(intent).app !== STRIPE_APP ||
+        meta(intent).order_id !== order.id || !charge || !Number.isSafeInteger(charge.created))
+      return fail('SC19_PAYMENT_ORDER_MISMATCH');
+    const details = obj(charge.payment_method_details) ? charge.payment_method_details : {};
+    let method = typeof details.type === 'string' && /^[a-z0-9_]{1,40}$/.test(details.type) ? details.type : null;
+    const wallet = method === 'card' && obj(details.card) && obj(details.card.wallet) ? details.card.wallet.type : null;
+    if (wallet === 'apple_pay' || wallet === 'google_pay') method = wallet;
+    const customer = obj(session.customer_details) ? session.customer_details : {};
+    const address = obj(customer.address) ? customer.address : {};
+    const text = (v: unknown, max: number) => typeof v === 'string' ? v.trim().slice(0, max) : '';
+    const street = [text(address.line1, 200), text(address.line2, 200)].filter(Boolean).join(' ');
+    return { paymentIntentId: order.paymentId, amountMinor: Number(intent.amount_received), paidAtMs: Number(charge.created) * 1000,
+      method, email: text(customer.email, 200), address: { street, postCode: text(address.postal_code, 20), city: text(address.city, 100) } };
+  }
+
+  /** R7: a signed `charge.refunded` event. null = another event type (settled by
+   * verifyAndRetrieve as before). 'ignored' = not this application's payment (the
+   * other application on the same account) or another mode. Otherwise the
+   * cumulative refunded amount, re-read from the API (never from the delivered body). */
+  async function verifyRefund(raw: Uint8Array, signature: string): Promise<StripeRefund | 'ignored' | null> {
+    if (!verifyStripeSignature(raw, signature, webhookSecret, Math.floor(now() / 1000)))
+      return fail('SC19_PAYMENT_NOTIFICATION_INVALID');
+    let event: Json;
+    try { event = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(raw)); }
+    catch { return fail('SC19_PAYMENT_NOTIFICATION_INVALID'); }
+    if (!obj(event) || typeof event.id !== 'string' || typeof event.type !== 'string' || !obj(event.data) || !obj(event.data.object))
+      return fail('SC19_PAYMENT_NOTIFICATION_INVALID');
+    if (event.type !== 'charge.refunded') return null;
+    const charge = event.data.object;
+    const app = meta(charge).app;
+    if ((typeof app === 'string' && app !== STRIPE_APP) || event.livemode !== live) return 'ignored';
+    const intentId = typeof charge.payment_intent === 'string' ? charge.payment_intent : null;
+    if (!intentId || !intentIdShape.test(intentId)) return 'ignored';
+    const intent = await call('GET', `/v1/payment_intents/${encodeURIComponent(intentId)}`, { expand: ['latest_charge'] });
+    // The other application's payment (metadata on its PaymentIntent): 200, no action.
+    if (!intent || meta(intent).app !== STRIPE_APP) return 'ignored';
+    const orderId = meta(intent).order_id;
+    const latest = obj(intent.latest_charge) ? intent.latest_charge : null;
+    if (intent.id !== intentId || intent.livemode !== live || typeof orderId !== 'string' || !uuid.test(orderId) || !latest ||
+        !Number.isSafeInteger(latest.amount_refunded) || Number(latest.amount_refunded) < 0)
+      return fail('SC19_PAYMENT_NOTIFICATION_INVALID');
+    return { paymentIntentId: intentId, orderId, refundedTotal: Number(latest.amount_refunded) };
+  }
+
+  return Object.freeze({ createCheckout, lookupCheckout, expiredSession, expiredUnboundSession, verifyAndRetrieve,
+    paymentFacts, verifyRefund });
 }
+export type StripeRefund = Readonly<{ paymentIntentId: string; orderId: string; refundedTotal: number }>;
 
 function sameScope(a: PaymentScope, b: PaymentScope) {
   return !!a && !!b && a.provider === b.provider && a.account === b.account && a.mode === b.mode;

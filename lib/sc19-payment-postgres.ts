@@ -49,7 +49,8 @@ export async function closeExpiredInDatabase(c: PaymentSqlClient, orderId: strin
     throw error;
   }
 }
-function orderRow(r: Record<string, unknown>): PaymentOrder {
+/** A private.sc19_payment_orders row as an order (also read by lib/sc19-stripe-invoices.ts). */
+export function orderRow(r: Record<string, unknown>): PaymentOrder {
   const closed = r.checkout_url === EXPIRED_CHECKOUT_MARKER;
   return {
     id: String(r.id), companyId: String(r.company_id), buyerId: String(r.buyer_id), requestId: String(r.request_id),

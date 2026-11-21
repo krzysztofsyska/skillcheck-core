@@ -178,3 +178,17 @@ export const stripePackageExtension: PaymentStoreExtension = Object.freeze({
     return STRIPE_PACKAGE_OFFERS.filter(sellable).map(o => ({ ...o }));
   },
 });
+
+/** R7 LIVE: real money buys PRESELEKCJA only. WERYFIKACJA and ASSESSMENT CENTER stay
+ * „wkrótce” (the checkout screen shows a package without an offer as „wkrótce”):
+ * no package offer is listed and a package offer id is unknown, so no LIVE package
+ * order can be created. The database agrees: sc19_stripe.package_orders and
+ * grant_package stay TEST only (migration 20261122090000). Reads are unchanged. */
+export const stripeLivePackageExtension: PaymentStoreExtension = Object.freeze({
+  tx(base: PaymentTransaction, c: PaymentSqlClient, lockCompany: (companyId: string) => Promise<void>): PaymentTransaction {
+    const inner = stripePackageExtension.tx(base, c, lockCompany);
+    return { ...inner, async offer(id) { return offerById(id) ? null : inner.offer(id); } };
+  },
+  readOrder: stripePackageExtension.readOrder,
+  async offers() { return []; },
+});

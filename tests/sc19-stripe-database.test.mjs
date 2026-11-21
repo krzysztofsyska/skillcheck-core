@@ -815,3 +815,163 @@ test('R7: WERYFIKACJA / ASSESSMENT CENTER CV pool above the base — the databas
   await db.query('rollback').catch(() => {});
   assert.equal((await db.query('select private.erasure_schema_signature() s')).rows[0].s, signature);
 });
+
+const liveMigration = readFileSync(new URL('../supabase/migrations/20261122090000_r7_stripe_live_invoices.sql', import.meta.url), 'utf8');
+const liveRollback = readFileSync(new URL('../supabase/rollbacks/20261122090000_r7_stripe_live_invoices_down.sql', import.meta.url), 'utf8');
+test('R7 live: LIVE PRESELEKCJA orders through the adapter role (packages stay TEST), one invoice row per payment, refunds only grow, accounting rows immutable; rollback',
+  { skip: !url && 'SC19_TEST_DATABASE_URL required' }, async t => {
+  const { createSc19Payments } = await import('../lib/sc19-payments.ts');
+  const { createPostgresPaymentStore, orderRow } = await import('../lib/sc19-payment-postgres.ts');
+  const { stripeLivePackageExtension, STRIPE_PACKAGE_OFFERS } = await import('../lib/sc19-stripe-packages.ts');
+  const { issueOrderInvoice, handleRefund, postgresInvoiceStore } = await import('../lib/sc19-stripe-invoices.ts');
+  const { createFakturowniaClient } = await import('../lib/fakturownia-client.ts');
+  const u = new URL(url);
+  if (!['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname)) throw Error('Disposable loopback database required');
+  const root = new pg.Client({ connectionString: u.href }); await root.connect();
+  const name = 'r7live_' + randomBytes(6).toString('hex');
+  await root.query(`create database "${name}"`); u.pathname = '/' + name;
+  const db = new pg.Client({ connectionString: u.href }); await db.connect();
+  const pool = new pg.Pool({ connectionString: u.href, max: 4 });
+  t.after(async () => { await pool.end(); await db.end(); await root.query(`drop database "${name}"`); await root.end(); });
+  await db.query(fullFixture);
+  await db.query(guardFn); await db.query(guardTrigger);
+  await db.query(gateFn);
+  for (const m of [migration, packagesMigration, expiredMigration, overageMigration]) await db.query(m);
+  const A = '00000000-0000-4000-8000-000000000001', OWNER = '00000000-0000-4000-8000-000000000002';
+  const rolePool = { async connect() { const c = await pool.connect(); await c.query('set role sc19_p24_checkout'); return c; } };
+  const roleQuery = async (sql, values) => { const c = await rolePool.connect(); try { return (await c.query(sql, values)).rows; } finally { await c.query('reset role'); c.release(); } };
+  const live = { provider: 'stripe', account: 'ktig-consulting', mode: 'live' };
+  const provider = {
+    async createCheckout(order) {
+      const sid = `cs_live_${order.id.replace(/-/g, '')}`;
+      return { orderId: order.id, sessionId: sid, url: `https://checkout.stripe.com/c/pay/${sid}`, scope: live,
+        amountMinor: order.amountMinor, currency: 'PLN', paymentKind: 'one_time' };
+    },
+    async lookupCheckout() { return null; },
+    async verifyAndRetrieve(raw) {
+      const e = JSON.parse(new TextDecoder().decode(raw));
+      return { eventId: 'evt_live' + e.n, orderId: e.id, sessionId: e.sessionId, paymentId: 'pi_fakelive1', scope: live,
+        amountMinor: e.amountMinor, currency: 'PLN', status: 'paid' };
+    },
+  };
+  const make = () => createSc19Payments({ store: createPostgresPaymentStore(rolePool, stripeLivePackageExtension), provider, scope: live,
+    checkoutOrigins: ['https://checkout.stripe.com'], enabled: true, liveApproved: true, authenticate: async () => ({ userId: OWNER }) });
+  const req = n => `00000000-0000-4000-8000-0000000005${String(n).padStart(2, '0')}`;
+
+  // Pre-migration schema: a LIVE order is refused by the TEST-only policy, nothing is stored.
+  await assert.rejects(make().checkout({ companyId: A, offerId: 'preselekcja-60-2026-11-r3', termsRevision: 'preselekcja-terms-2026-11-v3',
+    requestId: req(1), packageCode: 'PRESELEKCJA' }));
+  assert.equal((await db.query("select count(*)::int n from private.sc19_payment_orders where mode='live'")).rows[0].n, 0);
+
+  const signature = (await db.query('select private.erasure_schema_signature() s')).rows[0].s;
+  await db.query(liveMigration);
+  assert.equal((await db.query('select private.erasure_schema_signature() s')).rows[0].s, signature, 'erasure signature unchanged');
+  await assert.rejects(db.query(liveMigration), /already_installed/);
+  await db.query('rollback');
+
+  // LIVE PRESELEKCJA: created, granted once. LIVE packages: not offered, and the database refuses them anyway.
+  const service = make();
+  const hosted = await service.checkout({ companyId: A, offerId: 'preselekcja-60-2026-11-r3', termsRevision: 'preselekcja-terms-2026-11-v3',
+    requestId: req(2), packageCode: 'PRESELEKCJA' });
+  const deliver = n => service.notification(new TextEncoder().encode(JSON.stringify({ id: hosted.orderId, sessionId: hosted.sessionId, amountMinor: 30000, n })), 'sig');
+  assert.equal((await deliver(1)).state, 'applied');
+  assert.equal((await deliver(2)).state, 'already_applied');
+  assert.equal((await db.query('select available from private.sc19_balances where company_id=$1', [A])).rows[0].available, 60);
+  const ac = STRIPE_PACKAGE_OFFERS.find(o => o.plan === 'ASSESSMENT_CENTER');
+  await assert.rejects(service.checkout({ companyId: A, offerId: ac.id, termsRevision: ac.termsRevision, requestId: req(3),
+    packageCode: 'ASSESSMENT_CENTER' }), e => e.code === 'SC19_PAYMENT_OFFER_UNAVAILABLE');
+  await assert.rejects(roleQuery(`insert into sc19_stripe.package_orders(id,company_id,buyer_id,request_id,package_code,offer_id,offer_revision,
+    terms_revision,amount_minor,currency,credits,provider,account,mode,status,checkout_deadline_ms) values (gen_random_uuid(),$1,$2,gen_random_uuid(),
+    'ASSESSMENT_CENTER',$3,'r','t',149900,'PLN',50,'stripe','ktig-consulting','live','awaiting_payment',1)`, [A, OWNER, ac.id]), /row-level security/);
+  // LIVE customers and the compare-and-set replacement.
+  await roleQuery(`insert into sc19_stripe.customers(company_id,mode,customer_id) values ($1,'live','cus_fakelive1')`, [A]);
+  assert.equal((await roleQuery(`select sc19_stripe.replace_customer($1,'live','cus_fakelive1','cus_fakelive2') c`, [A]))[0].c, 'cus_fakelive2');
+  await assert.rejects(roleQuery(`select sc19_stripe.replace_customer($1,'prod','cus_fakelive2','cus_fakelive3')`, [A]), /stripe_customer_invalid/);
+
+  // Invoice buyer: name and NIP only for a PAID LIVE order; never for anon/authenticated.
+  assert.deepEqual(await roleQuery('select * from sc19_stripe.invoice_buyer($1)', [hosted.orderId]), [{ company_name: 'Firma A', nip: '7394002294' }]);
+  assert.deepEqual(await roleQuery('select * from sc19_stripe.invoice_buyer($1)', [req(99)]), []);
+  for (const role of ['anon', 'authenticated'])
+    assert.equal((await db.query(`select has_function_privilege($1,'sc19_stripe.invoice_buyer(uuid)','execute') r`, [role])).rows[0].r, false);
+
+  // The real invoice store on the adapter role. The fixture company has the seller's NIP: a control purchase.
+  const order = orderRow((await db.query('select * from private.sc19_payment_orders where id=$1', [hosted.orderId])).rows[0]);
+  const store = postgresInvoiceStore(roleQuery, orderRow);
+  // A paid order is not awaiting settlement; an unknown id neither (Codex P2, PR #591).
+  assert.equal(await store.awaitingSettlement(hosted.orderId), false);
+  assert.equal(await store.awaitingSettlement(req(98)), false);
+  const posts = [];
+  const fakturownia = createFakturowniaClient({ account: 'ktig', token: 'synthetic-token-123' }, async (_u, init) => {
+    const { invoice } = JSON.parse(init.body); posts.push(invoice);
+    return { ok: true, status: 201, json: async () => ({ id: 500 + posts.length, kind: invoice.kind, status: 'paid', number: `FV ${posts.length}`,
+      oid: invoice.oid, price_gross: invoice.positions[0].total_price_gross, paid: invoice.paid, currency: 'PLN' }) };
+  });
+  const facts = async () => ({ paymentIntentId: 'pi_fakelive1', amountMinor: 30000, paidAtMs: Date.now(), method: 'p24',
+    email: 'a@example.test', address: { street: 'ul. A 1', postCode: '00-001', city: 'Warszawa' } });
+  const deps = { fakturownia, store, paymentFacts: facts };
+  assert.equal(await issueOrderInvoice(order, deps), 'skipped');
+  assert.equal(await issueOrderInvoice(order, deps), 'skipped');
+  assert.equal(await handleRefund({ paymentIntentId: 'pi_fakelive1', orderId: order.id, refundedTotal: 10000 }, deps), 'skipped');
+  assert.equal(posts.length, 0, 'no document for the seller itself');
+  assert.deepEqual((await db.query('select status, error_code from sc19_stripe.invoices')).rows, [{ status: 'skipped', error_code: 'SELLER_CONTROL_PURCHASE' }]);
+  // A buyer with another NIP: one invoice, then one correction per cumulative total.
+  await db.query(`update private.sc19_trial_approvals set nip='5260250274' where company_id=$1`, [A]);
+  await db.query('alter table sc19_stripe.invoices disable trigger invoice_guard');
+  await db.query('delete from sc19_stripe.invoices'); // test-only reset of the skipped row
+  await db.query('alter table sc19_stripe.invoices enable trigger invoice_guard');
+  // Two concurrent attempts: one claim, the other busy.
+  const [c1, c2] = await Promise.all([store.claim(order, Date.now(), 60_000), store.claim(order, Date.now(), 60_000)]);
+  assert.deepEqual([c1, c2].sort(), [1, 'busy']);
+  await store.failed(order.id, 'FAKTUROWNIA_UNAVAILABLE', Date.now());
+  assert.equal(await issueOrderInvoice(order, deps), 'issued');
+  assert.equal(await issueOrderInvoice(order, deps), 'already_issued');
+  assert.equal(posts.length, 1); assert.equal(posts[0].payment_type, 'Przelewy24'); assert.equal(posts[0].buyer_tax_no, '5260250274');
+  const row = (await db.query('select status, attempts, fakturownia_id, payment_method from sc19_stripe.invoices')).rows[0];
+  assert.deepEqual(row, { status: 'issued', attempts: 2, fakturownia_id: '501', payment_method: 'p24' });
+  assert.equal(await handleRefund({ paymentIntentId: 'pi_fakelive1', orderId: order.id, refundedTotal: 20000 }, deps), 'issued');
+  assert.equal(await handleRefund({ paymentIntentId: 'pi_fakelive1', orderId: order.id, refundedTotal: 20000 }, deps), 'already_issued');
+  assert.equal(await handleRefund({ paymentIntentId: 'pi_fakelive1', orderId: order.id, refundedTotal: 30000 }, deps), 'issued');
+  assert.deepEqual(posts.map(p => [p.kind, p.positions[0].total_price_gross]), [['vat', '300.00'], ['correction', '-200.00'], ['correction', '-100.00']]);
+  assert.equal((await db.query('select refunded_total from sc19_stripe.refunds')).rows[0].refunded_total, 30000);
+  // Refunds only grow; issued documents never change and nothing is deleted; the role gets no delete.
+  await store.recordRefund(order, 5000, Date.now());
+  assert.equal((await db.query('select refunded_total from sc19_stripe.refunds')).rows[0].refunded_total, 30000);
+  await assert.rejects(db.query('update sc19_stripe.refunds set refunded_total=1'), /stripe_invoice_immutable/);
+  await assert.rejects(db.query(`update sc19_stripe.invoices set number='X'`), /stripe_invoice_immutable/);
+  await assert.rejects(db.query(`update sc19_stripe.invoice_corrections set number='X'`), /stripe_invoice_immutable/);
+  await assert.rejects(db.query('delete from sc19_stripe.invoice_corrections'), /stripe_invoice_immutable/);
+  await assert.rejects(roleQuery('delete from sc19_stripe.invoices'), /permission denied/);
+  await assert.rejects(db.query(`insert into sc19_stripe.invoices(order_id,company_id,payment_id,mode) values (gen_random_uuid(),$1,'pi_faketest1','test')`, [A]), /check constraint/);
+  for (const role of ['anon', 'authenticated'])
+    assert.equal((await db.query(`select has_table_privilege($1,'sc19_stripe.invoices','select') r`, [role])).rows[0].r, false);
+  // No CV analysis was taken back by the refund (the operator corrects a pool by hand).
+  assert.equal((await db.query('select available from private.sc19_balances where company_id=$1', [A])).rows[0].available, 60);
+
+  // Rollback: refused while accounting records exist.
+  await assert.rejects(db.query(liveRollback), /rollback_refused/);
+  await db.query('rollback');
+});
+
+test('R7 live: rollback on a database without live records restores the TEST-only behaviour',
+  { skip: !url && 'SC19_TEST_DATABASE_URL required' }, async t => {
+  const u = new URL(url);
+  if (!['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname)) throw Error('Disposable loopback database required');
+  const root = new pg.Client({ connectionString: u.href }); await root.connect();
+  const name = 'r7liverb_' + randomBytes(6).toString('hex');
+  await root.query(`create database "${name}"`); u.pathname = '/' + name;
+  const db = new pg.Client({ connectionString: u.href }); await db.connect();
+  t.after(async () => { await db.end(); await root.query(`drop database "${name}"`); await root.end(); });
+  await db.query(fullFixture);
+  await db.query(guardFn); await db.query(guardTrigger);
+  await db.query(gateFn);
+  for (const m of [migration, packagesMigration, expiredMigration, overageMigration, liveMigration]) await db.query(m);
+  await db.query(liveRollback);
+  assert.equal((await db.query("select to_regclass('sc19_stripe.invoices') r")).rows[0].r, null);
+  const A = '00000000-0000-4000-8000-000000000001';
+  await db.query('begin'); await db.query('set local role sc19_p24_checkout');
+  await assert.rejects(db.query(`insert into sc19_stripe.customers(company_id,mode,customer_id) values ($1,'live','cus_fakelive9')`, [A]), /row-level security/);
+  await db.query('rollback');
+  await assert.rejects(db.query(`select sc19_stripe.replace_customer($1,'live','cus_a','cus_fakelive9')`, [A]), /stripe_customer_invalid/);
+  // Applying it again works (the rollback left nothing behind).
+  await db.query(liveMigration);
+});
