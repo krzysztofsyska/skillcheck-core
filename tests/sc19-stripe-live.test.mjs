@@ -93,7 +93,7 @@ function memoryStore(order, nip = BUYER_NIP) {
       m.invoices.set(o.id, row);
       if (row.status === 'issued' || row.status === 'skipped') return row.status;
       if (row.status === 'pending' && row.lease >= nowMs) return 'busy';
-      Object.assign(row, { status: 'pending', attempts: row.attempts + 1, lease: nowMs + leaseMs, first: row.first ?? nowMs, last: nowMs });
+      Object.assign(row, { status: 'pending', attempts: row.attempts + 1, lease: nowMs + leaseMs, first: row.first ?? (row.attempts === 0 ? nowMs : null), last: nowMs });
       return row.attempts;
     },
     async skip(orderId, code) { Object.assign(m.invoices.get(orderId), { status: 'skipped', code }); },
@@ -110,7 +110,7 @@ function memoryStore(order, nip = BUYER_NIP) {
     async invoiceWindow(orderId) { const r = m.invoices.get(orderId); return { firstAttemptMs: r?.first ?? null, lastAttemptMs: r?.last ?? null }; },
     async startCorrection(orderId, total) {
       const k = `${orderId}:${total}`; const r = m.corrections.get(k) ?? { orderId, total, status: 'pending', attempts: 0 };
-      m.corrections.set(k, r); if (r.status === 'issued') return 'issued'; r.status = 'pending'; r.first ??= m.clock(); r.last = m.clock(); return ++r.attempts;
+      m.corrections.set(k, r); if (r.status === 'issued') return 'issued'; r.status = 'pending'; r.first ??= r.attempts === 0 ? m.clock() : null; r.last = m.clock(); return ++r.attempts;
     },
     async correctionIssued(orderId, total, inv) { Object.assign(m.corrections.get(`${orderId}:${total}`), { status: 'issued', fakturowniaId: inv.id }); },
     async correctionFailed(orderId, total, code) { Object.assign(m.corrections.get(`${orderId}:${total}`), { status: 'failed', code }); },
@@ -577,4 +577,18 @@ test('Codex P2 on #594: a lost document is searched only around its attempt days
   // Every search window is the attempt day ±1, never the payment date in January.
   assert.ok(fakt.listings.length > 0);
   for (const [from, to] of fakt.listings) { assert.equal(from >= '2026-11-01', true, from); assert.equal(to <= '2026-11-30', true, to); }
+});
+
+test('Codex P2 on #595: a row with untimed earlier attempts keeps an unknown first attempt and is searched from the payment date', async () => {
+  const { order, fakt, mem, deps } = setup({ chargeCreated: Date.UTC(2026, 0, 15) / 1000 });
+  // An attempt before the attempt-time columns existed: Fakturownia issued the invoice in
+  // January, the app never heard back, and the row carries no times.
+  fakt.docs.push({ id: 900, kind: 'vat', status: 'paid', number: 'FV 900', oid: `core:${order.id}`, price_gross: '600.00',
+    paid: '600.00', currency: 'PLN', issue_date: '2026-01-15' });
+  mem.invoices.set(order.id, { status: 'failed', attempts: 1, lease: 0 });
+  assert.equal(await issueOrderInvoice(order, deps), 'issued');
+  assert.equal(mem.invoices.get(order.id).first, null, 'not overwritten with the retry time');
+  assert.equal(mem.invoices.get(order.id).fakturowniaId, 900, 'the January document was found, no second invoice');
+  assert.equal(fakt.docs.filter(d => d.oid === `core:${order.id}`).length, 1);
+  assert.ok(fakt.listings.some(([from]) => from <= '2026-01-15'));
 });

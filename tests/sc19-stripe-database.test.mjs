@@ -1012,6 +1012,10 @@ test('R7 live (Codex P2 on #594): attempt times are recorded through the adapter
   await store.failed(order(2).id, 'FAKTUROWNIA_UNAVAILABLE', t1);
   assert.equal(await store.claim(order(2), t2, 60_000), 2);
   assert.deepEqual(await store.invoiceWindow(order(2).id), { firstAttemptMs: t1, lastAttemptMs: t2 });
+  // Codex P2 on #595: a row attempted before the columns existed keeps first_attempt_at null.
+  await store.failed(order(1).id, 'FAKTUROWNIA_UNAVAILABLE', t1);
+  assert.equal(await store.claim(order(1), t2, 60_000), 2);
+  assert.deepEqual(await store.invoiceWindow(order(1).id), { firstAttemptMs: null, lastAttemptMs: t2 });
   // Corrections (row references the invoice row).
   assert.equal(await store.startCorrection(order(2).id, 10000, t1), 1);
   await store.correctionFailed(order(2).id, 10000, 'FAKTUROWNIA_TIMEOUT', t1);

@@ -124,6 +124,7 @@ const codeOf = (e: unknown) => e instanceof FakturowniaError || e instanceof Inv
  * on #594), not the account's whole history since the payment. Without recorded
  * attempt times it falls back to the payment date … now. */
 function searchWindow(window: AttemptWindow | null, paidAtMs: number, nowMs: number) {
+  // An unknown first attempt (earlier attempts not timed) searches from the payment date.
   return { fromMs: window?.firstAttemptMs ?? paidAtMs, toMs: window?.lastAttemptMs ?? nowMs };
 }
 async function findByOid(client: FakturowniaClient, oid: string, window: { fromMs: number; toMs: number }) {
@@ -372,8 +373,11 @@ export function postgresInvoiceStore(query: Query, toOrder: (row: Record<string,
       const attempt = await claimRow('order_id=$1', [order.id], nowMs, leaseMs);
       // Recorded under the lease and BEFORE Fakturownia is called.
       if (typeof attempt === 'number' && await hasDates())
-        await query(`update sc19_stripe.invoices set first_attempt_at=coalesce(first_attempt_at,$2), last_attempt_at=$2
-          where order_id=$1 and status='pending'`, [order.id, iso(nowMs)]);
+        // The first attempt time only for the very first attempt: a row whose earlier
+        // attempts were not timed (before migration 20261122110000) keeps it null, so its
+        // lookup keeps the wide window from the payment date (Codex P2 on #595).
+        await query(`update sc19_stripe.invoices set first_attempt_at=coalesce(first_attempt_at, case when attempts=1 then $2::timestamptz end),
+          last_attempt_at=$2 where order_id=$1 and status='pending'`, [order.id, iso(nowMs)]);
       return attempt;
     },
     async invoiceWindow(orderId) {
@@ -438,8 +442,8 @@ export function postgresInvoiceStore(query: Query, toOrder: (row: Record<string,
       const rows = await query(`update sc19_stripe.invoice_corrections set status='pending', attempts=attempts+1, changed_at=$3
         where order_id=$1 and refunded_total=$2 and status<>'issued' returning attempts`, [orderId, refundedTotal, iso(nowMs)]);
       if (rows[0] && await hasDates())
-        await query(`update sc19_stripe.invoice_corrections set first_attempt_at=coalesce(first_attempt_at,$3), last_attempt_at=$3
-          where order_id=$1 and refunded_total=$2 and status='pending'`, [orderId, refundedTotal, iso(nowMs)]);
+        await query(`update sc19_stripe.invoice_corrections set first_attempt_at=coalesce(first_attempt_at, case when attempts=1 then $3::timestamptz end),
+          last_attempt_at=$3 where order_id=$1 and refunded_total=$2 and status='pending'`, [orderId, refundedTotal, iso(nowMs)]);
       return rows[0] ? Number(rows[0].attempts) : 'issued';
     },
     async correctionIssued(orderId, refundedTotal, invoice, nowMs) {
