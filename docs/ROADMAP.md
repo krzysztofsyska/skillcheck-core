@@ -120,7 +120,7 @@ Decyzja 19.11.2026 (`docs/DECYZJE.md`): Stripe zamiast Przelewy24, to samo konto
 |---|---|---|
 | Zdjęcie `PAYMENT_PATH_FREEZE` z publikatora (`.github/workflows/auto-release.yml`) i testów polityki wydań | DO ZROBIENIA | — |
 | Zakup PRESELEKCJI, WERYFIKACJI i ASSESSMENT CENTER przez Stripe Checkout (wzór: `skillcheck-preselekcja`), ceny z `docs/cennik-2026-11-02.md`, domyślnie wyłączony do czasu kluczy | DO ZROBIENIA | — |
-| Faktura VAT z Fakturowni po opłaceniu i faktura korygująca po zwrocie (istniejące zmienne `FAKTUROWNIA_*`); WERYFIKACJA i ASSESSMENT CENTER „wkrótce” do potwierdzenia właściciela; zakup kontrolny KTIG i zwrot przez API (decyzja „Uruchomienie Stripe na żywo”, `docs/DECYZJE.md`) | DO ZROBIENIA | — |
+| Prawdziwe płatności Stripe (konto KTIG), faktura VAT z Fakturowni po opłaceniu i faktura korygująca po zwrocie (istniejące zmienne `FAKTUROWNIA_*`), zapis `STRIPE_WEBHOOK_SECRET` w Vercelu przez sesję wykonawcy tylko dla tego zadania (decyzja właściciela 20.11.2026, 18:29, punkt 5, `docs/DECYZJE.md`) | DO ZROBIENIA | — |
 | Usunięcie kodu Przelewy24 | DO ZROBIENIA | — |
 | Limit kosztu rozmów voicebota 50 zł miesięcznie w aplikacji (blokada nowych rozmów i powiadomienie właściciela) | DO ZROBIENIA | — |
 
