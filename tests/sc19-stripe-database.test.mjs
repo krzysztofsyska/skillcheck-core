@@ -699,3 +699,119 @@ test('R7: an expired unpaid session closes PRESELEKCJA and package orders withou
   await db.query('rollback').catch(() => {});
   assert.equal((await db.query('select private.erasure_schema_signature() s')).rows[0].s, signature);
 });
+
+const overageMigration = readFileSync(new URL('../supabase/migrations/20261121190000_r7_stripe_package_cv_overage.sql', import.meta.url), 'utf8');
+const overageRollback = readFileSync(new URL('../supabase/rollbacks/20261121190000_r7_stripe_package_cv_overage_down.sql', import.meta.url), 'utf8');
+test('R7: WERYFIKACJA / ASSESSMENT CENTER CV pool above the base — the database pins the engine amount; paid grants the chosen pool; rollback',
+  { skip: !url && 'SC19_TEST_DATABASE_URL required' }, async t => {
+  const { createSc19Payments } = await import('../lib/sc19-payments.ts');
+  const { createPostgresPaymentStore } = await import('../lib/sc19-payment-postgres.ts');
+  const { stripePackageExtension, STRIPE_PACKAGE_OFFERS } = await import('../lib/sc19-stripe-packages.ts');
+  const { stripePoolQuote } = await import('../lib/stripe-catalog.ts');
+  const u = new URL(url);
+  if (!['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname)) throw Error('Disposable loopback database required');
+  const root = new pg.Client({ connectionString: u.href }); await root.connect();
+  const name = 'r7overage_' + randomBytes(6).toString('hex');
+  await root.query(`create database "${name}"`); u.pathname = '/' + name;
+  const db = new pg.Client({ connectionString: u.href }); await db.connect();
+  const pool = new pg.Pool({ connectionString: u.href, max: 3 });
+  t.after(async () => { await pool.end(); await db.end(); await root.query(`drop database "${name}"`); await root.end(); });
+  await db.query(fullFixture);
+  await db.query(guardFn); await db.query(guardTrigger);
+  await db.query(gateFn);
+  await db.query(migration);
+  await db.query(packagesMigration);
+  await db.query(expiredMigration);
+  const A = '00000000-0000-4000-8000-000000000001', OWNER = '00000000-0000-4000-8000-000000000002';
+  const rolePool = { async connect() { const c = await pool.connect(); await c.query('set role sc19_p24_checkout'); return c; } };
+  const scope = { provider: 'stripe', account: 'ktig-consulting', mode: 'test' };
+  let paymentId = 'pi_fixtureover1';
+  const provider = {
+    async createCheckout(order) {
+      const sid = `cs_test_${order.id.replace(/-/g, '')}`;
+      return { orderId: order.id, sessionId: sid, url: `https://checkout.stripe.com/c/pay/${sid}`, scope,
+        amountMinor: order.amountMinor, currency: 'PLN', paymentKind: 'one_time' };
+    },
+    async lookupCheckout() { return null; },
+    async verifyAndRetrieve(raw) {
+      const e = JSON.parse(new TextDecoder().decode(raw));
+      return { eventId: 'evt_over' + e.n, orderId: e.id, sessionId: e.sessionId, paymentId, scope,
+        amountMinor: e.amountMinor, currency: 'PLN', status: 'paid' };
+    },
+  };
+  const store = createPostgresPaymentStore(rolePool, stripePackageExtension);
+  const service = createSc19Payments({ store, provider, scope, checkoutOrigins: ['https://checkout.stripe.com'],
+    enabled: true, liveApproved: false, cvPoolEnabled: true, authenticate: async () => ({ userId: OWNER }) });
+  const req = n => `00000000-0000-4000-8000-0000000004${String(n).padStart(2, '0')}`;
+  const deliver = (o, n) => service.notification(new TextEncoder().encode(JSON.stringify({ ...o, n })), 'sig');
+  const wer = STRIPE_PACKAGE_OFFERS.find(o => o.plan === 'WERYFIKACJA');
+  const ac = STRIPE_PACKAGE_OFFERS.find(o => o.plan === 'ASSESSMENT_CENTER');
+  const pkg = (o, n, cvCount) => service.checkout({ companyId: A, offerId: o.id, termsRevision: o.termsRevision, requestId: req(n),
+    packageCode: o.plan, cvCount });
+  // One insert through the adapter role inside a transaction that is always rolled back.
+  const tryInsert = async (code, amount, credits) => {
+    const c = await rolePool.connect();
+    try {
+      await c.query('begin');
+      await c.query(`insert into sc19_stripe.package_orders
+        (id,company_id,buyer_id,request_id,package_code,offer_id,offer_revision,terms_revision,amount_minor,currency,credits,provider,account,mode,status,checkout_deadline_ms)
+        values (gen_random_uuid(),$1,$2,gen_random_uuid(),$3,'x','x','x',$4,'PLN',$5,'stripe','ktig-consulting','test','awaiting_payment',1)`,
+        [A, OWNER, code, amount, credits]);
+    } finally { await c.query('rollback'); c.release(); }
+  };
+
+  // Pre-migration schema: an above-base order is refused by the old price list; nothing is stored or charged.
+  await assert.rejects(pkg(wer, 1, 100), /package_orders_price_list/);
+  assert.equal((await db.query('select count(*)::int n from sc19_stripe.package_orders')).rows[0].n, 0);
+
+  // Migration: erasure signature unchanged, not re-runnable; rollback with base orders only restores the old rule.
+  const signature = (await db.query('select private.erasure_schema_signature() s')).rows[0].s;
+  await db.query(overageMigration);
+  assert.equal((await db.query('select private.erasure_schema_signature() s')).rows[0].s, signature, 'erasure signature unchanged');
+  await assert.rejects(db.query(overageMigration), /already_installed/);
+  await db.query('rollback');
+  await db.query(overageRollback);
+  await assert.rejects(tryInsert('WERYFIKACJA', 62287, 100), /package_orders_price_list/);
+  await db.query(overageMigration);
+
+  // The database accepts exactly the engine amount for every allowed pool, and nothing else.
+  for (const [code, base] of [['WERYFIKACJA', 60], ['ASSESSMENT_CENTER', 50]])
+    for (let cv = base; cv <= 150; cv += 5) {
+      const q = stripePoolQuote(code, cv);
+      await tryInsert(code, q.grossMinor, cv);
+      await assert.rejects(tryInsert(code, q.grossMinor + 1, cv), /package_orders_price_list/, `${code} ${cv} +1`);
+      await assert.rejects(tryInsert(code, q.grossMinor - 1, cv), /package_orders_price_list/, `${code} ${cv} -1`);
+    }
+  for (const [code, amount, credits] of [
+    ['WERYFIKACJA', 62300, 100], ['WERYFIKACJA', 61500, 55], ['WERYFIKACJA', 61500, 62],
+    ['WERYFIKACJA', stripePoolQuote('WERYFIKACJA', 150).grossMinor + 98, 155],
+    ['ASSESSMENT_CENTER', 149900, 45], ['ASSESSMENT_CENTER', 61500, 60],
+  ]) await assert.rejects(tryInsert(code, amount, credits), /package_orders_price_list/, `${code} ${amount} ${credits}`);
+  assert.equal((await db.query('select count(*)::int n from sc19_stripe.package_orders')).rows[0].n, 0);
+
+  // The real flow: WERYFIKACJA with 100 CV = 62287 gr, granted 100 CV and the package once.
+  const w = await pkg(wer, 3, 100);
+  assert.equal(w.amountMinor, 62287);
+  assert.deepEqual((await db.query('select amount_minor, credits, package_code from sc19_stripe.package_orders where id=$1', [w.orderId])).rows,
+    [{ amount_minor: 62287, credits: 100, package_code: 'WERYFIKACJA' }]);
+  assert.equal((await pkg(wer, 3, 100)).orderId, w.orderId);
+  assert.equal((await deliver({ id: w.orderId, sessionId: w.sessionId, amountMinor: 62287 }, 1)).state, 'applied');
+  assert.equal((await deliver({ id: w.orderId, sessionId: w.sessionId, amountMinor: 62287 }, 1)).state, 'already_applied');
+  assert.equal((await db.query('select available from private.sc19_balances where company_id=$1', [A])).rows[0].available, 100);
+  assert.deepEqual((await db.query(`select code, available from sc19_commerce.entitlements where company_id=$1`, [A])).rows,
+    [{ code: 'package:WERYFIKACJA', available: 1 }]);
+  // A paid pool order never changes.
+  await assert.rejects(db.query('update sc19_stripe.package_orders set credits=150, amount_minor=$2 where id=$1',
+    [w.orderId, stripePoolQuote('WERYFIKACJA', 150).grossMinor]), /sc19_stripe_package_immutable/);
+  // ASSESSMENT CENTER with 55 CV.
+  paymentId = 'pi_fixtureover2';
+  const a = await pkg(ac, 4, 55);
+  assert.equal(a.amountMinor, stripePoolQuote('ASSESSMENT_CENTER', 55).grossMinor);
+  assert.equal((await deliver({ id: a.orderId, sessionId: a.sessionId, amountMinor: a.amountMinor }, 2)).state, 'applied');
+  assert.equal((await db.query('select available from private.sc19_balances where company_id=$1', [A])).rows[0].available, 155);
+
+  // Rollback refuses while any above-base order exists.
+  await assert.rejects(db.query(overageRollback), /rollback_refused_pool_orders_exist/);
+  await db.query('rollback').catch(() => {});
+  assert.equal((await db.query('select private.erasure_schema_signature() s')).rows[0].s, signature);
+});

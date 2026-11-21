@@ -8,7 +8,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createSc19Payments, Sc19PaymentError } from '../lib/sc19-payments.ts';
 import { createSc19PaymentHttp } from '../lib/sc19-payment-http.ts';
 import { createStripeProvider, stripeModeOf, verifyStripeSignature, stripeForm, STRIPE_CHECKOUT_ORIGIN } from '../lib/sc19-stripe-provider.ts';
-import { STRIPE_APP, STRIPE_CATALOG, checkCvCount, packagesForPool, stripeQuote } from '../lib/stripe-catalog.ts';
+import { STRIPE_APP, STRIPE_CATALOG, checkCvCount, packagesForPool, stripePoolQuote, stripeQuote } from '../lib/stripe-catalog.ts';
 import { sc19StripeGate } from '../lib/sc19-stripe-config.ts';
 import { STRIPE_PACKAGE_OFFERS } from '../lib/sc19-stripe-packages.ts';
 
@@ -311,13 +311,21 @@ test('R5 W2b: checkCvCount allows only slider values (co 5, catalog bounds) and 
   assert.deepEqual(ok('PRESELEKCJA', 1200), { ok: true, packages: 20 });
   assert.deepEqual(ok('WERYFIKACJA', 60), { ok: true, packages: 1 });
   assert.deepEqual(ok('ASSESSMENT_CENTER', 50, 1), { ok: true, packages: 1 });
+  // R7: WERYFIKACJA / ASSESSMENT CENTER take a pool above the base (co 5, up to 150): one package.
+  assert.deepEqual(ok('WERYFIKACJA', 65), { ok: true, packages: 1 });
+  assert.deepEqual(ok('WERYFIKACJA', 150, 1), { ok: true, packages: 1 });
+  assert.deepEqual(ok('ASSESSMENT_CENTER', 55), { ok: true, packages: 1 });
+  assert.deepEqual(ok('ASSESSMENT_CENTER', 60), { ok: true, packages: 1 });
   const refused = [
     ['PRESELEKCJA', 0, /Najmniejsza pula CV to 5/], ['PRESELEKCJA', 62, /co 5\. 62 nie jest dozwoloną wartością/],
     ['PRESELEKCJA', 1205, /Największa pula CV w jednym zakupie to 1200/], ['PRESELEKCJA', 60.5, /liczbą całkowitą/],
     ['PRESELEKCJA', '60', /liczbą całkowitą/], ['PRESELEKCJA', -5, /liczbą całkowitą/], ['PRESELEKCJA', null, /liczbą całkowitą/],
     ['PRESELEKCJA', Number.MAX_SAFE_INTEGER + 1, /liczbą całkowitą/],
-    ['WERYFIKACJA', 65, /WERYFIKACJA ma pulę 60 CV/], ['WERYFIKACJA', 55, /WERYFIKACJA ma pulę 60 CV/],
-    ['ASSESSMENT_CENTER', 60, /ASSESSMENT CENTER ma pulę 50 CV/],
+    ['WERYFIKACJA', 55, /Najmniejsza pula CV w pakiecie WERYFIKACJA to 60\./], ['WERYFIKACJA', 0, /Najmniejsza pula CV/],
+    ['WERYFIKACJA', 62, /co 5\. 62 nie jest dozwoloną wartością/], ['WERYFIKACJA', 155, /Największa pula CV w pakiecie WERYFIKACJA to 150/],
+    ['WERYFIKACJA', 100.5, /liczbą całkowitą/], ['WERYFIKACJA', '100', /liczbą całkowitą/],
+    ['ASSESSMENT_CENTER', 45, /Najmniejsza pula CV w pakiecie ASSESSMENT CENTER to 50\./],
+    ['ASSESSMENT_CENTER', 52, /co 5/], ['ASSESSMENT_CENTER', 200, /to 150/],
   ];
   for (const [code, cv, message] of refused) {
     const r = ok(code, cv);
@@ -326,6 +334,65 @@ test('R5 W2b: checkCvCount allows only slider values (co 5, catalog bounds) and 
   }
   assert.match(ok('PRESELEKCJA', 120, 3).message, /Liczba CV \(120\) nie zgadza się z liczbą pakietów \(3\)/);
   assert.equal(ok('WERYFIKACJA', 60, 2).ok, false);
+  assert.match(ok('WERYFIKACJA', 100, 2).message, /jeden pakiet/);
+});
+
+test('R7: CV pool above the base for WERYFIKACJA / ASSESSMENT CENTER is priced by the engine (16 gr net per CV, VAT once)', () => {
+  // docs/cennik-2026-11-02.md: WERYFIKACJA with 100 CV = 622,87 zł, not 623,00 zł.
+  const doc = readFileSync(new URL('../docs/cennik-2026-11-02.md', import.meta.url), 'utf8');
+  assert.match(doc, /WERYFIKACJA przy 100 CV kosztuje \*\*622,87 zł\*\*/);
+  assert.deepEqual(stripePoolQuote('WERYFIKACJA', 100), { code: 'WERYFIKACJA', cvCredits: 100, overageCv: 40, netMinor: 50640, grossMinor: 62287 });
+  // The base pool is the package price; the ladder is net base + 16 gr net per CV, VAT half-up on the sum.
+  for (const code of ['WERYFIKACJA', 'ASSESSMENT_CENTER']) {
+    const pkg = STRIPE_CATALOG[code];
+    assert.equal(stripePoolQuote(code, pkg.cvCredits).grossMinor, pkg.grossMinor, code);
+    const baseNet = stripePoolQuote(code, pkg.cvCredits).netMinor;
+    for (let cv = pkg.cvCredits; cv <= pkg.overage.cvMax; cv += 5) {
+      const q = stripePoolQuote(code, cv), net = baseNet + (cv - pkg.cvCredits) * 16;
+      assert.equal(q.netMinor, net, `${code} ${cv}`);
+      assert.equal(q.grossMinor, net + Math.floor((net * 2300 * 2 + 10000) / 20000), `${code} ${cv}`);
+      assert.equal(q.cvCredits, cv);
+    }
+    // No pool below the base (no discount), nothing off the co-5 ladder, nothing above the catalog maximum.
+    for (const bad of [pkg.cvCredits - 5, pkg.cvCredits + 1, pkg.overage.cvMax + 5, 0, -5, 100.5, '100', null])
+      assert.equal(stripePoolQuote(code, bad), null, `${code} ${bad}`);
+  }
+  assert.equal(stripePoolQuote('ASSESSMENT_CENTER', 150).grossMinor, 151868);
+  // PRESELEKCJA has no surcharge: whole 60-CV packages only (100 CV would otherwise be 308 zł instead of 600 zł).
+  assert.equal(STRIPE_CATALOG.PRESELEKCJA.overage, null);
+  for (const cv of [60, 100, 120]) assert.equal(stripePoolQuote('PRESELEKCJA', cv), null);
+  assert.equal(stripePoolQuote('FREE', 5), null);
+});
+
+test('R7: the overage parameters equal the pricing catalog, the internal calculator and the price list', () => {
+  const catalog = readFileSync(new URL('../supabase/migrations/20261104080000_pricing_catalog.sql', import.meta.url), 'utf8');
+  const internal = readFileSync(new URL('../lib/pricing/internal-calculator.ts', import.meta.url), 'utf8');
+  const doc = readFileSync(new URL('../docs/cennik-2026-11-02.md', import.meta.url), 'utf8');
+  for (const code of ['WERYFIKACJA', 'ASSESSMENT_CENTER']) {
+    const pkg = STRIPE_CATALOG[code];
+    assert.match(catalog, new RegExp(`'${code}', ${pkg.grossMinor}, ${pkg.cvCredits}, 5, ${pkg.overage.cvMax}, ${pkg.overage.grossPerCvMinor}, `), code);
+    assert.match(internal, new RegExp(`${code}: \\{ grossMinor: [0-9_]+, cvIncluded: ${pkg.cvCredits}, cvOptions: \\[[0-9, ]*${pkg.overage.cvMax}\\], overageGrossPerCvMinor: ${pkg.overage.grossPerCvMinor} \\}`), code);
+  }
+  assert.match(doc, /\*\*Naliczana stawka: 0,16 zł netto za każde dodatkowe CV\*\* ponad pulę bazową pakietu, krok 5 sztuk/);
+  // The surcharge is 16 gr NET per CV (netFromGross(20, 2300)), exactly as the price list states.
+  const step = stripePoolQuote('WERYFIKACJA', 65).netMinor - stripePoolQuote('WERYFIKACJA', 60).netMinor;
+  assert.equal(step, 5 * 16);
+  // The database pins the same rule (migration 20261121190000).
+  const pinned = readFileSync(new URL('../supabase/migrations/20261121190000_r7_stripe_package_cv_overage.sql', import.meta.url), 'utf8');
+  assert.match(pinned, /package_code='WERYFIKACJA' and credits between 60 and 150 and \(credits - 60\) % 5 = 0/);
+  assert.match(pinned, /\(50000 \+ \(credits - 60\) \* 16\)::bigint \* 2300 \* 2 \+ 10000\) \/ 20000/);
+  assert.match(pinned, /package_code='ASSESSMENT_CENTER' and credits between 50 and 150 and \(credits - 50\) % 5 = 0/);
+  assert.match(pinned, /\(121870 \+ \(credits - 50\) \* 16\)::bigint \* 2300 \* 2 \+ 10000\) \/ 20000/);
+  assert.equal(stripePoolQuote('WERYFIKACJA', 60).netMinor, 50000);
+  assert.equal(stripePoolQuote('ASSESSMENT_CENTER', 50).netMinor, 121870);
+  // The SQL formula gives the engine amount for every allowed pool.
+  for (const [code, baseNet] of [['WERYFIKACJA', 50000], ['ASSESSMENT_CENTER', 121870]]) {
+    const pkg = STRIPE_CATALOG[code];
+    for (let cv = pkg.cvCredits; cv <= 150; cv += 5) {
+      const net = baseNet + (cv - pkg.cvCredits) * 16;
+      assert.equal(net + Math.trunc((net * 2300 * 2 + 10000) / 20000), stripePoolQuote(code, cv).grossMinor, `${code} ${cv}`);
+    }
+  }
 });
 
 test('R5 W2b: checkout with cvCount — server derives packages, refuses non-slider values with a Polish message, flag off keeps the old shape', async () => {
@@ -341,8 +408,8 @@ test('R5 W2b: checkout with cvCount — server derives packages, refuses non-sli
     [{ cvCount: 120, packages: 3 }, /nie zgadza się/],
   ]) await assert.rejects(service.checkout(buy(extra)), e => e.code === 'SC19_PAYMENT_CV_COUNT_INVALID' && message.test(e.userMessage),
     JSON.stringify(extra));
-  for (const [code, cvCount] of [['WERYFIKACJA', 65], ['ASSESSMENT_CENTER', 60]])
-    await assert.rejects(service.checkout(packageBuy(code, { cvCount })), e => e.code === 'SC19_PAYMENT_CV_COUNT_INVALID', code);
+  for (const [code, cvCount] of [['WERYFIKACJA', 55], ['WERYFIKACJA', 62], ['WERYFIKACJA', 155], ['ASSESSMENT_CENTER', 45]])
+    await assert.rejects(service.checkout(packageBuy(code, { cvCount })), e => e.code === 'SC19_PAYMENT_CV_COUNT_INVALID', `${code} ${cvCount}`);
   // A client price is never a field; adding one is still invalid.
   await assert.rejects(service.checkout(buy({ cvCount: 120, amountMinor: 1 })), e => e.code === 'SC19_PAYMENT_INVALID');
   assert.equal(stripe.calls.length, 0);
@@ -369,6 +436,77 @@ test('R5 W2b: checkout with cvCount — server derives packages, refuses non-sli
   const same = await service.checkout(buy({ packages: 2 }));
   assert.equal(same.orderId, r.orderId);
   await assert.rejects(service.checkout(buy({ cvCount: 180 })), e => e.code === 'SC19_PAYMENT_REQUEST_CONFLICT');
+});
+
+test('R7: WERYFIKACJA with 100 CV — server-priced order, Stripe line item = order amount, 100 CV granted on the paid webhook', async () => {
+  // Flag off: the pool field does not exist; the plain order stays one base package.
+  {
+    const { service, stripe, st } = harness();
+    await assert.rejects(service.checkout(packageBuy('WERYFIKACJA', { cvCount: 100 })), e => e.code === 'SC19_PAYMENT_INVALID');
+    assert.equal(stripe.calls.length, 0);
+    const base = await service.checkout(packageBuy('WERYFIKACJA'));
+    assert.equal(base.amountMinor, 61500); assert.equal(st.orders.get(base.orderId).credits, 60);
+  }
+  const { st, stripe, service } = harness({ cvPoolEnabled: true });
+  // A Stripe Price exists for the base package: the pool order must NOT use it.
+  stripe.prices.push({ id: 'price_fakewer', unit_amount: 61500, currency: 'pln', type: 'one_time', livemode: false,
+    metadata: { app: STRIPE_APP, package_code: 'WERYFIKACJA' } });
+  // A client amount is never accepted.
+  await assert.rejects(service.checkout(packageBuy('WERYFIKACJA', { cvCount: 100, amountMinor: 1 })), e => e.code === 'SC19_PAYMENT_INVALID');
+  const r = await service.checkout(packageBuy('WERYFIKACJA', { cvCount: 100 }));
+  const order = st.orders.get(r.orderId);
+  assert.equal(order.packageCode, 'WERYFIKACJA');
+  assert.equal(order.credits, 100);
+  assert.equal(order.amountMinor, 62287);
+  assert.equal(r.amountMinor, order.amountMinor);
+  const p = stripe.calls.find(c => c.method === 'POST' && c.path === '/v1/checkout/sessions').body;
+  assert.equal(p['line_items[0][price]'], undefined, 'no base Stripe Price for a pool order');
+  assert.equal(p['line_items[0][quantity]'], '1');
+  assert.equal(p['line_items[0][price_data][unit_amount]'], String(order.amountMinor));
+  assert.equal(p['line_items[0][price_data][tax_behavior]'], 'inclusive');
+  assert.equal(p['line_items[0][price_data][product_data][name]'], 'SkillCheck WERYFIKACJA — 100 analiz CV (60 w pakiecie + 40 dodatkowych)');
+  assert.equal(p['line_items[0][price_data][product_data][metadata][pool_cv]'], '100');
+  assert.equal(p['metadata[pool_cv]'], '100'); assert.equal(p['metadata[packages]'], '1');
+  assert.equal(p['payment_intent_data[description]'], 'SkillCheck WERYFIKACJA — 1 pakiet, 100 analiz CV');
+  assert.equal(stripe.sessions.get(order.sessionId).amount_total, order.amountMinor);
+  // Same request and pool = same purchase; another pool under the same request is a conflict;
+  // another request while this one is unpaid is the pending purchase only with the same pool.
+  assert.equal((await service.checkout(packageBuy('WERYFIKACJA', { cvCount: 100 }))).orderId, r.orderId);
+  await assert.rejects(service.checkout(packageBuy('WERYFIKACJA', { cvCount: 105 })), e => e.code === 'SC19_PAYMENT_REQUEST_CONFLICT');
+  await assert.rejects(service.checkout(packageBuy('WERYFIKACJA', { packages: 1 })), e => e.code === 'SC19_PAYMENT_REQUEST_CONFLICT');
+  assert.equal((await service.checkout(packageBuy('WERYFIKACJA', { requestId: id(40), cvCount: 100 }))).orderId, r.orderId);
+  await assert.rejects(service.checkout(packageBuy('WERYFIKACJA', { requestId: id(41), cvCount: 60 })), e => e.code === 'SC19_PAYMENT_PURCHASE_PENDING');
+  assert.equal(stripe.calls.filter(c => c.method === 'POST' && c.path === '/v1/checkout/sessions').length, 1);
+  // Paid webhook: exactly the chosen pool and the package entitlement, once.
+  stripe.pay(order.sessionId);
+  const ev = signed(completed(stripe.sessions.get(order.sessionId)));
+  assert.equal((await service.notification(ev.raw, ev.header)).state, 'applied');
+  assert.equal(st.credits.get(id(1)), 100);
+  assert.equal(st.entitlements.get(`${id(1)}:package:WERYFIKACJA`), 1);
+  assert.equal((await service.notification(ev.raw, ev.header)).state, 'already_applied');
+  assert.equal(st.credits.get(id(1)), 100);
+});
+
+test('R7: ASSESSMENT CENTER pool and the base pool with cvCount; the provider refuses a pool order whose amount is not the engine price', async () => {
+  const { st, stripe, service, provider } = harness({ cvPoolEnabled: true });
+  const r = await service.checkout(packageBuy('ASSESSMENT_CENTER', { cvCount: 150 }));
+  assert.equal(st.orders.get(r.orderId).amountMinor, 151868);
+  assert.equal(st.orders.get(r.orderId).credits, 150);
+  assert.equal(stripe.calls.find(c => c.path === '/v1/checkout/sessions').body['line_items[0][price_data][unit_amount]'], '151868');
+  // The base pool sent as cvCount is the plain package at the catalog price.
+  const other = harness({ cvPoolEnabled: true });
+  const base = await other.service.checkout(packageBuy('WERYFIKACJA', { cvCount: 60 }));
+  assert.equal(other.st.orders.get(base.orderId).amountMinor, 61500);
+  assert.equal(other.st.orders.get(base.orderId).credits, 60);
+  assert.equal(other.stripe.calls.find(c => c.path === '/v1/checkout/sessions').body['payment_intent_data[description]'], 'SkillCheck WERYFIKACJA — 1 × 60 analiz CV');
+  // A tampered snapshot never reaches Stripe: wrong amount, off-ladder pool, below base, PRESELEKCJA overage.
+  const snapshot = st.orders.get(r.orderId);
+  const before = stripe.calls.length;
+  for (const bad of [{ amountMinor: 151867 }, { credits: 152, amountMinor: 151900 }, { credits: 45, amountMinor: 149900 }])
+    await assert.rejects(provider.createCheckout({ ...snapshot, id: id(90), ...bad }, 'k'), e => e.code === 'SC19_PAYMENT_CHECKOUT_INVALID', JSON.stringify(bad));
+  const { packageCode, ...preselekcja } = snapshot; void packageCode;
+  await assert.rejects(provider.createCheckout({ ...preselekcja, id: id(91), credits: 100, amountMinor: 30800 }, 'k'), e => e.code === 'SC19_PAYMENT_CHECKOUT_INVALID');
+  assert.equal(stripe.calls.length, before);
 });
 
 test('R5 W2b: the Stripe runtime reads the slider flag from env only, default off', () => {
