@@ -18,7 +18,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { HostedCheckout, PaymentMode, PaymentOrder, PaymentProvider, PaymentScope, VerifiedPayment } from './sc19-payments.ts';
 import { Sc19PaymentError, orderPackage } from './sc19-payments.ts';
-import { STRIPE_APP, STRIPE_CATALOG, stripeLookupKey, stripeQuote, type StripePackageCode } from './stripe-catalog.ts';
+import { STRIPE_APP, STRIPE_CATALOG, stripeLookupKey, stripePoolQuote, stripeQuote, type StripePackageCode } from './stripe-catalog.ts';
 
 export const STRIPE_API = 'https://api.stripe.com';
 export const STRIPE_CHECKOUT_ORIGIN = 'https://checkout.stripe.com';
@@ -164,14 +164,23 @@ export function createStripeProvider(options: StripeProviderOptions): PaymentPro
   };
 
   /** Server-side check that the snapshotted order is whole packages of its own
-   * package at the catalog price (WERYFIKACJA and ASSESSMENT CENTER: exactly one). */
-  function packagesOf(order: PaymentOrder): number {
+   * package at the catalog price (WERYFIKACJA and ASSESSMENT CENTER: exactly one).
+   * R7: a WERYFIKACJA / ASSESSMENT CENTER order with a CV pool above the base must
+   * carry exactly the pricing-engine amount for that pool (stripePoolQuote); it is
+   * one package and `pool` is its CV count. */
+  function packagesOf(order: PaymentOrder): { n: number; pool: number | null } {
     const code = orderPackage(order);
+    if (code !== 'PRESELEKCJA' && order.credits !== STRIPE_CATALOG[code].cvCredits) {
+      const pool = stripePoolQuote(code, order.credits);
+      if (!pool || pool.grossMinor !== order.amountMinor || pool.cvCredits !== order.credits || order.currency !== 'PLN')
+        return fail('SC19_PAYMENT_CHECKOUT_INVALID');
+      return { n: 1, pool: pool.cvCredits };
+    }
     const n = order.credits / STRIPE_CATALOG[code].cvCredits;
     const quote = stripeQuote(code, n);
     if (!quote || quote.grossMinor !== order.amountMinor || quote.cvCredits !== order.credits || order.currency !== 'PLN')
       return fail('SC19_PAYMENT_CHECKOUT_INVALID');
-    return n;
+    return { n, pool: null };
   }
 
   /** One customer per company: stored id → search by metadata → create (idempotent). */
@@ -225,6 +234,16 @@ export function createStripeProvider(options: StripeProviderOptions): PaymentPro
         metadata: { app: STRIPE_APP, package_code: code } } } };
   }
 
+  /** R7: one package with a CV pool above the base. The Stripe Price under the lookup
+   * key is the base package, so the line is inline price data whose amount is the
+   * order's snapshot, itself checked against the pricing engine in packagesOf(). */
+  function poolLine(code: StripePackageCode, order: PaymentOrder, pool: number) {
+    const pkg = STRIPE_CATALOG[code];
+    return { quantity: 1, price_data: { currency: 'pln', unit_amount: order.amountMinor, tax_behavior: 'inclusive',
+      product_data: { name: `SkillCheck ${pkg.name} — ${pool} analiz CV (${pkg.cvCredits} w pakiecie + ${pool - pkg.cvCredits} dodatkowych)`,
+        metadata: { app: STRIPE_APP, package_code: code, pool_cv: String(pool) } } } };
+  }
+
   function hosted(order: PaymentOrder, session: Json | null): HostedCheckout {
     if (!session || typeof session.id !== 'string' || !sessionIdShape.test(session.id) ||
         session.mode !== 'payment' || session.currency !== 'pln' || session.livemode !== live ||
@@ -238,11 +257,11 @@ export function createStripeProvider(options: StripeProviderOptions): PaymentPro
 
   async function createCheckout(order: PaymentOrder, idempotencyKey: string): Promise<HostedCheckout> {
     if (!sameScope(order.scope, scope)) return fail('SC19_PAYMENT_SCOPE_MISMATCH');
-    const n = packagesOf(order);
+    const { n, pool } = packagesOf(order);
     const code = orderPackage(order), pkg = STRIPE_CATALOG[code];
     const buyer = await options.buyer(order);
     const customer = await ensureCustomer(order.companyId, buyer);
-    const line = await linePrice(code, n);
+    const line = pool === null ? await linePrice(code, n) : poolLine(code, order, pool);
     const metadata = { app: STRIPE_APP, order_id: order.id, company_id: order.companyId,
       package_code: code, packages: String(n), pool_cv: String(order.credits) };
     const back = `${appOrigin}/dashboard/${order.companyId}/billing/checkout`;
@@ -250,7 +269,8 @@ export function createStripeProvider(options: StripeProviderOptions): PaymentPro
       mode: 'payment', locale: 'pl', currency: 'pln', customer,
       customer_update: { name: 'auto', address: 'auto' },
       client_reference_id: order.id, metadata,
-      payment_intent_data: { metadata, description: `SkillCheck ${pkg.name} — ${n} × ${pkg.cvCredits} analiz CV` },
+      payment_intent_data: { metadata, description: pool === null ? `SkillCheck ${pkg.name} — ${n} × ${pkg.cvCredits} analiz CV`
+        : `SkillCheck ${pkg.name} — 1 pakiet, ${pool} analiz CV` },
       line_items: [line],
       // Immediate methods only: the package is granted solely on checkout.session.completed
       // (owner, 19.11.2026), so a delayed method (bank transfer, SEPA…) is never offered.

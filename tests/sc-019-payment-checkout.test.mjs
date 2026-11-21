@@ -546,15 +546,57 @@ test('R5 W2b: a pool the slider cannot produce is never posted, flag on or off',
   }
 });
 
-test('R5 W2b: only PRESELEKCJA sends a CV pool; other packages keep their one-package request', async t => {
-  const weryfikacja = { ...offer('offer-w'), packageCode: 'WERYFIKACJA', credits: 60 };
-  const h = await harness({ offers: [weryfikacja], checkout: redirecting, cvPoolEnabled: true });
-  t.after(h.close);
-  h.accept();
-  await h.click('Zamawiam');
-  assert.equal(h.posts[0].packageCode, 'WERYFIKACJA');
-  assert.equal(h.posts[0].packages, 1);
-  assert.equal('cvCount' in h.posts[0], false);
+test('R7: WERYFIKACJA sends a CV pool only with the slider flag on; a pool above the base shows the engine price', async t => {
+  const weryfikacja = { ...offer('offer-w'), packageCode: 'WERYFIKACJA', amountMinor: 61500, credits: 60 };
+  // Flag off: no pool input, the one-package request keeps its exact shape.
+  for (const cvPoolEnabled of [undefined, false]) {
+    const h = await harness({ offers: [weryfikacja], checkout: redirecting, cvPoolEnabled });
+    t.after(h.close);
+    assert.equal(h.find('small'), undefined, 'no pool input without the flag');
+    assert.ok(h.find('h2', '615,00'));
+    h.accept();
+    await h.click('Zamawiam');
+    assert.deepEqual(Object.keys(h.posts[0]).sort(), ['companyId','offerId','packageCode','packages','requestId','termsRevision']);
+    assert.equal(h.posts[0].packages, 1);
+    assert.ok(h.storage.has(`sc19:request:${companyId}:offer-w:terms-v1:1`));
+  }
+  // Flag on, base pool: the base package with cvCount 60.
+  {
+    const h = await harness({ offers: [weryfikacja], checkout: redirecting, cvPoolEnabled: true });
+    t.after(h.close);
+    assert.ok(h.find('h2', '615,00'));
+    h.accept();
+    await h.click('Zamawiam');
+    assert.equal(h.posts[0].packageCode, 'WERYFIKACJA');
+    assert.equal(h.posts[0].packages, 1);
+    assert.equal(h.posts[0].cvCount, 60);
+  }
+  // Flag on, 100 CV: 622,87 zł brutto (net 506,40 zł), cvCount 100, never a price from the browser.
+  {
+    const h = await harness({ offers: [weryfikacja], checkout: redirecting, cvPoolEnabled: true });
+    t.after(h.close);
+    h.setPool(100);
+    assert.ok(h.find('h2', '622,87'));
+    assert.ok(h.find('small', 'dodatkowe CV: 0,16'));
+    const table = JSON.stringify(h.find('table').props.children);
+    assert.match(table, /506,40/);
+    h.accept();
+    await h.click('Zamawiam');
+    assert.equal(h.posts[0].cvCount, 100);
+    assert.equal(h.posts[0].packages, 1);
+    assert.equal('amountMinor' in h.posts[0], false);
+    assert.equal('credits' in h.posts[0], false);
+    assert.ok(h.storage.has(`sc19:request:${companyId}:offer-w:terms-v1:1:cv100`));
+  }
+  // A pool below the base, off the co-5 ladder or above the maximum is never posted.
+  for (const pool of [55, 62, 155]) {
+    const h = await harness({ offers: [weryfikacja], checkout: redirecting, cvPoolEnabled: true });
+    t.after(h.close);
+    h.setPool(pool);
+    h.accept();
+    assert.equal(h.find('button', 'Zamawiam').props.disabled, true, String(pool));
+    assert.equal(h.posts.length, 0);
+  }
 });
 
 test('R5 W2b: a refused CV count shows the server sentence as text, resets acceptance and never redirects', async t => {
