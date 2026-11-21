@@ -10,11 +10,12 @@
  * Keys: STRIPE_SECRET_KEY (mode from its prefix sk_/rk_ + live/test) and
  * STRIPE_WEBHOOK_SECRET. Values are never returned in a refusal or logged.
  *
- * LIVE: this file may return a live configuration (the key decides the mode), but
- * the runtime is composed with liveApproved=false and the database policies accept
- * only mode='test' orders, so a live key cannot open a checkout or create an order.
- * Opening live payments is a separate reviewed change after the owner's decision
- * (AGENTS.md, „Continuous release policy”, payment path).
+ * LIVE: the key decides the mode. A live key is refused on Preview (below). On
+ * production the runtime opens live PRESELEKCJA checkouts only with a working
+ * Fakturownia configuration (lib/sc19-stripe-runtime.ts, stripeLiveApproved) and the
+ * sales switch SC19_PACKAGES_ENABLED=true; the database accepts live orders only
+ * after migration 20261122090000_r7_stripe_live_invoices.sql (owner decision
+ * 20.11.2026, 18:29, point 5, docs/DECYZJE.md).
  */
 import type { PaymentMode } from './sc19-payments.ts';
 import { publicShape, restrictedDatabaseUrl } from './sc19-payment-preview.ts';

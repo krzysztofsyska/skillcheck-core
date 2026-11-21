@@ -15,6 +15,13 @@
 
 ## 20.11.2026
 
+**Uruchomienie Stripe na żywo w core: prawdziwe płatności, faktury z Fakturowni, sekret webhooka.**
+Czat z właścicielem (sesja https://claude.ai/code/session_01TVLzgZpNuVS6QUizQskKhh), pytania czatu 18:23,
+m.in. punkt 5 (dotyczy tego repozytorium; punkty 1–4 dotyczą `skillcheck-preselekcja`):
+„5. Core: prawdziwe płatności Stripe na koncie KTIG; automatyczne faktury z Fakturowni; agent sam wpisuje w Vercelu jeden sekret, ten od powiadomień Stripe (`STRIPE_WEBHOOK_SECRET`), tylko dla tego zadania. Polecam TAK.”
+Właściciel, 18:29: **„1 tak, 2 tak, 3 tak, 4 tak, 5 tak”**
+(źródło: komentarze w krzysztofsyska/skillcheck-preselekcja#113 i w tym PR, 20.11.2026, 17:29 UTC).
+
 **Pula rozmów voicebota: scalenie, ważność, limit kosztu (odpowiedź właściciela w czacie, 18:31).**
 Pytania sesji Claude w poprzedniej wiadomości czatu (TAK/NIE, każde z rekomendacją TAK):
 1) czy scalić pulę rozmów z pakietów (PR #553) do wersji testowej (`integration`);

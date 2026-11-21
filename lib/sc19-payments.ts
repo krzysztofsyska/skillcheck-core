@@ -124,10 +124,16 @@ export type PaymentDependencies = Readonly<{
   scope: PaymentScope; checkoutOrigins: readonly string[];
   enabled: boolean; liveApproved: boolean;
   /** R7: the ONE call site for work that follows a granted package (the VAT
-   * invoice will hook in here). Runs after the grant has committed, only for the
-   * delivery that actually applied it (never for a duplicate). It must never undo
-   * the grant: a failure is logged by a fixed code and the grant stays. */
-  onPaid?(order: PaymentOrder): Promise<void>;
+   * invoice, lib/sc19-stripe-invoices.ts). Runs after the grant has committed, only
+   * for the delivery that actually applied it (never for a duplicate). It must never
+   * undo the grant: a failure is logged by a fixed code and the grant stays. When it
+   * resolves 'retry' (the invoice could not be issued yet), the notification answers
+   * SC19_PAYMENT_RETRY (503) AFTER the grant, so the provider redelivers the event. */
+  onPaid?(order: PaymentOrder): Promise<void | 'retry'>;
+  /** R7: the same work for a redelivered notification of an order that is already
+   * paid ('already_applied'), so a pending invoice is retried by the provider's own
+   * redelivery. Must be idempotent; same 'retry' contract as onPaid. */
+  onPaidAgain?(order: PaymentOrder): Promise<void | 'retry'>;
   /** R5 W2b: accept an optional `cvCount` (the CV pool slider) in a checkout
    * request and validate it on the server. Off (the default) keeps the pre-W2b
    * request shape: a `cvCount` field is refused like any other unknown field. */
@@ -531,18 +537,21 @@ export function createSc19Payments(deps: PaymentDependencies) {
         typeof signature !== 'string' || signature.length === 0 || signature.length > 8192)
       return deny('SC19_PAYMENT_NOTIFICATION_INVALID');
     const result = await applySettlement(clone(await deps.provider.verifyAndRetrieve(new Uint8Array(raw), signature)));
-    if (result.state === 'applied') await afterPaid(result.orderId);
+    const hook = result.state === 'applied' ? deps.onPaid : result.state === 'already_applied' ? deps.onPaidAgain : undefined;
+    if (hook && 'orderId' in result && await afterPaid(hook, result.orderId) === 'retry')
+      return deny('SC19_PAYMENT_RETRY');
     return result;
   }
 
   /** Post-grant hook (see PaymentDependencies.onPaid). The grant has committed;
-   * nothing here can roll it back, and the webhook is still acknowledged. */
-  async function afterPaid(orderId: string) {
-    if (!deps.onPaid) return;
+   * nothing here can roll it back. 'retry' only makes the provider deliver again;
+   * a failed read of the order (or a throwing hook) asks for that too, because the
+   * provider's redelivery is the only way the hook runs again (Codex P2, PR #591). */
+  async function afterPaid(hook: (order: PaymentOrder) => Promise<void | 'retry'>, orderId: string): Promise<void | 'retry'> {
     try {
       const order = await deps.store.transaction(tx => tx.order(orderId));
-      if (order && order.status === 'paid') await deps.onPaid(clone(order));
-    } catch { console.error('SC19_PAYMENT_AFTER_PAID_FAILED'); }
+      if (order && order.status === 'paid') return await hook(clone(order));
+    } catch { console.error('SC19_PAYMENT_AFTER_PAID_FAILED'); return 'retry'; }
   }
 
   // Called only after the HTTP handler has authorized a read of THIS order.

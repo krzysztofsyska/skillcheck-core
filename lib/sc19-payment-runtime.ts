@@ -7,6 +7,8 @@ export function composeSc19PaymentRuntime(config: Omit<PaymentDependencies,'stor
   pool: PaymentSqlPool; appOrigin: string; signatureHeader: PaymentHttpRuntime['signatureHeader'];
   /** R7: the Stripe runtime adds the WERYFIKACJA / ASSESSMENT CENTER order source. */
   storeExtension?: PaymentStoreExtension;
+  /** R7: Stripe charge.refunded (see PaymentHttpRuntime.events). */
+  events?: PaymentHttpRuntime['events'];
 }): PaymentHttpRuntime {
   const origin=new URL(config.appOrigin);
   if(origin.origin!==config.appOrigin || !['https:','http:'].includes(origin.protocol) ||
@@ -16,7 +18,7 @@ export function composeSc19PaymentRuntime(config: Omit<PaymentDependencies,'stor
   const service=createSc19Payments({...config,store});
   return Object.freeze({service, authenticate:config.authenticate,
     readOrder:store.readOrder,listOffers:store.listOffers,appOrigin:config.appOrigin,
-    signatureHeader:config.signatureHeader});
+    signatureHeader:config.signatureHeader,...(config.events ? {events:config.events} : {})});
 }
 /** R7: the Stripe runtime, or null when this deployment has no Stripe configuration. */
 export async function resolveSc19StripeRuntime(request?: Request): Promise<PaymentHttpRuntime | null> {
