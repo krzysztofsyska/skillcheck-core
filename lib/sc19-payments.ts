@@ -229,11 +229,13 @@ export function createSc19Payments(deps: PaymentDependencies) {
   const fulfillmentGate = () => {
     if (!validScope(scope)) deny('SC19_PAYMENTS_DISABLED');
   };
+  // Stripe returns Checkout URLs with a fragment (`/c/pay/cs_...#...`) that the hosted
+  // page needs, so a fragment is allowed; protocol, credentials and origin stay strict.
   const safeCheckoutUrl = (text: string): boolean => {
     try {
       const url = new URL(text);
       return typeof text === 'string' && text.length <= 4096 && url.protocol === 'https:' &&
-        url.username === '' && url.password === '' && url.hash === '' &&
+        url.username === '' && url.password === '' &&
         origins.includes(url.origin);
     } catch { return false; }
   };
