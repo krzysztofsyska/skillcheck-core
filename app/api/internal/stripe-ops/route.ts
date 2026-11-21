@@ -1,10 +1,10 @@
-import { STRIPE_OPS_HEADER, stripeOpsAuthorized, stripeOpsGate, stripeOpsSetup, stripeOpsStatus, StripeOpsError } from '../../../../lib/stripe-ops';
+import { STRIPE_OPS_HEADER, stripeOpsAuthorized, stripeOpsGate, stripeOpsSetup, stripeOpsStatus, StripeOpsError } from '../../../../lib/billing-stripe-ops';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
-/** R7: one-off Stripe setup (lib/stripe-ops.ts). Header `x-skillcheck-ops` with the
+/** R7: one-off Stripe setup (lib/billing-stripe-ops.ts). Header `x-skillcheck-ops` with the
  * one-time token (only its SHA-256 is in the code); body {"action":"status"|"setup"}.
  * Without the token: 401 and nothing is read. `setup` runs on the production
  * deployment only. Never logs a key, a secret or a response body. */

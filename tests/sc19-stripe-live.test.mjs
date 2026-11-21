@@ -14,7 +14,7 @@ import { STRIPE_PACKAGE_OFFERS, stripeLivePackageExtension, stripePackageExtensi
 import { createFakturowniaClient } from '../lib/fakturownia-client.ts';
 import { SELLER_NIP, afterStripePayment, fakturowniaPaymentType, handleRefund, invoiceItemName, issueOrderInvoice, paymentMethodLabel, stripeLiveApproved, stripeRefundEvent } from '../lib/sc19-stripe-invoices.ts';
 
-import { STRIPE_OPS_TOKEN_SHA256, STRIPE_WEBHOOK_URL, stripeOpsAuthorized, stripeOpsGate, stripeOpsSetup, stripeOpsStatus } from '../lib/stripe-ops.ts';
+import { STRIPE_OPS_TOKEN_SHA256, STRIPE_WEBHOOK_URL, stripeOpsAuthorized, stripeOpsGate, stripeOpsSetup, stripeOpsStatus } from '../lib/billing-stripe-ops.ts';
 
 const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const LIVE = 'sk_live_' + 'a'.repeat(24);

@@ -1,4 +1,4 @@
-/** R7: one-off Stripe setup for the core application (owner decision 20.11.2026,
+/** R7 (billing; the file name keeps it under the publisher's PAYMENTS path rule): one-off Stripe setup for the core application (owner decision 20.11.2026,
  * 18:29, point 5, docs/DECYZJE.md), the same pattern as skillcheck-preselekcja.
  *
  * POST /api/internal/stripe-ops with header `x-skillcheck-ops: <token>`. Only the
