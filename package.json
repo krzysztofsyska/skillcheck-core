@@ -37,7 +37,7 @@
     "test:marketing": "node --test tests/marketing-http.test.mjs",
     "test:pricing-cv-pool": "node --test tests/pricing-cv-pool.test.mjs tests/pricing-cv-pool-module.test.mjs tests/pricing-cv-pool-slider.test.mjs tests/pricing-paid-options.test.mjs tests/pricing-public-catalog.test.mjs",
     "test:pricing-catalog": "node --test tests/pricing-catalog.test.mjs",
-    "test:stripe": "node --experimental-strip-types --test tests/sc19-stripe.test.mjs",
+    "test:stripe": "node --experimental-strip-types --test tests/sc19-stripe.test.mjs tests/sc19-stripe-invoice.test.mjs",
     "test:migration-pairs": "node --test tests/migration-rollback-pairs.test.mjs",
     "test:legal": "node --experimental-strip-types --test tests/legal.test.mjs tests/legal-docx-sync.test.mjs",
     "test:marketing-consent": "node --experimental-strip-types --test tests/marketing-consent.test.mjs tests/sc19-trial-auto.test.mjs tests/sc19-daily-digest.test.mjs",

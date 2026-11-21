@@ -19,6 +19,8 @@ import { Sc19PaymentError } from './sc19-payments.ts';
 import { createStripeProvider, readStripeBuyerCompany, STRIPE_CHECKOUT_ORIGIN, type StripeCustomerStore } from './sc19-stripe-provider.ts';
 import type { Sc19StripeConfig } from './sc19-stripe-config.ts';
 import { stripePackageExtension } from './sc19-stripe-packages.ts';
+import { issueStripeVatInvoice, vatInvoiceStore, type StripeInvoiceDeps } from './sc19-stripe-invoice.ts';
+import type { FakturowniaFetch } from './fakturownia-client.ts';
 
 let pool: Pool | undefined;
 
@@ -26,11 +28,16 @@ let pool: Pool | undefined;
 export const stripeScope = (mode: PaymentMode) => ({ provider: 'stripe', account: 'ktig-consulting', mode }) as const;
 
 /** THE post-grant call site. Runs once per payment, after the package is granted
- * and committed. The Fakturownia VAT invoice (R7, next step) hooks in here; until
- * then it does nothing. It must never undo the grant. */
-export async function afterStripePayment(order: PaymentOrder): Promise<void> {
-  void order;
+ * and committed. R7: issues the Fakturownia VAT invoice for a LIVE order
+ * (lib/sc19-stripe-invoice.ts); a test order is skipped. It never throws and never
+ * undoes the grant: a failure is recorded in sc19_stripe.vat_invoices and logged by
+ * a fixed code with the order id only. */
+export async function afterStripePayment(order: PaymentOrder, deps: StripeInvoiceDeps): Promise<void> {
+  try { await issueStripeVatInvoice(order, deps); }
+  catch { console.error('SC19_INVOICE_UNEXPECTED', order.id); }
 }
+
+const fakturowniaFetch: FakturowniaFetch = (url, init) => fetch(url, { ...init, cache: 'no-store', redirect: 'error' });
 
 export async function stripeRuntime(config: Sc19StripeConfig) {
   const database = pool ??= new Pool({ connectionString: config.databaseUrl, ssl: previewPoolTls,
@@ -92,7 +99,8 @@ export async function stripeRuntime(config: Sc19StripeConfig) {
   // R5 W2b: the CV pool from the slider is accepted (and validated) only with the
   // slider flag on; default off keeps the request shape unchanged.
   cvPoolEnabled: process.env.PRICING_CV_SLIDER_ENABLED === 'true',
-  onPaid: afterStripePayment,
+  onPaid: order => afterStripePayment(order, { env: process.env, fetch: fakturowniaFetch, store: vatInvoiceStore(query),
+    billingAddress: paid => provider.billingAddress(paid) }),
   authenticate: async () => {
     const buyer = await user();
     return buyer?.email_confirmed_at && buyer.email ? { userId: buyer.id } : null;

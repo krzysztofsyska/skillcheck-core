@@ -123,7 +123,7 @@ function harness(opts = {}) {
     customers, fetch: stripe.fetch, nowMs: () => opts.now ?? Date.now(),
     async buyer(order) { assert.equal(order.buyerId, id(2)); return { email: 'buyer@example.test', companyName: 'Firma Testowa', nip: st.nip }; } });
   const service = createSc19Payments({ store, provider, scope, checkoutOrigins: [STRIPE_CHECKOUT_ORIGIN], enabled: true, liveApproved: false, cvPoolEnabled: opts.cvPoolEnabled === true,
-    authenticate: async () => ({ userId: id(2) }), onPaid: async order => { st.paidHook.push(order.id); } });
+    authenticate: async () => ({ userId: id(2) }), onPaid: async order => { st.paidHook.push(order.id); if (opts.onPaid) await opts.onPaid(order, provider); } });
   return { st, stripe, service, provider };
 }
 
@@ -750,7 +750,7 @@ test('a live key never opens a checkout (live payments stay closed)', async () =
 test('form encoding and source hygiene: no key in code, no Stripe invoices, P24 adapter untouched', () => {
   assert.equal(stripeForm({ a: { b: [{ c: 1 }] }, d: 'x y' }), 'a%5Bb%5D%5B0%5D%5Bc%5D=1&d=x+y');
   for (const file of ['lib/sc19-stripe-provider.ts', 'lib/sc19-stripe-config.ts', 'lib/sc19-stripe-runtime.ts', 'lib/stripe-catalog.ts',
-    'lib/sc19-stripe-packages.ts',
+    'lib/sc19-stripe-packages.ts', 'lib/sc19-stripe-invoice.ts',
     'app/api/billing/stripe/webhook/route.ts']) {
     const src = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
     assert.doesNotMatch(src, /(sk|rk)_(live|test)_[A-Za-z0-9]{10,}|whsec_[A-Za-z0-9]{10,}/, file);
@@ -983,4 +983,51 @@ test('lost create response: never closed while a session can still be paid, for 
     assert.equal(st.orders.get(order.id).checkoutUrl, null);
     assert.equal(st.orders.get(order.id).status, 'awaiting_payment');
   }
+});
+
+// R7: Fakturownia VAT invoice in the post-grant hook (lib/sc19-stripe-invoice.ts).
+test('invoice: a failing Fakturownia, a throwing hook or a test order never undo or block the grant', async () => {
+  const { issueStripeVatInvoice } = await import('../lib/sc19-stripe-invoice.ts');
+  const outcomes = [], fakturownia = [];
+  const deps = { env: { FAKTUROWNIA_ACCOUNT: 'ktig', FAKTUROWNIA_API_TOKEN: 'tok_' + 'c'.repeat(20) },
+    fetch: async (url, init) => { fakturownia.push(init.method); return { ok: false, status: 503, json: async () => ({}) }; },
+    store: { claim: async () => ({ outcome: 'claimed', companyName: 'Firma Testowa', nip: '7394002294' }), finish: async () => {} },
+    billingAddress: async () => ({ street: 'ul. Testowa 1', postCode: '00-001', city: 'Warszawa', country: 'PL' }), log: () => {} };
+  for (const variant of ['live-503', 'throws', 'test-order']) {
+    const { st, stripe, service } = harness({ onPaid: async order => {
+      if (variant === 'throws') throw new Error('boom');
+      // The harness is test mode; a live copy of the order exercises the invoice path offline.
+      const target = variant === 'test-order' ? order : { ...order, scope: { ...order.scope, mode: 'live' } };
+      outcomes.push((await issueStripeVatInvoice(target, deps)).state);
+    } });
+    const r = await service.checkout(buy());
+    const sid = st.orders.get(r.orderId).sessionId; stripe.pay(sid);
+    const ev = signed(completed(stripe.sessions.get(sid)));
+    assert.equal((await service.notification(ev.raw, ev.header)).state, 'applied', variant);
+    assert.equal(st.credits.get(id(1)), 60, variant);
+    assert.equal(st.orders.get(r.orderId).status, 'paid', variant);
+    assert.equal((await service.notification(ev.raw, ev.header)).state, 'already_applied', variant);
+    assert.equal(st.credits.get(id(1)), 60, variant);
+  }
+  assert.deepEqual(outcomes, ['check', 'skipped']);
+  assert.deepEqual(fakturownia, ['POST'], 'one Fakturownia call in total, none for the test order');
+});
+
+test('invoice: billingAddress reads only the address of the paid session bound to the order', async () => {
+  const { st, stripe, service, provider } = harness();
+  const r = await service.checkout(buy());
+  const sid = st.orders.get(r.orderId).sessionId;
+  await assert.rejects(provider.billingAddress(st.orders.get(r.orderId)), e => e.code === 'SC19_PAYMENT_SCOPE_MISMATCH');
+  stripe.pay(sid);
+  const ev = signed(completed(stripe.sessions.get(sid)));
+  await service.notification(ev.raw, ev.header);
+  const order = st.orders.get(r.orderId);
+  await assert.rejects(provider.billingAddress(order), e => e.code === 'SC19_PAYMENT_ADDRESS_INVALID');
+  stripe.sessions.get(sid).customer_details = { name: 'Jan Kowalski', email: 'jan@example.test', phone: '+48500000000',
+    address: { line1: 'ul. Testowa 1', line2: 'lok. 2', postal_code: '00-001', city: 'Warszawa', country: 'PL' } };
+  assert.deepEqual(await provider.billingAddress(order), { street: 'ul. Testowa 1 lok. 2', postCode: '00-001', city: 'Warszawa', country: 'PL' });
+  // Another order's session is never read as this order's address.
+  await assert.rejects(provider.billingAddress({ ...order, id: id(99) }), e => e.code === 'SC19_PAYMENT_ORDER_MISMATCH');
+  stripe.sessions.get(sid).customer_details.address.city = 'X\u0000';
+  await assert.rejects(provider.billingAddress(order), e => e.code === 'SC19_PAYMENT_ADDRESS_INVALID');
 });

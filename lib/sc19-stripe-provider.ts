@@ -84,6 +84,8 @@ export function stripeForm(params: Record<string, unknown>): string {
 }
 
 export type StripeBuyer = Readonly<{ email: string; companyName: string; nip: string | null }>;
+/** R7: billing address from a paid Checkout Session, for the VAT invoice only. */
+export type StripeBillingAddress = Readonly<{ street: string; postCode: string; city: string; country: string }>;
 /** Company name and NIP for the Stripe checkout form, through the security-definer
  * sc19_stripe.buyer() (the adapter roles cannot read the NIP column directly). It
  * answers only while the company has an unpaid Stripe order, PRESELEKCJA or (after
@@ -131,6 +133,7 @@ export class StripeApiError extends Error {
 export function createStripeProvider(options: StripeProviderOptions): PaymentProvider & Readonly<{
   expiredSession(order: PaymentOrder): Promise<boolean>;
   expiredUnboundSession(order: PaymentOrder): Promise<string | null>;
+  billingAddress(order: PaymentOrder): Promise<StripeBillingAddress>;
 }> {
   const { secretKey, webhookSecret, mode, appOrigin, scope } = options;
   if (stripeModeOf(secretKey) !== mode || mode !== scope.mode || typeof webhookSecret !== 'string' ||
@@ -382,7 +385,28 @@ export function createStripeProvider(options: StripeProviderOptions): PaymentPro
       status: paid ? 'paid' : session.payment_status === 'unpaid' ? 'pending' : 'failed' };
   }
 
-  return Object.freeze({ createCheckout, lookupCheckout, expiredSession, expiredUnboundSession, verifyAndRetrieve });
+  /** R7 VAT invoice: the billing address the buyer gave in the paid Checkout Session
+   * (billing_address_collection: 'required'). Read only, from the API; only for a paid
+   * session bound to this order. Returns the address alone: no name, e-mail, phone or
+   * tax id (the invoice takes the company name and NIP from the database). */
+  async function billingAddress(order: PaymentOrder): Promise<StripeBillingAddress> {
+    if (!sameScope(order.scope, scope) || order.status !== 'paid' || !order.sessionId) return fail('SC19_PAYMENT_SCOPE_MISMATCH');
+    const session = await call('GET', `/v1/checkout/sessions/${encodeURIComponent(order.sessionId)}`);
+    if (!session || session.id !== order.sessionId || meta(session).app !== STRIPE_APP || meta(session).order_id !== order.id ||
+        session.client_reference_id !== order.id || session.livemode !== live || session.payment_status !== 'paid')
+      return fail('SC19_PAYMENT_ORDER_MISMATCH');
+    const details = obj(session.customer_details) ? session.customer_details : {};
+    const a = obj(details.address) ? details.address : {};
+    const text = (v: unknown, max: number) => typeof v === 'string' && v.trim().length > 0 && v.trim().length <= max
+      && !/[\u0000-\u001f\u007f]/.test(v) ? v.trim() : null;
+    const line1 = text(a.line1, 200), line2 = a.line2 == null || a.line2 === '' ? '' : text(a.line2, 200);
+    const postCode = text(a.postal_code, 20), city = text(a.city, 100);
+    const country = typeof a.country === 'string' && /^[A-Z]{2}$/.test(a.country) ? a.country : null;
+    if (!line1 || line2 === null || !postCode || !city || !country) return fail('SC19_PAYMENT_ADDRESS_INVALID');
+    return { street: line2 ? `${line1} ${line2}` : line1, postCode, city, country };
+  }
+
+  return Object.freeze({ createCheckout, lookupCheckout, expiredSession, expiredUnboundSession, verifyAndRetrieve, billingAddress });
 }
 
 function sameScope(a: PaymentScope, b: PaymentScope) {
