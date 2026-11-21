@@ -78,7 +78,7 @@
     "test:ai-ledger-db": "node --test --test-concurrency=1 tests/ai-ledger-database.test.mjs",
     "test:ai-budget-db": "node --test --test-concurrency=1 tests/ai-budget-database.test.mjs",
     "test:ai-cost": "node --test tests/ai-cost-dashboard.test.mjs",
-    "test:ai-cost-db": "node --test --test-concurrency=1 tests/ai-cost-dashboard-database.test.mjs",
+    "test:ai-cost-db": "node --test --test-concurrency=1 tests/ai-cost-dashboard-database.test.mjs tests/ai-cost-stripe-packages-database.test.mjs",
     "test:competency": "node --test tests/competency-test.test.mjs",
     "test:method": "node --experimental-strip-types --test tests/method-profile.test.mjs",
     "test:process": "node --experimental-strip-types --test tests/process-diagnostics.test.mjs",
