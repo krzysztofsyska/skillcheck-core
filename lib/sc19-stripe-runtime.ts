@@ -9,6 +9,13 @@
  * Sales switch: the existing SC19_PACKAGES_ENABLED (=== 'true') opens new
  * checkouts, exactly as for the previous adapter. Webhooks keep settling orders
  * that already exist even when it is off.
+ *
+ * LIVE (R7, owner decision 20.11.2026, 18:29, point 5): the mode comes from
+ * STRIPE_SECRET_KEY. A live key opens real PRESELEKCJA payments on
+ * https://skillcheck.pl only, with SC19_PACKAGES_ENABLED=true, a working
+ * FAKTUROWNIA_* configuration and migration 20261122090000 (without it the
+ * database refuses a live order). Each live payment gets one Fakturownia VAT
+ * invoice; a refund (charge.refunded) gets a correction invoice.
  */
 import { Pool } from 'pg';
 import { previewPoolTls } from './sc19-payment-preview-tls.ts';
@@ -18,19 +25,17 @@ import type { PaymentOrder, PaymentMode } from './sc19-payments.ts';
 import { Sc19PaymentError } from './sc19-payments.ts';
 import { createStripeProvider, readStripeBuyerCompany, STRIPE_CHECKOUT_ORIGIN, type StripeCustomerStore } from './sc19-stripe-provider.ts';
 import type { Sc19StripeConfig } from './sc19-stripe-config.ts';
-import { stripePackageExtension } from './sc19-stripe-packages.ts';
+import { stripeLivePackageExtension, stripePackageExtension } from './sc19-stripe-packages.ts';
+import { orderRow } from './sc19-payment-postgres.ts';
+import { afterStripePayment, postgresInvoiceStore, stripeInvoiceClient, stripeLiveApproved, stripeRefundEvent, type InvoiceDeps } from './sc19-stripe-invoices.ts';
 
 let pool: Pool | undefined;
 
 /** Scope of every Stripe order: one KTIG Consulting Stripe account, mode from the key. */
 export const stripeScope = (mode: PaymentMode) => ({ provider: 'stripe', account: 'ktig-consulting', mode }) as const;
 
-/** THE post-grant call site. Runs once per payment, after the package is granted
- * and committed. The Fakturownia VAT invoice (R7, next step) hooks in here; until
- * then it does nothing. It must never undo the grant. */
-export async function afterStripePayment(order: PaymentOrder): Promise<void> {
-  void order;
-}
+/** THE post-grant call site (lib/sc19-stripe-invoices.ts, afterStripePayment). */
+export { afterStripePayment };
 
 export async function stripeRuntime(config: Sc19StripeConfig) {
   const database = pool ??= new Pool({ connectionString: config.databaseUrl, ssl: previewPoolTls,
@@ -69,6 +74,8 @@ export async function stripeRuntime(config: Sc19StripeConfig) {
     },
   };
   const scope = stripeScope(config.mode);
+  const fakturownia = stripeInvoiceClient(process.env);
+  const live = config.mode === 'live';
   const provider = createStripeProvider({
     secretKey: config.secretKey, webhookSecret: config.webhookSecret, mode: config.mode,
     appOrigin: config.appOrigin, scope, customers,
@@ -79,20 +86,26 @@ export async function stripeRuntime(config: Sc19StripeConfig) {
       return { email: buyer.email, ...company };
     },
   });
+  const invoices: InvoiceDeps = { fakturownia, store: postgresInvoiceStore(query, orderRow),
+    paymentFacts: order => provider.paymentFacts(order) };
   return composeSc19PaymentRuntime({ pool: { async connect() {
     try { return await database.connect(); }
     catch (error) { console.error('SC19_STRIPE_DB_CONNECT'); throw error; }
   } }, provider, scope, appOrigin: config.appOrigin, signatureHeader: 'stripe-signature',
   checkoutOrigins: [STRIPE_CHECKOUT_ORIGIN],
-  // R7: WERYFIKACJA and ASSESSMENT CENTER orders (sc19_stripe.package_orders), Stripe only.
-  storeExtension: stripePackageExtension,
-  // Live payments stay closed (AGENTS.md, payment path): a live key never opens a checkout.
-  liveApproved: false,
+  // R7: WERYFIKACJA and ASSESSMENT CENTER orders (sc19_stripe.package_orders), Stripe
+  // only, TEST mode; with a LIVE key they stay „wkrótce” (PRESELEKCJA only).
+  storeExtension: live ? stripeLivePackageExtension : stripePackageExtension,
+  // R7 (owner decision 20.11.2026, 18:29, point 5): LIVE payments on the production
+  // deployment only, and only with a working Fakturownia configuration.
+  liveApproved: stripeLiveApproved(config, fakturownia !== null),
   enabled: process.env.SC19_PACKAGES_ENABLED === 'true',
   // R5 W2b: the CV pool from the slider is accepted (and validated) only with the
   // slider flag on; default off keeps the request shape unchanged.
   cvPoolEnabled: process.env.PRICING_CV_SLIDER_ENABLED === 'true',
-  onPaid: afterStripePayment,
+  onPaid: order => afterStripePayment(order, invoices),
+  onPaidAgain: order => afterStripePayment(order, invoices),
+  events: (raw, signature) => stripeRefundEvent(() => provider.verifyRefund(raw, signature), invoices),
   authenticate: async () => {
     const buyer = await user();
     return buyer?.email_confirmed_at && buyer.email ? { userId: buyer.id } : null;

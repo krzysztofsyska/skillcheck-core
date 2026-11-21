@@ -11,6 +11,9 @@ export type PaymentHttpRuntime = Readonly<{
   appOrigin: string;
   /** Request header that carries the provider's webhook signature (Stripe: stripe-signature). */
   signatureHeader: string;
+  /** R7, optional: provider events outside the order settlement (Stripe charge.refunded).
+   * Verifies the raw body itself; null = not such an event, settle it as before. */
+  events?(raw: Uint8Array, signature: string): Promise<{ state: string } | null>;
 }>;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const json = (data: unknown, status=200) => Response.json(data,{status,headers:{
@@ -138,6 +141,8 @@ export function createSc19PaymentHttp(runtime: PaymentHttpRuntime | null, catalo
       try {
         const raw = await bodyBytes(request,262144);
         const signature = request.headers.get(runtime.signatureHeader) ?? '';
+        const handled = runtime.events ? await runtime.events(raw,signature) : null;
+        if (handled) return json({state:handled.state});
         const result=await runtime.service.notification(raw,signature);
         return json({state:result.state});
       } catch(e) { return errorResponse(e,true); }
