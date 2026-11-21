@@ -162,6 +162,19 @@ test('R6-1e part 2: the Retell webhook ingests as retell_webhook and reaches not
     const before = await acl();
     await db.query(await readFile(migration, 'utf8'));
     assert.equal(await acl(), before);
+    // The postflight refuses a role that holds anything beyond these grants.
+    const body = (await readFile(migration, 'utf8')).replace(/^begin;$/m, '').replace(/^commit;$/m, '');
+    for (const [extra, error] of [['grant select on public.candidates to retell_webhook', 'retell_webhook_relation_exposed'],
+      ['grant select(id) on public.companies to retell_webhook', 'retell_webhook_relation_exposed'],
+      ['grant execute on function private.erasure_purge_engine(uuid,bigint,boolean) to retell_webhook', 'retell_webhook_function_exposed'],
+      ['grant usage on schema public to retell_webhook', 'retell_webhook_function_exposed'],
+      ['grant delete on private.sc011b_voice_attempts to retell_webhook', 'retell_webhook_privilege_too_wide']]) {
+      await db.query('begin');
+      try {
+        await db.query(extra);
+        await assert.rejects(db.query(body), e => e.code === '55000' && e.message === error, extra);
+      } finally { await db.query('rollback'); }
+    }
   });
 
   const call = await placed();

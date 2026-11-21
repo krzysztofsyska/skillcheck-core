@@ -155,20 +155,24 @@ do $postflight$
 begin
  if private.erasure_schema_signature() is distinct from current_setting('r6_retell_webhook_role.signature_before',true) then
   raise exception 'retell_webhook_role_inventory_changed' using errcode='55000';end if;
- -- The role reaches exactly the five relations and four functions above.
- if exists(select 1 from pg_catalog.pg_class c join pg_catalog.pg_namespace n on n.oid=c.relnamespace
-   where c.relkind in ('r','v','m','p','f','S')
+ -- Direct grants to the role: exactly the five relations and four functions above.
+ -- (Read from the ACLs, so privileges some other object gives to PUBLIC on a
+ -- production-shaped database do not count as this role's.)
+ if exists(select 1 from pg_catalog.pg_class c, pg_catalog.aclexplode(c.relacl) a
+   where a.grantee='retell_webhook'::regrole
     and c.oid<>all(array['private.sc011b_voice_attempts','private.sc011b_voice_webhook_receipts',
-     'private.sc011b_voice_transcripts','private.sc010c_voice_preparations','voice_budget.charges']::regclass[])
-    and (pg_catalog.has_table_privilege('retell_webhook',c.oid,'select,insert,update,delete,truncate,references,trigger')
-     or pg_catalog.has_any_column_privilege('retell_webhook',c.oid,'select,insert,update,references'))
-    and n.nspname not in ('pg_catalog','information_schema')) then
+     'private.sc011b_voice_transcripts','private.sc010c_voice_preparations','voice_budget.charges']::regclass[]))
+  or exists(select 1 from pg_catalog.pg_attribute t, pg_catalog.aclexplode(t.attacl) a
+   where a.grantee='retell_webhook'::regrole
+    and t.attrelid<>all(array['private.sc011b_voice_transcripts','voice_budget.charges',
+     'private.sc011b_voice_attempts']::regclass[])) then
   raise exception 'retell_webhook_relation_exposed' using errcode='55000';end if;
- if exists(select 1 from pg_catalog.pg_proc p join pg_catalog.pg_namespace n on n.oid=p.pronamespace
-   where n.nspname in ('private','voice_budget')
+ if exists(select 1 from pg_catalog.pg_proc p, pg_catalog.aclexplode(p.proacl) a
+   where a.grantee='retell_webhook'::regrole
     and p.oid<>all(array['voice_budget.record_call_cost(uuid,uuid,integer)','private.erasure_lock_candidate(uuid)',
-     'private.erasure_normal_row_guard(text,text,text,jsonb,jsonb)','private.erasure_purge_allowed(text,jsonb,text)']::regprocedure[])
-    and pg_catalog.has_function_privilege('retell_webhook',p.oid,'execute')) then
+     'private.erasure_normal_row_guard(text,text,text,jsonb,jsonb)','private.erasure_purge_allowed(text,jsonb,text)']::regprocedure[]))
+  or exists(select 1 from pg_catalog.pg_namespace n, pg_catalog.aclexplode(n.nspacl) a
+   where a.grantee='retell_webhook'::regrole and n.nspname not in ('private','voice_budget')) then
   raise exception 'retell_webhook_function_exposed' using errcode='55000';end if;
  if pg_catalog.has_table_privilege('retell_webhook','private.sc011b_voice_attempts','insert,delete,truncate')
   or pg_catalog.has_column_privilege('retell_webhook','private.sc011b_voice_attempts','provider_call_id','update')
