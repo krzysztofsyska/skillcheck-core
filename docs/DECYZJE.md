@@ -51,16 +51,6 @@ Cytat z polecenia właściciela (układ tabeli i listy zachowany):
 oraz: „Voicebot pozostaje niewidoczny dla klientów do czasu skonfigurowania i zatwierdzenia
 uruchomienia.”
 
-**Korekta w PR #553, 08:51 (komentarz właściciela).** „Właściciel wyjaśnił, że wcześniej pomylił
-limity **analiz CV** z limitami **rozmów voicebota**. Cofnięcie całej koncepcji z poprzedniego
-komentarza było wynikiem nieporozumienia; **nie jest już aktualną dyspozycją**.” oraz „Wcześniejszy
-komentarz o wycofaniu 1/10 jest NIEAKTUALNY. Nie przyjmować zatwierdzenia jako zgody na płatnego
-dostawcę ani koszty.”
-
-**Wycofanie limitów 1/10 w PR #553, 08:42 (komentarz właściciela) — NIEAKTUALNE (20.11.2026, 08:51,
-zob. wyżej).** „Właściciel wprost zakwestionował i COFNĄŁ wcześniejsze ustalenie `FREE = 1 rozmowa`,
-`płatne = 10 rozmów`.” (…) „PR #553 zamknięty bez merge.”
-
 **Potwierdzenie decyzji z 19.11.2026 (Stripe zamiast Przelewy24, voicebot do 50 zł/mies., PR #546).**
 Pytanie czatu: „PR #546 zapisuje Twoje decyzje z 19.11 (Stripe zamiast P24, voicebot do 50 zł/mies.)
 … Odpisz TAK, jeśli tak zdecydowałeś” Właściciel, ok. 08:4x:
