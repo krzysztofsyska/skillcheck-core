@@ -231,6 +231,11 @@ test('reads named columns only: no select *, no buyer data, no writes, no networ
   // Operator gate before any read, and the required Polish messages.
   assert.ok(page.indexOf('await salesOperator()') < page.indexOf('loadInvoicesToReview()'));
   for (const text of ['Faktury do sprawdzenia: ', 'Brak faktur do sprawdzenia', 'Funkcja faktur na żywo nie jest jeszcze włączona w bazie',
-    'Opłacone zamówienie bez faktury', 'Zwrot bez korekty', 'korekta nie została rozpoczęta — wystaw ją ręcznie w Fakturowni'])
+    'Opłacone zamówienie bez faktury', 'Zwrot bez korekty', 'korekta nie została rozpoczęta — najpierw ponów zdarzenie w Stripe',
+    'Najpierw wyślij zdarzenie ponownie z Stripe (Dashboard → Webhooks → zdarzenie → Resend)',
+    'Dokument ręcznie w Fakturowni wystawiaj dopiero wtedy', 'gdy Stripe nadal ponawia zdarzenie', 'może zdublować fakturę lub korektę'])
     assert.ok(page.includes(text), text);
+  // Old instruction to issue documents by hand straight away must not come back.
+  assert.doesNotMatch(page, /wystaw\s+(ją\s+|go\s+|dokument\s+|fakturę\s+|korektę\s+)?ręcznie/i);
+  assert.ok(!page.includes('wystaw ją ręcznie'));
 });
