@@ -12,7 +12,10 @@ export const metadata: Metadata = { title: 'Fakturownia — połączenie | Skill
 const dates = new Intl.DateTimeFormat('pl-PL', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Warsaw' });
 const when = (ms: number | null) => ms === null || !Number.isFinite(ms) ? 'nieznany' : dates.format(new Date(ms));
 const pln = (minor: number) => `${(minor / 100).toFixed(2).replace('.', ',')} zł`;
-const statusLabel: Record<string, string> = { failed: 'błąd', new: 'nie rozpoczęta', pending: 'utknęła w trakcie' };
+const statusLabel: Record<string, string> = { failed: 'błąd', new: 'nie rozpoczęta', pending: 'utknęła w trakcie',
+  missing: 'faktura nie została nawet rozpoczęta' };
+const kindLabel = (i: { kind: string; refundedTotalMinor: number | null }) => i.kind === 'missing' ? 'Opłacone zamówienie bez faktury'
+  : i.kind === 'invoice' ? 'Faktura VAT' : `Korekta (zwrot łącznie ${pln(i.refundedTotalMinor ?? 0)})`;
 
 /** R7: LIVE Stripe invoices and corrections not issued (read only; follow-up to #594). */
 function InvoicesToReview({ review }: { review: InvoiceReviewResult }) {
@@ -29,14 +32,15 @@ function InvoicesToReview({ review }: { review: InvoiceReviewResult }) {
     <h2 id="review">Faktury do sprawdzenia</h2><p className={styles.empty}>Brak faktur do sprawdzenia.</p></section>;
   return <section className={styles.card} role="alert" aria-labelledby="review">
     <h2 id="review">Faktury do sprawdzenia: {review.total}{review.truncated ? '+' : ''}</h2>
-    <p>Płatności na żywo bez wystawionej faktury VAT albo korekty (błąd lub brak postępu od ponad godziny). Wyślij zdarzenie
+    <p>Płatności na żywo bez wystawionej faktury VAT albo korekty (błąd lub brak postępu od ponad godziny), także opłacone
+      ponad godzinę temu zamówienia, dla których faktura w ogóle nie powstała. Wyślij zdarzenie
       ponownie z panelu Stripe (Webhooks → zdarzenie → Resend) albo wystaw dokument ręcznie w Fakturowni.</p>
     <ul className={styles.list}>{review.items.map(i => <li key={`${i.kind}:${i.orderId}:${i.refundedTotalMinor ?? ''}`}>
-      <strong>{i.kind === 'invoice' ? 'Faktura VAT' : `Korekta (zwrot łącznie ${pln(i.refundedTotalMinor ?? 0)})`}</strong>
+      <strong>{kindLabel(i)}</strong>
       {' · '}{statusLabel[i.status] ?? i.status}{i.errorCode ? ` · kod: ${i.errorCode}` : ''} · prób: {i.attempts}
       <br /><span className={styles.hint}>Zamówienie {i.orderId} · płatność Stripe {i.paymentId}</span>
       <br /><span className={styles.hint}>Pierwsza próba: {when(i.firstAttemptMs)} · ostatnia próba: {when(i.lastAttemptMs)}
-        · ostatnia zmiana: {when(i.changedAtMs)}</span>
+        · {i.kind === 'missing' ? 'opłacone' : 'ostatnia zmiana'}: {when(i.changedAtMs)}</span>
     </li>)}</ul>
   </section>;
 }
