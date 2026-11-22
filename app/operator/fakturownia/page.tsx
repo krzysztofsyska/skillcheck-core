@@ -13,8 +13,10 @@ const dates = new Intl.DateTimeFormat('pl-PL', { dateStyle: 'medium', timeStyle:
 const when = (ms: number | null) => ms === null || !Number.isFinite(ms) ? 'nieznany' : dates.format(new Date(ms));
 const pln = (minor: number) => `${(minor / 100).toFixed(2).replace('.', ',')} zł`;
 const statusLabel: Record<string, string> = { failed: 'błąd', new: 'nie rozpoczęta', pending: 'utknęła w trakcie',
-  missing: 'faktura nie została nawet rozpoczęta' };
+  missing: 'faktura nie została nawet rozpoczęta',
+  uncorrected: 'korekta nie została rozpoczęta — wystaw ją ręcznie w Fakturowni' };
 const kindLabel = (i: { kind: string; refundedTotalMinor: number | null }) => i.kind === 'missing' ? 'Opłacone zamówienie bez faktury'
+  : i.kind === 'refund' ? `Zwrot bez korekty (zwrot łącznie ${pln(i.refundedTotalMinor ?? 0)})`
   : i.kind === 'invoice' ? 'Faktura VAT' : `Korekta (zwrot łącznie ${pln(i.refundedTotalMinor ?? 0)})`;
 
 /** R7: LIVE Stripe invoices and corrections not issued (read only; follow-up to #594). */
@@ -33,14 +35,15 @@ function InvoicesToReview({ review }: { review: InvoiceReviewResult }) {
   return <section className={styles.card} role="alert" aria-labelledby="review">
     <h2 id="review">Faktury do sprawdzenia: {review.total}{review.truncated ? '+' : ''}</h2>
     <p>Płatności na żywo bez wystawionej faktury VAT albo korekty (błąd lub brak postępu od ponad godziny), także opłacone
-      ponad godzinę temu zamówienia, dla których faktura w ogóle nie powstała. Wyślij zdarzenie
+      ponad godzinę temu zamówienia, dla których faktura w ogóle nie powstała, i zwroty sprzed ponad godziny, dla których
+      korekta nie została rozpoczęta (taką korektę wystaw ręcznie w Fakturowni). Wyślij zdarzenie
       ponownie z panelu Stripe (Webhooks → zdarzenie → Resend) albo wystaw dokument ręcznie w Fakturowni.</p>
     <ul className={styles.list}>{review.items.map(i => <li key={`${i.kind}:${i.orderId}:${i.refundedTotalMinor ?? ''}`}>
       <strong>{kindLabel(i)}</strong>
       {' · '}{statusLabel[i.status] ?? i.status}{i.errorCode ? ` · kod: ${i.errorCode}` : ''} · prób: {i.attempts}
       <br /><span className={styles.hint}>Zamówienie {i.orderId} · płatność Stripe {i.paymentId}</span>
       <br /><span className={styles.hint}>Pierwsza próba: {when(i.firstAttemptMs)} · ostatnia próba: {when(i.lastAttemptMs)}
-        · {i.kind === 'missing' ? 'opłacone' : 'ostatnia zmiana'}: {when(i.changedAtMs)}</span>
+        · {i.kind === 'missing' ? 'opłacone' : i.kind === 'refund' ? 'zwrot zapisany' : 'ostatnia zmiana'}: {when(i.changedAtMs)}</span>
     </li>)}</ul>
   </section>;
 }

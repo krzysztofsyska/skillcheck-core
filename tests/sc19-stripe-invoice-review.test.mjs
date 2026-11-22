@@ -13,8 +13,9 @@ const at = ms => new Date(ms).toISOString();
 
 /** A fake database: `installed` = migration 20261122090000, `dates` = 20261122110000.
  * `orders` = private.sc19_payment_orders rows, `grants` = { order_id: receipt time },
- * `buyers` = { order_id: nip } (what sc19_stripe.invoice_buyer would return). */
-function fakeDb({ installed = true, dates = true, invoices = [], corrections = [], orders = [], grants = {}, buyers = {} } = {}) {
+ * `buyers` = { order_id: nip } (what sc19_stripe.invoice_buyer would return),
+ * `refunds` = sc19_stripe.refunds rows. */
+function fakeDb({ installed = true, dates = true, invoices = [], corrections = [], orders = [], grants = {}, buyers = {}, refunds = [] } = {}) {
   const sqls = [];
   const query = async (sql, values) => {
     sqls.push(sql);
@@ -31,6 +32,10 @@ function fakeDb({ installed = true, dates = true, invoices = [], corrections = [
       'not exists (select 1 from sc19_stripe.invoice_buyer(o.id) b where b.nip = $3::text)',
       'coalesce((select g.created_at from private.sc19_payment_grants g where g.order_id=o.id), o.created_at) as changed_at',
       'where m.changed_at < $2::timestamptz',
+      "from sc19_stripe.refunds r join private.sc19_payment_orders o on o.id=r.order_id where o.provider='stripe' and o.account='ktig-consulting' and o.mode='live' and r.updated_at < $2::timestamptz",
+      "and exists (select 1 from sc19_stripe.invoices v where v.order_id=r.order_id and v.status<>'skipped')",
+      "and not exists (select 1 from sc19_stripe.invoice_corrections y where y.order_id=r.order_id and y.refunded_total >= r.refunded_total and y.status in ('issued','pending','failed'))",
+      'and not exists (select 1 from sc19_stripe.invoice_buyer(r.order_id) b where b.nip = $3::text)',
     ]) assert.ok(flat.includes(clause), clause);
     const [limit, staleBefore, sellerNip] = values;
     assert.equal(sellerNip, SELLER_NIP);
@@ -50,6 +55,14 @@ function fakeDb({ installed = true, dates = true, invoices = [], corrections = [
         .map(o => ({ kind: 'missing', order_id: o.id, payment_id: o.payment_id, refunded_total: null, status: 'missing', error_code: null,
           attempts: 0, changed_at: grants[o.id] ?? o.created_at, first_attempt_at: null, last_attempt_at: null }))
         .filter(r => Date.parse(r.changed_at) < cut),
+      ...refunds.filter(r => {
+        const o = orders.find(x => x.id === r.order_id);
+        return o && o.provider === 'stripe' && o.account === 'ktig-consulting' && o.mode === 'live' && Date.parse(r.updated_at) < cut
+          && invoices.some(i => i.order_id === r.order_id && i.status !== 'skipped')
+          && !corrections.some(y => y.order_id === r.order_id && y.refunded_total >= r.refunded_total && ['issued', 'pending', 'failed'].includes(y.status))
+          && buyers[r.order_id] !== sellerNip;
+      }).map(r => ({ kind: 'refund', order_id: r.order_id, payment_id: r.payment_id, refunded_total: r.refunded_total, status: 'uncorrected',
+        error_code: null, attempts: 0, changed_at: r.updated_at, first_attempt_at: null, last_attempt_at: null })),
     ].sort((a, b) => Date.parse(a.changed_at) - Date.parse(b.changed_at));
     return rows.slice(0, limit);
   };
@@ -136,6 +149,40 @@ test('a failed correction covered by an issued correction of the same order is n
   assert.deepEqual(review.items.map(i => `${i.kind}:${i.orderId.slice(-2)}:${i.refundedTotalMinor}`), ['correction:22:30000']);
 });
 
+test('a LIVE refund with no correction started is listed; covered, in-flight, control, fresh and TEST refunds are not', async () => {
+  const refund = (n, total, ageMs) => ({ order_id: id(n), payment_id: `pi_fakeintent${n}`, refunded_total: total, updated_at: at(NOW - ageMs) });
+  const db = fakeDb({
+    invoices: [31, 32, 33, 34, 35, 36, 37].map(n => invoice(n, 'issued', 9 * REVIEW_STALE_MS)).concat([invoice(38, 'skipped', 9 * REVIEW_STALE_MS)]),
+    orders: [31, 32, 33, 34, 35, 36, 38, 39].map(n => order(n, 9 * REVIEW_STALE_MS)).concat([order(37, 9 * REVIEW_STALE_MS, { mode: 'test' })]),
+    grants: Object.fromEntries([31, 32, 33, 34, 35, 36, 37, 38, 39].map(n => [id(n), at(NOW - 8 * REVIEW_STALE_MS)])),
+    buyers: Object.fromEntries([31, 32, 33, 34, 35, 36, 37, 38, 39].map(n => [id(n), n === 33 ? SELLER_NIP : '1234563218'])),
+    corrections: [
+      { order_id: id(32), refunded_total: 20000, status: 'issued', changed_at: at(NOW - 3 * REVIEW_STALE_MS) },
+      { order_id: id(35), refunded_total: 20000, status: 'failed', error_code: 'FAKTUROWNIA_TIMEOUT', attempts: 1, changed_at: at(NOW - 2 * REVIEW_STALE_MS) },
+      { order_id: id(36), refunded_total: 5000, status: 'issued', changed_at: at(NOW - 5 * REVIEW_STALE_MS) },
+    ],
+    refunds: [
+      refund(31, 10000, 2 * REVIEW_STALE_MS),   // listed: Stripe read failed, no correction row
+      refund(32, 20000, 4 * REVIEW_STALE_MS),   // covered by the issued correction
+      refund(33, 10000, 4 * REVIEW_STALE_MS),   // seller's control purchase
+      refund(34, 10000, 10 * 60_000),           // fresh: the attempt may still be running
+      refund(35, 20000, 4 * REVIEW_STALE_MS),   // its failed correction row is listed instead (no double listing)
+      refund(36, 15000, 3 * REVIEW_STALE_MS),   // listed: an issued correction covers only 5000
+      refund(37, 10000, 4 * REVIEW_STALE_MS),   // TEST order
+      refund(38, 10000, 4 * REVIEW_STALE_MS),   // invoice skipped
+      refund(39, 10000, 4 * REVIEW_STALE_MS),   // no invoice row: listed as 'missing' only
+    ],
+  });
+  const review = await readInvoicesToReview(db.query, NOW);
+  assert.deepEqual(review.items.map(i => `${i.kind}:${i.orderId.slice(-2)}:${i.status}`),
+    ['missing:39:missing', 'refund:36:uncorrected', 'correction:35:failed', 'refund:31:uncorrected']);
+  const listed = review.items.find(i => i.orderId === id(31));
+  assert.deepEqual({ ...listed }, { kind: 'refund', orderId: id(31), paymentId: 'pi_fakeintent31', status: 'uncorrected', refundedTotalMinor: 10000,
+    errorCode: null, attempts: 0, changedAtMs: NOW - 2 * REVIEW_STALE_MS, firstAttemptMs: null, lastAttemptMs: null });
+  assert.equal(needsReview({ status: 'uncorrected', changedAtMs: NOW - 60_000 }, NOW), false);
+  assert.equal(needsReview({ status: 'uncorrected', changedAtMs: NOW - REVIEW_STALE_MS - 1 }, NOW), true);
+});
+
 test('the JS check agrees with the SQL filter (a row the database returns is still re-checked)', () => {
   assert.equal(needsReview({ status: 'failed', changedAtMs: NOW }, NOW), true);
   assert.equal(needsReview({ status: 'pending', changedAtMs: NOW - REVIEW_STALE_MS - 1 }, NOW), true);
@@ -178,11 +225,12 @@ test('reads named columns only: no select *, no buyer data, no writes, no networ
   assert.doesNotMatch(runtime, /invoice_buyer|\bnip\b/i);
   const buyerUses = src.match(/[^\n]*(invoice_buyer|\bnip\b)[^\n]*/gi) ?? [];
   assert.deepEqual(buyerUses.map(l => l.trim()),
-    ['and not exists (select 1 from sc19_stripe.invoice_buyer(o.id) b where b.nip = $3::text)) m']);
+    ['and not exists (select 1 from sc19_stripe.invoice_buyer(o.id) b where b.nip = $3::text)) m',
+      'and not exists (select 1 from sc19_stripe.invoice_buyer(r.order_id) b where b.nip = $3::text)']);
   const page = readFileSync(new URL('../app/operator/fakturownia/page.tsx', import.meta.url), 'utf8');
   // Operator gate before any read, and the required Polish messages.
   assert.ok(page.indexOf('await salesOperator()') < page.indexOf('loadInvoicesToReview()'));
   for (const text of ['Faktury do sprawdzenia: ', 'Brak faktur do sprawdzenia', 'Funkcja faktur na żywo nie jest jeszcze włączona w bazie',
-    'Opłacone zamówienie bez faktury'])
+    'Opłacone zamówienie bez faktury', 'Zwrot bez korekty', 'korekta nie została rozpoczęta — wystaw ją ręcznie w Fakturowni'])
     assert.ok(page.includes(text), text);
 });

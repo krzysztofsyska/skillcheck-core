@@ -17,6 +17,14 @@
  * claim, e.g. no Fakturownia configuration or no buyer data; Codex P2 on #597). The
  * seller's own control purchase is never invoiced, so it is left out: its NIP is
  * compared inside the database through sc19_stripe.invoice_buyer and never returned.
+ * Kind 'refund' (Codex P2 on #597): a LIVE refund recorded in sc19_stripe.refunds
+ * whose total no correction row covers yet: handleRefund saved it, but the correction
+ * never started (e.g. reading the payment from Stripe failed before startCorrection),
+ * so invoice_corrections has no row. Listed when the refund was recorded over an hour
+ * ago, no ISSUED correction covers its total and no pending or failed correction row
+ * for that total or more exists (that row is listed itself or is in flight). Needs an
+ * invoice row that is not 'skipped' (no row: the order is listed as 'missing'); the
+ * control purchase is left out the same way as for 'missing'.
  * The paid time is the settlement receipt (private.sc19_payment_grants.created_at),
  * or the order's created_at when there is no receipt (the orders table has no paid
  * or updated time; created_at is never later than the payment).
@@ -28,9 +36,10 @@ export const REVIEW_STALE_MS = 3_600_000;
 export const REVIEW_READ_LIMIT = 500;
 
 export type InvoiceReviewItem = Readonly<{
-  /** 'missing': a paid LIVE order with no invoice row (status 'missing', attempts 0). */
-  kind: 'invoice' | 'correction' | 'missing'; orderId: string; paymentId: string; status: string;
-  /** Cumulative refunded total of a correction, in grosz (null for an invoice). */
+  /** 'missing': a paid LIVE order with no invoice row (status 'missing', attempts 0).
+   * 'refund': a recorded LIVE refund with no correction started (status 'uncorrected', attempts 0). */
+  kind: 'invoice' | 'correction' | 'missing' | 'refund'; orderId: string; paymentId: string; status: string;
+  /** Cumulative refunded total of a correction or refund, in grosz (null for an invoice). */
   refundedTotalMinor: number | null; errorCode: string | null; attempts: number;
   changedAtMs: number; firstAttemptMs: number | null; lastAttemptMs: number | null;
 }>;
@@ -44,12 +53,12 @@ const ms = (v: unknown) => v === null || v === undefined ? null : new Date(v ins
 /** True when this row is a document the operator must look at. */
 export function needsReview(item: Pick<InvoiceReviewItem, 'status' | 'changedAtMs'>, nowMs: number): boolean {
   if (item.status === 'failed') return true;
-  return (item.status === 'new' || item.status === 'pending' || item.status === 'missing') && Number.isFinite(item.changedAtMs) && nowMs - item.changedAtMs > REVIEW_STALE_MS;
+  return ['new', 'pending', 'missing', 'uncorrected'].includes(item.status) && Number.isFinite(item.changedAtMs) && nowMs - item.changedAtMs > REVIEW_STALE_MS;
 }
 
 function itemOf(r: Record<string, unknown>): InvoiceReviewItem {
   return {
-    kind: r.kind === 'correction' || r.kind === 'missing' ? r.kind : 'invoice', orderId: String(r.order_id), paymentId: String(r.payment_id ?? ''),
+    kind: r.kind === 'correction' || r.kind === 'missing' || r.kind === 'refund' ? r.kind : 'invoice', orderId: String(r.order_id), paymentId: String(r.payment_id ?? ''),
     status: String(r.status), refundedTotalMinor: r.refunded_total === null || r.refunded_total === undefined ? null : Number(r.refunded_total),
     errorCode: typeof r.error_code === 'string' ? r.error_code : null, attempts: Number(r.attempts ?? 0),
     changedAtMs: ms(r.changed_at) ?? Number.NaN, firstAttemptMs: ms(r.first_attempt_at), lastAttemptMs: ms(r.last_attempt_at),
@@ -92,6 +101,16 @@ export async function readInvoicesToReview(query: Query, nowMs: number): Promise
           and not exists (select 1 from sc19_stripe.invoices n where n.order_id=o.id)
           and not exists (select 1 from sc19_stripe.invoice_buyer(o.id) b where b.nip = $3::text)) m
       where m.changed_at < $2::timestamptz
+      union all
+      select 'refund' as kind, r.order_id, r.payment_id, r.refunded_total, 'uncorrected' as status,
+        null::text as error_code, 0 as attempts, r.updated_at as changed_at,
+        null::timestamptz as first_attempt_at, null::timestamptz as last_attempt_at
+      from sc19_stripe.refunds r join private.sc19_payment_orders o on o.id=r.order_id
+      where o.provider='stripe' and o.account='ktig-consulting' and o.mode='live' and r.updated_at < $2::timestamptz
+        and exists (select 1 from sc19_stripe.invoices v where v.order_id=r.order_id and v.status<>'skipped')
+        and not exists (select 1 from sc19_stripe.invoice_corrections y where y.order_id=r.order_id
+          and y.refunded_total >= r.refunded_total and y.status in ('issued','pending','failed'))
+        and not exists (select 1 from sc19_stripe.invoice_buyer(r.order_id) b where b.nip = $3::text)
     ) d order by d.changed_at asc limit $1`, [REVIEW_READ_LIMIT, new Date(nowMs - REVIEW_STALE_MS).toISOString(), SELLER_NIP]);
   const items = rows.map(itemOf).filter(i => needsReview(i, nowMs));
   return { state: 'ok', items, total: items.length, truncated: rows.length >= REVIEW_READ_LIMIT };
