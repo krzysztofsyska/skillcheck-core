@@ -49,3 +49,18 @@ Hasło loginu i dwa klucze generuje baza, a wartości widzi tylko właściciel. 
 Ryzyko do sprawdzenia przy pierwszym uruchomieniu: połączenie Vercel → bezpośredni host bazy
 (`db.…supabase.co:5432`). Gdy nie zadziała (odpowiedź 503), agent opisze to jako blokadę z propozycją —
 bez płatnych dodatków bez zgody właściciela.
+
+## Wykonanie (25.11.2026)
+
+- Właściciel wpisał trzy klucze (Preview, gałąź `integration`, Sensitive) — potwierdzone w Vercel
+  tylko po metadanych, bez odczytu wartości.
+- Baza Preview: login `competency_gateway_preview` ma `LOGIN`, bez `SUPERUSER` i `BYPASSRLS`;
+  funkcja ogranicznika `consume_competency_rate_limit` jest w bazie.
+- Agent ustawił jawne zmienne tylko dla Preview `integration`: `COMPETENCY_BROKER_LIMITER=postgres`,
+  `COMPETENCY_BROKER_ORIGIN=https://skillcheck-core-git-integration-krzysztofs-projects-b7ce87b5.vercel.app`,
+  `EXERCISE_AI_ENABLED=true`, `COMPETENCY_BROKER_ENABLED=true`, `COMPETENCY_CANDIDATE_PREVIEW=true`.
+  Produkcja bez zmian.
+- Zmienne zaczynają działać od następnego wdrożenia Preview `integration` (po scaleniu PR z tą notatką).
+- Połączenie Vercel → `db.orbyscrupgnupifzlqxp.supabase.co:5432` i przejście ścieżki na stronie: NOT RUN
+  (wymaga nowego wdrożenia). Odpowiedź 503 z `/zadanie-kompetencyjne` = blokada sieciowa, do opisania
+  z propozycją bez płatnych dodatków.
