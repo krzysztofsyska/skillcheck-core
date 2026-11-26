@@ -82,9 +82,11 @@ bo jego sprawdzenie odbywa się dopiero przy żądaniu.
    Prawdopodobna przyczyna: bezpośredni adres bazy `db.orbyscrupgnupifzlqxp.supabase.co` ma tylko adres
    IPv6 (DNS: rekord AAAA jest, rekordu A nie ma), a funkcje Vercel łączą się wyłącznie po IPv4. To ryzyko
    było opisane w `docs/checks/r1-preview-setup-2026-11-18.md`.
-   Naprawa po stronie agenta, bez nowego sekretu i bez kosztów: osobny PR R1 pozwala pośrednikowi łączyć
-   się przez darmowy pooler Supabase (tryb sesji, adres IPv4), z hostem poolera w jawnej zmiennej tylko dla
-   Preview; hasło zostaje w obecnym sekrecie. Płatny dodatek IPv4 Supabase nie jest potrzebny.
+   Naprawa po stronie agenta, bez nowego sekretu i bez kosztów: PR #602 (scalony do `integration`,
+   `4fc9f13`) pozwala pośrednikowi łączyć się przez darmowy pooler Supabase (tryb sesji, adres IPv4);
+   hasło zostaje w obecnym sekrecie. Płatny dodatek IPv4 Supabase nie jest potrzebny.
+   Następny krok (agent, bez właściciela): ustawić jawną zmienną `COMPETENCY_BROKER_GATEWAY_POOLER_HOST`
+   tylko dla Preview gałęzi `integration`, poczekać na nowe wdrożenie Preview i powtórzyć krok 1.
 2. **Hasło do konta rekrutera testowego (kroki 3a i 8b).** Propozycja agenta: ustawić hasło wyłącznie dla
    konta testowego w `example.com` w bazie Preview, bez zmian na produkcji i bez prawdziwych danych.
    **TAK/NIE?** Rekomendacja: TAK. Powód: zmienia to dane logowania, więc potrzebna jest Twoja zgoda.
