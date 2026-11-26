@@ -85,8 +85,15 @@ bo jego sprawdzenie odbywa się dopiero przy żądaniu.
    Naprawa po stronie agenta, bez nowego sekretu i bez kosztów: PR #602 (scalony do `integration`,
    `4fc9f13`) pozwala pośrednikowi łączyć się przez darmowy pooler Supabase (tryb sesji, adres IPv4);
    hasło zostaje w obecnym sekrecie. Płatny dodatek IPv4 Supabase nie jest potrzebny.
-   Następny krok (agent, bez właściciela): ustawić jawną zmienną `COMPETENCY_BROKER_GATEWAY_POOLER_HOST`
-   tylko dla Preview gałęzi `integration`, poczekać na nowe wdrożenie Preview i powtórzyć krok 1.
+   Zmienna `COMPETENCY_BROKER_GATEWAY_POOLER_HOST` ustawiona 26.11.2026 tylko dla Preview gałęzi `integration`.
+   Powtórzenie kroku 1 (26.11.2026, `dpl_B4ph818QpqxsPWmQZBfebcYk91vL`, commit `243bc38`): nadal 503, ale log
+   pokazuje `{"reason":"limiter_unavailable","detail":"verify_privileges"}` — połączenie przez pooler działa.
+   Przyczyna (odczyt katalogu ról w bazie Preview, bez danych i sekretów): obie role pośrednika mają po 2
+   „zakazane relacje” — to widoki `extensions.pg_stat_statements` i `extensions.pg_stat_statements_info`,
+   które Supabase domyślnie udostępnia do odczytu wszystkim (PUBLIC). Role nie mają dostępu do schematu
+   `extensions`, więc tych widoków i tak nie mogą użyć. Kontrola logowania parametrów przechodzi
+   (ustawienia na roli). Poprawka: kontrola liczy tylko relacje w schematach, do których rola ma dostęp
+   (tak jak kontrola funkcji) — PR #603. Następny krok (agent): po scaleniu PR #603 powtórzyć krok 1.
 2. **Hasło do konta rekrutera testowego (kroki 3a i 8b).** Propozycja agenta: ustawić hasło wyłącznie dla
    konta testowego w `example.com` w bazie Preview, bez zmian na produkcji i bez prawdziwych danych.
    **TAK/NIE?** Rekomendacja: TAK. Powód: zmienia to dane logowania, więc potrzebna jest Twoja zgoda.

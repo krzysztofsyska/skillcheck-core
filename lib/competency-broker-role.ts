@@ -74,8 +74,12 @@ select r.rolname as role_name, r.rolname=session_user as is_login,
     or (has_schema_privilege(r.oid,n.oid,'USAGE')
       and n.nspname <> 'public'
       and not (r.rolname='competency_test_gateway' and n.nspname='private')))) as forbidden_schemas,
+ -- Without schema USAGE a relation cannot be referenced (Supabase grants SELECT to PUBLIC on
+ -- extensions.pg_stat_statements*). USAGE on any schema except public (and private for the
+ -- gateway role) is already rejected by forbidden_schemas, so public/private stay fully audited.
  (select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace
   where n.nspname !~ '^(pg_|information_schema$)' and c.relkind in ('r','p','v','m','f')
+   and has_schema_privilege(r.oid,n.oid,'USAGE')
    and (has_table_privilege(r.oid,c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
     or has_any_column_privilege(r.oid,c.oid,'SELECT,INSERT,UPDATE,REFERENCES'))) as forbidden_relations,
  (select count(*)::int from pg_class c join pg_namespace n on n.oid=c.relnamespace

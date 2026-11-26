@@ -18,6 +18,18 @@ test('B3 actual composed SQL admits only exact LOGIN and gateway privileges',asy
   finally { await db.exec('set session authorization '+admin+';set role '+admin); }
  };
  await audit();
+ // Supabase grants SELECT to PUBLIC on views in schema extensions; without schema USAGE they are
+ // unreachable and must not fail the audit, but with USAGE the role is rejected.
+ await db.exec('create schema if not exists extensions;create view extensions.sc014_b3_public_view as select 1 as x;grant select on extensions.sc014_b3_public_view to public');
+ try {
+  await audit();
+  for(const role of [user,'competency_test_gateway']) {
+   await db.exec('grant usage on schema extensions to '+role);
+   try { await assert.rejects(audit(),/Unsafe gateway/); }
+   finally { await db.exec('revoke usage on schema extensions from '+role); }
+   await audit();
+  }
+ } finally { await db.exec('drop view extensions.sc014_b3_public_view'); }
  for(const role of [user,'competency_test_gateway']) {
   for(const [grant,revoke] of [
    ['grant select on public.applications to '+role,'revoke select on public.applications from '+role],
