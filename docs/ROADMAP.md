@@ -65,7 +65,7 @@ automatycznie. W obu trybach test dostaje tylko kandydat z shortlisty (reguła R
 | B — sekcje ćwiczeń i etapów rekrutacji (dane, ekran, wydruk A4) | ZROBIONE | PR #501, #505 |
 | C — ekran raportu i wydruk A4 | ZROBIONE | PR #483 |
 | D — eksport CSV z rejestrem dostępu, historia eksportów (raport i firma) | ZROBIONE | PR #476, #477, #482 |
-| Przejście całego raportu na Preview na danych testowych | DO SPRAWDZENIA (częściowo — zob. `docs/checks/r2-preview-walk-2026-11-18.md`) | sprawdzenie 18.11.2026; poprawka B1: PR #521; O1 (grupy „nieaktualny”) — PR #520; ponowne sprawdzenie B1 i O1 na Preview: PASS (baza i kod; ekran NOT RUN), brakuje testu kompetencji (zmienne Vercel) — PR #524 |
+| Przejście całego raportu na Preview na danych testowych | DO SPRAWDZENIA (prawie gotowe: 26.11.2026 na Preview po zalogowaniu rekrutera testowego przeszły na ekranie wymagania z CV, test kompetencji, ćwiczenia, etapy i decyzja, wydruk A4, CSV z rejestrem i historią, B1 i O1 — PASS; zostaje widok historii eksportów firmy jako właściciel firmy — NOT RUN, brak konta właściciela firmy testowej) | sprawdzenie 18.11.2026; poprawka B1: PR #521; O1 (grupy „nieaktualny”) — PR #520; ponowne sprawdzenie B1 i O1: PR #524; przejście 26.11.2026: `docs/checks/r2-preview-walk-2026-11-26.md`, zrzuty w `docs/checks/screens-r2-2026-11-26/` |
 
 ### R3. Assessment Center — pełny przepływ (etap 3, issue #338)
 
