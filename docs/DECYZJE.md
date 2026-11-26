@@ -13,6 +13,71 @@
 4. Decyzje sprzed 16.11.2026 są w historii git plików `AGENTS.md` i `CLAUDE.md` (stan sprzed
    17.11.2026) oraz w `docs/BACKLOG.md` (archiwum).
 
+## 26.11.2026
+
+**Przegląd SC-000–SC-021 (remanent dla właściciela z 18.11.2026).** Rozmowa głosowa z czatem
+(sesja https://claude.ai/code/session_01TVLzgbbxM3SKcesjeKv4nC), rano i wieczorem. Pełna lista
+z opisem kroków: dokument Google „SkillCheck Core — decyzje właściciela z przeglądu SC-000–SC-021”
+(folder „Projektownia – Fabryka Aplikacji”). Poniżej odpowiedź właściciela i propozycja czatu, na
+którą odpowiadał.
+
+- SC-000, 08:11 **„Tak, zgadzam się, żeby SC00 było pustym numerem.”** — na: „Rekomenduję zostawić
+  ten numer pusty, z dopiskiem „nieodnalezione”, i nic pod nim nie budować.”
+- SC-001, 08:12 **„Tak, może być.”** — na: „Rekomenduję zostawić to jako zrobione i nie robić
+  osobnej kontroli, tylko sprawdzić przy końcowym teście całej aplikacji.”
+- SC-002, 08:13 **„Tak.”** — na: „Rekomenduję dokończyć to teraz, bo od zgodności bazy zależy pełny
+  test preselekcji i każdy kolejny krok. Automat porówna bazę z aplikacją i spisze różnice,
+  a produkcję ruszy dopiero po kopii bezpieczeństwa i Twojej zgodzie.”
+- SC-003, 08:14 **„Tak.”** — na: „Rekomenduję nie projektować tego od nowa, tylko raz sprawdzić, czy
+  zasady zgadzają się z obecną analizą CV i raportami. Najlepiej przy okazji pełnego testu
+  preselekcji”.
+- SC-004, 08:15 **„Tak.”** — na: „Rekomenduję zrobić ten test teraz na dwóch fikcyjnych firmach.”
+- SC-005, 08:16 **„Tak, proszę.”** — na: „Rekomenduję dokończyć to teraz jako pierwszy pełny test na
+  fikcyjnych CV. Od tego zależą wszystkie następne punkty preselekcji.”
+- SC-006, 08:17 **„Tak.”** — na: „Rekomenduję dokończyć to teraz, razem z testem z poprzedniego
+  punktu.”
+- SC-007, 08:18 **„Tak.”** — na: „Rekomenduję dokończyć to teraz, razem z testem preselekcji.”
+- SC-008, 08:19 **„Tak.”** — na: „Rekomenduję dokończyć to teraz, przechodząc przykładową rekrutację
+  od ocenionych CV do zatwierdzonej krótkiej listy.”
+- SC-009, 08:20 **„Tak.”** — na: „Rekomenduję dokończyć to teraz jako zamknięcie testu preselekcji,
+  a na koniec pokazać Ci gotowy raport z fikcyjnej rekrutacji do akceptacji.”
+- SC-010, 08:22 **„Tak.”** — na: „Zgadzasz się na moją propozycję dla SC-010: teraz zgody i usuwanie
+  danych na fikcyjnych danych, a wysyłanie wiadomości później?”
+- SC-011, 21:56 **„Na razie możemy wstrzymać.”**; SC-012, 21:57 **„Tak.”**; SC-013, 21:57
+  **„Wstrzymujemy.”** — NIEAKTUALNE (26.11.2026, 22:10), zob. niżej.
+- SC-014, 21:58 **„Tak. Zgadzam się.”** — na: „Polecam dokończyć to teraz, zaraz po preselekcji
+  i uporządkowaniu bazy, i sprawdzić oba sposoby wysyłania testu.”
+- SC-015, 21:58 **„Tak.”** — na: „Polecam dokończyć to teraz, po testach kompetencji, i pokazać Ci
+  jeden pełny raport z fikcyjnej rekrutacji do akceptacji.”
+- SC-016, 21:59 **„Tak.”** — na: „Polecam zrobić to teraz, ale dopiero po Weryfikacji: najpierw
+  uporządkować dostęp i powiązanie zakupu z uprawnieniami, potem przetestować sesję na fikcyjnych
+  uczestnikach.”
+- SC-017, 21:59 **„Tak.”** — na: „Polecam go odłożyć i wrócić, kiedy ruszy sprzedaż i pojawią się
+  prawdziwe dane z rekrutacji”.
+- SC-018, 22:00 **„Tak.”** — na: „Polecam go odłożyć, dopóki nie uporządkujemy zgód, usuwania danych
+  i głównych produktów”.
+- SC-019, 22:01 **„Tak.”** (po pytaniu właściciela „Czyli co? Czyli będzie na skill check
+  preselekcja?”) — NIEAKTUALNE (26.11.2026, 22:10), zob. niżej.
+- SC-020, 22:03 **„Wiesz co, mnie to nie przeszkadza. Możemy wziąć już niektóre elementy z white
+  label robić.”** oraz **„Bo są moce przerobowe, jeżeli chodzi o tokeny.”** — na propozycję: „Ten
+  jeden test na dwóch fikcyjnych firmach zróbmy zaraz po głównych produktach, a sprzedaż niech czeka
+  na klienta.”
+- SC-021, 22:04 **„Tak.”** — na: „Skoro są wolne moce, polecam przetestować to teraz, równolegle, na
+  fikcyjnych firmach, a włączyć przed pierwszą płatną sprzedażą.”
+
+**Korekta SC-011–SC-013 i SC-019 (czat pisany, 22:10).** Czat wyjaśnił, że rekomendacje z rozmowy
+głosowej opierały się na remanencie z 18.11.2026, nowszym niż który są decyzje z 18–19.11.2026
+(voicebot R6, Stripe w core R7). Pytania czatu i odpowiedzi właściciela (wybór opcji):
+
+- „Voicebot (SC-011–SC-013). Rano zdecydowałeś „wstrzymać”, ale od 18.11 voicebot jest budowany
+  równolegle i sporo jest już zrobione (…). Co robimy?” — właściciel: **„Budować dalej (polecam)”**
+  (opcja: „Zostawiamy, jak było od 18.11.”).
+- „Płatności (SC-019). Rano zdecydowałeś „jeden sklep w Preselekcji”. Od 19.11 Stripe jest jednak
+  budowany także w Core (…). Co robimy?” — właściciel: **„Sklep w Core (polecam)”** (opcja: „Kończymy
+  to, co prawie gotowe.”).
+
+Uwaga: „(…)” to skrót pytania czatu w tym zapisie; pełne brzmienie jest w sesji podanej wyżej.
+
 ## 20.11.2026
 
 **Uruchomienie Stripe na żywo w core: prawdziwe płatności, faktury z Fakturowni, sekret webhooka.**
@@ -174,6 +239,7 @@ w repozytorium nie ma.
 - „Zatwierdzanie testów. 6 listopada zdecydowałeś, że rekruter może puścić testy automatycznie (…).
   Poprawię zapis na Twoją wersję.”
 - „White-label i bramka AI (SC-020, SC-021). Polecam wstrzymać je do pierwszej sprzedaży.”
+  NIEAKTUALNE (26.11.2026) — zob. przegląd SC-000–SC-021 z 26.11.2026.
 
 Uwaga: „(…)” to skrót samej rekomendacji czatu w poleceniu, z którego pochodzi cytat; pełniejszego
 brzmienia w repozytorium nie ma. Dosłowną odpowiedzią właściciela na wszystkie pięć pozycji jest

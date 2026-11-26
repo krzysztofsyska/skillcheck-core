@@ -39,10 +39,39 @@ Wykonawca bierze pierwszy wolny krok z najwyższej pozycji, pomijając pozycje o
 
 Ceny pakietów: [docs/cennik-2026-11-02.md](cennik-2026-11-02.md) (jedyne źródło liczb).
 
+Kolejność ustalona w przeglądzie SC-000–SC-021 (26.11.2026, `docs/DECYZJE.md`): najpierw R0, potem
+R1 (SC-014), R2 (SC-015), R3 (SC-016) i R7 (SC-019). R6 bez zmian. R8 i R9 idą równolegle,
+z niższym priorytetem: może je brać osobna sesja wykonawcy, ale nie mogą blokować R0–R3 ani R7.
+Przypisanie wszystkich numerów SC — w sekcji „Rejestr numerów SC” niżej.
+
+### R0. Fundament i preselekcja CV w core — pełny test (SC-002–SC-010, od 26.11.2026)
+
+Testy na Preview (`skillcheck-preview`) i danych fikcyjnych. Na produkcji tylko odczyt i testy
+dymne publikatora; zmiany bazy produkcyjnej wyłącznie przez `db-migrate-production` po zgodzie
+właściciela. Kroki SC-005–SC-009 to jedna droga klienta: wgranie CV → analiza AI → zatwierdzenie →
+ranking i shortlista → raport i pobranie.
+
+| Krok | Gotowe, gdy | Status | Dowód |
+|---|---|---|---|
+| SC-002 — zgodność bazy: Preview, produkcja i kod (produkcja ma wszystkie migracje z `main` od 25.11.2026, zob. R7) | jest raport różnic (`docs/checks/`); każda różnica jest poprawiona albo opisana jako osobny krok; ponowne porównanie nie pokazuje rozbieżności | DO ZROBIENIA | — |
+| SC-004 — izolacja firm: dwie fikcyjne firmy, różne role, praca równoczesna | automatyczny test w stałym zestawie testów pokazuje, że żadna firma nie widzi ani nie zmienia ocen, historii i danych drugiej | DO ZROBIENIA | — |
+| SC-005 + SC-006 — droga CV → wynik na ekranie dla ról: zarządzający, rekruter, tylko odczyt | test końcowy przechodzi na Preview; każda ocena ma uzasadnienie cytatem z CV; każda rola widzi i robi tylko to, co powinna | DO ZROBIENIA (analiza AI na Preview wymaga klucza dostawcy AI — zob. „Czeka na właściciela”) | — |
+| SC-007 — brak podwójnego liczenia i oznaczanie starych wyników (po zmianach wgrywania wielu CV) | test: równoczesne próby i ponowienia zużywają limit raz; zmiana CV lub wymagań oznacza wynik jako nieaktualny | DO ZROBIENIA | — |
+| SC-003 — zgodność zapisu ocen z projektem (#4) | krótka lista zgodności i różnic w `docs/checks/`; różnice poprawione albo opisane jako osobne kroki | DO ZROBIENIA (razem z SC-005) | — |
+| SC-008 — ranking i shortlista, także przy ocenie niepełnej lub nieaktualnej | test od ocenionych CV do zatwierdzonej shortlisty przechodzi; ocena niepełna lub nieaktualna jest wyraźnie oznaczona | DO ZROBIENIA | — |
+| SC-009 — raport z preselekcji i pobranie pliku | test całej drogi przechodzi na Preview; przykładowy raport (zrzuty i plik w `docs/checks/`) wskazany w raporcie statusu do akceptacji właściciela | DO ZROBIENIA | — |
+| SC-010 cz. A — zgody i usuwanie danych kandydata, bez wysyłania wiadomości | test na fikcyjnych kandydatach: zgody (kanały, godziny, historia) zapisane i respektowane; po żądaniu usunięcia danych nie ma w bazie, plikach CV, raportach i eksportach | DO ZROBIENIA | — |
+| SC-001 — aplikacja się uruchamia, strona działa, jest połączenie z bazą | punkt w końcowym teście całej aplikacji przechodzi; bez osobnego zadania | DO ZROBIENIA (w końcowym teście) | — |
+
+SC-010 cz. B (prawdziwe wysyłki wiadomości) — wstrzymane, wraca razem z prawdziwymi rozmowami R6.
+
 ### R1. Test kompetencji dla kandydata (etap 2)
 
 Rekruter wybiera dla rekrutacji: zatwierdza zadania sam albo testy generują się i wychodzą
 automatycznie. W obu trybach test dostaje tylko kandydat z shortlisty (reguła R1, pilnowana w bazie).
+
+Przegląd 26.11.2026: to SC-014. Gotowe, gdy test końcowy obu trybów (ręczny i automatyczny)
+przechodzi od wysłania testu do wyniku u rekrutera i w raporcie. Następne kroki po R0.
 
 | Krok | Status | Dowód |
 |---|---|---|
@@ -57,6 +86,10 @@ automatycznie. W obu trybach test dostaje tylko kandydat z shortlisty (reguła R
 
 ### R2. Rozszerzony raport kandydata, bez części głosowej (etap 2)
 
+Przegląd 26.11.2026: to SC-015. Zostaje: po R1 jedna pełna próbna rekrutacja i raport FREE
+i WERYFIKACJA (oceny, cytaty, historyczne wersje, uprawnienia, wydruk) wskazany w raporcie statusu
+do akceptacji właściciela.
+
 | Krok | Status | Dowód |
 |---|---|---|
 | A — opis raportu (CV, test, ćwiczenia, etapy) | ZROBIONE | PR #269, #498 |
@@ -68,6 +101,10 @@ automatycznie. W obu trybach test dostaje tylko kandydat z shortlisty (reguła R
 | Przejście całego raportu na Preview na danych testowych | ZROBIONE (26.11.2026 na Preview: wymagania z CV, test kompetencji, ćwiczenia, etapy i decyzja, wydruk A4, CSV z rejestrem i historią, B1 i O1 — PASS jako rekruter; widok historii eksportów firmy jako właściciel firmy — PASS na osobnej firmie testowej, w tym brak danych obcych firm i komunikat dla rekrutera; NOT RUN: stronicowanie przy 100+ wpisach i wpis byłego członka firmy „former_member”) | sprawdzenie 18.11.2026; poprawka B1: PR #521; O1 (grupy „nieaktualny”) — PR #520; ponowne sprawdzenie B1 i O1: PR #524; przejście 26.11.2026: `docs/checks/r2-preview-walk-2026-11-26.md`, zrzuty w `docs/checks/screens-r2-2026-11-26/`; widok właściciela 26.11.2026: `docs/checks/r2-preview-walk-2026-11-26b.md`, zrzuty w `docs/checks/screens-r2-2026-11-26b/` (PR #607) |
 
 ### R3. Assessment Center — pełny przepływ (etap 3, issue #338)
+
+Przegląd 26.11.2026: to SC-016, po R2. Gotowe, gdy jest zasada, kto może być asesorem, pełna sesja
+z dwoma asesorami na fikcyjnych uczestnikach przechodzi od ćwiczeń do raportu, a konto bez pakietu
+AC nie ma dostępu (konto z pakietem ma).
 
 | Krok | Status | Dowód |
 |---|---|---|
@@ -101,6 +138,9 @@ Zamrożenie ścieżki płatności zdjęte 19.11.2026 (`docs/DECYZJE.md`). Ceny w
 
 ### R6. Voicebot — równolegle z R1–R3 (od 18.11.2026)
 
+Przegląd 26.11.2026: SC-011 i SC-012 — budowa trwa bez zmian (korekta właściciela 26.11.2026,
+22:10). SC-013 (ocena treści rozmów) zostaje wstrzymane.
+
 Docelowo w każdym pakiecie: FREE 1 próbna rozmowa, PRESELEKCJA 10, WERYFIKACJA 10, ASSESSMENT CENTER 10;
 po wykorzystaniu puli klient będzie mógł dokupić kolejne rozmowy — cena, wielkość dodatkowej puli,
 ważność i sposób zakupu NIEUSTALONE (decyzja 20.11.2026, `docs/DECYZJE.md`). Pula z pakietu jest ważna
@@ -123,6 +163,11 @@ miesięcznie, z limitem pilnowanym w aplikacji (decyzja 19.11.2026, `docs/DECYZJ
 Decyzja 19.11.2026 (`docs/DECYZJE.md`): Stripe zamiast Przelewy24, to samo konto KTIG Consulting co
 `skillcheck-preselekcja`. Prawdziwe pieniądze dopiero po wpisaniu kluczy na żywo przez właściciela.
 
+Przegląd 26.11.2026: to SC-019. Sklep WERYFIKACJI i ASSESSMENT CENTER zostaje w core (korekta
+właściciela 26.11.2026, 22:10); bez połączenia ze sklepem `skillcheck-preselekcja`. Gotowe, gdy na
+fikcyjnej firmie przechodzi: zakup (tryb testowy Stripe) → zapłata → otwarty właściwy pakiet
+i limity → wykorzystanie; bez zakupu dostępu nie ma.
+
 | Krok | Status | Dowód |
 |---|---|---|
 | Zdjęcie `PAYMENT_PATH_FREEZE` z publikatora (`.github/workflows/auto-release.yml`) i testów polityki wydań | ZROBIONE (zamrożenie usunięte w całości: `PAYMENT_PATH_FREEZE` i `PAYMENT_CONTENT_FREEZE`; zostaje tylko blokada kodu, który rusza pieniądze lub faktury — `PAYMENTS`; na `main` od promocji PR #566, 21.11.2026) | kod: PR #564, zasady: PR #565, na `main`: PR #566 |
@@ -131,11 +176,44 @@ Decyzja 19.11.2026 (`docs/DECYZJE.md`): Stripe zamiast Przelewy24, to samo konto
 | Usunięcie kodu Przelewy24 | ZROBIONE (część 1: kod płatności, trasy, panel operatora i ekran zakupu bez Przelewy24; cz. 2 (teksty stron): PR #567 — teksty stron publicznych i kalkulatora mówią o Stripe; cz. 3 (dokumenty prawne): PR #570 — regulamin i polityka prywatności nazywają Stripe, wersja zgody r4, także w wersji .docx; archiwalne dokumenty P24 w `docs/` oznaczone jako nieaktualne: PR #571; cz. 4 (komponent zakupu): PR #575 — usunięte martwe gałęzie Przelewy24 w komponencie zakupu (sandbox, kody P24, tekst PayPro); cz. 5 (CI): PR #576 — usunięte wpisy nieistniejących plików Przelewy24 z workflow płatności; cz. 6 (polityka prywatności § 6 — Stripe wśród dostawców poza EOG, także w .docx): PR #579; testy pilnujące, że kod Przelewy24 nie wraca, zostają) | PR #562, PR #567; dokumenty prawne: PR #570; dokumentacja archiwalna: PR #571; komponent zakupu: PR #575; CI: PR #576; polityka prywatności § 6: PR #579 |
 | Limit kosztu rozmów voicebota 50 zł miesięcznie w aplikacji (blokada nowych rozmów i powiadomienie właściciela) | W TOKU (blokada w bazie i alert dla właściciela w bazie; każda rozmowa rezerwuje 15 zł, czyli jej najwyższy możliwy koszt, więc limitu nie da się przekroczyć także bez rozliczenia rzeczywistych kosztów — przy obecnej rezerwie mieszczą się 3 rozmowy w miesiącu; usunięcie danych kandydata nie zmienia miesięcznej sumy; rzeczywisty koszt rozmowy z webhooka Retell (call_analyzed, przeliczony po stałym kursie 4,50 zł/USD) zastępuje rezerwę raz na rozmowę, a koszt wyższy niż rezerwa blokuje resztę miesiąca; alert dla właściciela jest widoczny w panelu operatora „Koszty AI i marża” razem z limitem, kosztem od początku miesiąca i informacją, czy nowe rozmowy są wstrzymane (PR #568); zostaje zewnętrzne powiadomienie (e-mail) — to nowa prawdziwa wysyłka i wymaga zgody właściciela) | PR #558, PR #561, PR #568 |
 
+### R8. White-label — SkillCheck pod marką klienta (SC-020, issue #21; równolegle, niższy priorytet)
+
+Nie przepisywać istniejącego kodu. Bez nowych kosztów (domeny testowe tylko darmowe lub już
+posiadane; inaczej pytanie do właściciela). Wycena — decyzja właściciela, poza tym repozytorium.
+
+| Krok | Gotowe, gdy | Status | Dowód |
+|---|---|---|---|
+| Dwie fikcyjne firmy z własnym logo, kolorami, raportem i adresem strony na Preview | test końcowy dwóch marek przechodzi: każda firma widzi tylko swoją markę i swoje dane | DO ZROBIENIA | — |
+| Instrukcja uruchomienia dla nowego klienta (co klient ustawia w swojej domenie) | plik w `docs/` | DO ZROBIENIA | — |
+
+### R9. Kontrola kosztów AI i wybór modelu (SC-021, issue #81; równolegle, niższy priorytet)
+
+| Krok | Gotowe, gdy | Status | Dowód |
+|---|---|---|---|
+| Test na dwóch fikcyjnych firmach na Preview: koszt każdego zlecenia, limity budżetu, ostrzeżenie, rozdzielenie budżetów, wybór modelu | test końcowy przechodzi; policzone koszty różnią się od rachunku dostawcy AI o mniej niż 5% | DO ZROBIENIA (wymaga klucza dostawcy AI na Preview — zob. „Czeka na właściciela”) | — |
+| Włączenie na produkcji przed pierwszą płatną sprzedażą WERYFIKACJI lub AC | mechanizm włączony; zmiana ustawień produkcji tylko za zgodą właściciela | DO ZROBIENIA | — |
+
 ## Wstrzymane do pierwszej sprzedaży
 
-Nie podejmować i nie proponować: SC-020 white-label (issue #21); SC-021 bramka AI i kontrola
-kosztów (issue #81); Quality of Hire; talent pool; chatbot informacyjny (SC-022);
-analiza treści rozmów.
+Nie podejmować i nie proponować (warunek powrotu w nawiasie): SC-017 Quality of Hire (rozpoczęta
+sprzedaż i realne dane z rekrutacji klientów); SC-018 talent pool (zrobione R0 SC-010 cz. A
+i działające R0–R3); SC-013 analiza treści rozmów (działający voicebot R6); SC-010 cz. B prawdziwe
+wysyłki wiadomości (prawdziwe rozmowy R6); chatbot informacyjny (SC-022).
+
+## Rejestr numerów SC (przegląd 26.11.2026)
+
+| SC | Gdzie | Stan decyzji |
+|---|---|---|
+| SC-000 | — | numer pusty („nieodnalezione”), bez zadań |
+| SC-001 | R0 (końcowy test) | bez osobnego zadania |
+| SC-002–SC-010 cz. A | R0 | teraz, najpierw |
+| SC-010 cz. B | Wstrzymane | po prawdziwych rozmowach R6 |
+| SC-011, SC-012 | R6 | budowa trwa |
+| SC-013 | Wstrzymane | po działającym voicebocie |
+| SC-014 / SC-015 / SC-016 | R1 / R2 / R3 | teraz, po R0, w tej kolejności |
+| SC-017, SC-018 | Wstrzymane | warunki wyżej |
+| SC-019 | R7 | sklep w core |
+| SC-020 / SC-021 | R8 / R9 | równolegle, niższy priorytet |
 
 ## Poza tym repozytorium
 
@@ -166,3 +244,5 @@ Rzeczy, których agent nie może zrobić sam. Szczegóły i linki są w podanych
 |---|---|
 | Zmiana sekretu `request_secret_current` (rotacja z audytu bezpieczeństwa) | issue [#420](https://github.com/krzysztofsyska/skillcheck-core/issues/420) |
 | Sekret i środowisko dla automatycznego wgrywania migracji (droga B) — po scaleniu PR #499 | issue [#491](https://github.com/krzysztofsyska/skillcheck-core/issues/491) |
+| Klucz dostawcy AI na Preview (nowy koszt) — potrzebny do R0 SC-005, R1 krok 3a i R9 | R1, R0, R9 w tym pliku |
+| Akceptacja przykładowych raportów (R0 SC-009, R2) | raport statusu |
