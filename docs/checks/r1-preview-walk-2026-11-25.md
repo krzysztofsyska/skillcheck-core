@@ -29,31 +29,63 @@ Dodatkowo: `/dashboard` bez logowania przekierowuje na `/login` (zgodnie z oczek
 
 ## Szczegóły kroku 1 (diagnoza)
 
+Przyczyna 503 jest **nieustalona**. Z zebranych danych nie da się jeszcze wskazać, która ścieżka w kodzie
+daje tę odpowiedź, i nie twierdzę, że to konfiguracja ani błąd kodu.
+
+Obserwacje:
+
+- Na aliasie gałęzi (`skillcheck-core-git-integration-krzysztofs-projects-b7ce87b5.vercel.app`) odpowiedź
+  to **503**.
 - Na adresie pojedynczego wdrożenia (`…-o97hoxykv-…vercel.app`) odpowiedź bootstrapu to **403**
-  — to zgodne z kodem: `lib/competency-attempt-broker.ts:239` odrzuca żądania spoza przypiętego
-  adresu (`COMPETENCY_BROKER_ORIGIN`).
-- Na aliasie gałęzi (`skillcheck-core-git-integration-krzysztofs-projects-b7ce87b5.vercel.app`) odpowiedź to
-  **503**. W `lib/competency-attempt-broker-runtime.ts` 503 zwraca `competencyBrokerPost`, gdy
-  `COMPETENCY_BROKER_ENABLED` nie jest `true` albo gdy `construct()` rzuci wyjątek (zły/niepełny
-  `COMPETENCY_BROKER_ORIGIN` — musi być `https`, bez ścieżki; klucze `…_CSRF_KEY` / `…_SOURCE_HMAC_KEY` nie
-  w formacie 64 znaków hex; `COMPETENCY_BROKER_LIMITER` inny niż `postgres`/`redis`; błędny
-  `COMPETENCY_BROKER_GATEWAY_DATABASE_URL`). Wyjątek jest połykany celowo (bez logu), więc z zewnątrz nie
-  da się rozróżnić przyczyn; w logach uruchomieniowych Vercel nie ma wpisów.
-- Sprawdziłem po stronie bazy Preview: login `competency_gateway_preview` istnieje, może się logować i jest
-  członkiem roli `competency_test_gateway` (ta rola nie ma loginu) — baza jest przygotowana.
-- Czego nie wiem: która dokładnie zmienna jest zła lub brakuje (agent nie czyta wartości). To wygląda na
-  konfigurację, nie na błąd kodu. Nie znalazłem błędu w kodzie do opisania.
+  (`lib/competency-attempt-broker.ts`, sprawdzenie adresu pochodzenia, które odrzuca adres inny niż
+  przypięty w `COMPETENCY_BROKER_ORIGIN`).
+- W logach uruchomieniowych Vercel nie ma wpisów o przyczynie. Wyjątki są łapane celowo, bez logu.
+
+Wszystkie ścieżki, które w kodzie dają 503 (żadna nie została jeszcze wykluczona):
+
+A. Uruchomienie pośrednika (`lib/competency-attempt-broker-runtime.ts`). Każdy błąd przy starcie jest
+łapany i zwraca 503:
+- `COMPETENCY_BROKER_ENABLED` nie jest równe `true`;
+- adres `COMPETENCY_BROKER_ORIGIN` nie jest czystym `https` (ścieżka, zapytanie lub dane logowania w adresie);
+- klucze `COMPETENCY_BROKER_CSRF_KEY` lub `COMPETENCY_BROKER_SOURCE_HMAC_KEY` nie mają 64 znaków hex;
+- `COMPETENCY_BROKER_LIMITER` ma inną wartość niż `postgres` albo `redis`;
+- adres bazy dla pośrednika jest błędny, niebezpieczny albo brak loginu;
+- weryfikacja roli pośrednika w bazie się nie powiodła;
+- pula połączeń jest przeciążona.
+
+B. Obsługa żądania (`lib/competency-attempt-broker.ts`). Te błędy pojawiają się dopiero przy wywołaniu,
+więc sam fakt, że login i rola w bazie istnieją, ich nie wyklucza:
+- brak zaufanego adresu źródłowego (poza Vercel, czyli gdy `VERCEL` nie jest `1`, nagłówek
+  `X-Forwarded-For` jest pusty albo zawiera przecinek);
+- przekroczony limit równoczesnych żądań w jednej instancji (8 miejsc);
+- współdzielony limiter rzuca błąd: połączenie z bazą, weryfikacja roli, funkcja
+  `private.consume_competency_rate_limit` albo przeciążenie puli (`lib/competency-postgres-limiter.ts`).
+  Błąd przy żądaniu zeruje też pośrednika, więc następne żądanie uruchamia go od nowa.
+
+Jak czytać obserwację 403: kontrola adresu pochodzenia jest dopiero po sprawdzeniu „włączony”, więc 403 na
+adresie wdrożenia wskazuje, że przy starcie się udało. To sugeruje raczej ścieżkę B niż A. To tylko
+wniosek z dwóch odpowiedzi, nie dowód: adresy mogą trafiać do różnych instancji, a logi nie mówią, która
+ścieżka odrzuciła żądanie.
+
+Co już sprawdzono po stronie bazy Preview: login `competency_gateway_preview` istnieje, może się logować i
+jest członkiem roli `competency_test_gateway` (ta rola nie ma loginu). To nie dowodzi, że limiter działa,
+bo jego sprawdzenie odbywa się dopiero przy żądaniu.
 
 ## Blokery
 
-1. **503 pośrednika na Preview `integration`** — ktoś z dostępem do wartości zmiennych (właściciel) musi
-   sprawdzić zmienne `COMPETENCY_BROKER_*` według listy powyżej (najpierw `COMPETENCY_BROKER_ORIGIN` =
-   `https://skillcheck-core-git-integration-krzysztofs-projects-b7ce87b5.vercel.app` bez końcowej
-   ścieżki, i `COMPETENCY_BROKER_LIMITER`). Propozycja na przyszłość: dodać do kodu rozróżnialny, bezpieczny
-   kod przyczyny w logu (bez wartości), żeby agent mógł to diagnozować sam — to byłoby osobne zadanie.
-2. **Brak hasła rekrutera testowego** — kroki 3a i 8b wymagają zalogowania. Propozycja: osobny test-login
-   tylko dla Preview (hasło ustawia właściciel i wpisuje jako sekret sesji agenta) albo zgoda, żeby agent
-   ustawił hasło konta `example.com` w bazie Preview. Bez tego agent tych kroków nie przejdzie.
+1. **503 pośrednika na Preview `integration` — przyczyna nieustalona, diagnozuje agent.** Następne kroki po
+   stronie agenta, bez udziału właściciela:
+   (i) zmiana kodu, która zapisuje w logu bezpieczny kod przyczyny dla każdej ścieżki 503 (bez wartości
+   zmiennych i sekretów) — robione w osobnym PR R1 (kod przyczyny 503), branch
+   `claude/sweet-shannon-vnp948`;
+   (ii) sprawdzenie tylko do odczytu przez agenta: nazwy, cele i gałąź zmiennych `COMPETENCY_BROKER_*`
+   w Vercel (bez wartości) oraz to, czy w bazie Preview (`orbyscrupgnupifzlqxp`) istnieją funkcja
+   limitera i jej uprawnienia.
+   Właściciel zostanie zapytany tylko wtedy, gdy okaże się potrzebny NOWY sekret. Wtedy dostanie
+   bezpośredni link i dokładnie, co kliknąć.
+2. **Hasło do konta rekrutera testowego (kroki 3a i 8b).** Propozycja agenta: ustawić hasło wyłącznie dla
+   konta testowego w `example.com` w bazie Preview, bez zmian na produkcji i bez prawdziwych danych.
+   **TAK/NIE?** Rekomendacja: TAK. Powód: zmienia to dane logowania, więc potrzebna jest Twoja zgoda.
 3. Krok 3a dodatkowo wymaga `EXERCISE_AI_ENABLED=true` na Preview (ustawione według PR #599; nie
    zweryfikowane, bo nie ma jak wejść na ekran).
 
