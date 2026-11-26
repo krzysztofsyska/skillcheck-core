@@ -7,6 +7,8 @@ import { createRedisRestLimiter, type SharedRateLimiter } from './competency-bro
 import { verifyCompetencyGateway } from './competency-broker-role.ts';
 import { createPostgresSharedLimiter } from './competency-postgres-limiter.ts';
 import { competencyGatewayTls } from './competency-broker-tls.ts';
+import { competencyDiagnosticDetail, logCompetencyBrokerUnavailable, tagCompetencyDiagnostic,
+  type CompetencyBrokerUnavailableReason } from './competency-broker-diagnostics.ts';
 
 const HEADERS = {
   'Cache-Control': 'private, no-store, max-age=0',
@@ -74,9 +76,13 @@ export function createCompetencyGatewayRuntime(options: CompetencyGatewayRuntime
     sourceKey: options.sourceKey,
     limiter: options.limiter,
     trustedSource: options.trustedSource,
+    onUnavailable: logCompetencyBrokerUnavailable,
     acquire: async (): Promise<GatewayLease> => {
-      if (options.pool.waitingCount >= 4) throw new Error('Gateway pool backpressure');
-      const client = await options.pool.connect();
+      if (options.pool.waitingCount >= 4)
+        throw tagCompetencyDiagnostic(new Error('Gateway pool backpressure'), 'pool_backpressure');
+      let client: CompetencyGatewayPoolClient;
+      try { client = await options.pool.connect(); }
+      catch { throw tagCompetencyDiagnostic(new Error('Gateway connection failed'), 'connect'); }
       try {
         // Audit both the real LOGIN and the gateway permissions it will acquire
         // on this exact connection before any capability-bearing B2 query.
@@ -86,9 +92,10 @@ export function createCompetencyGatewayRuntime(options: CompetencyGatewayRuntime
           query: (sql, args) => client.query(sql, args),
           release: destroy => client.release(!!destroy)
         };
-      } catch {
+      } catch (error) {
         client.release(true);
-        throw new Error('Gateway verification failed');
+        throw tagCompetencyDiagnostic(new Error('Gateway verification failed'),
+          competencyDiagnosticDetail(error) ?? 'verify_query');
       }
     }
   });
@@ -96,20 +103,32 @@ export function createCompetencyGatewayRuntime(options: CompetencyGatewayRuntime
 
 type BrokerHandler = (request: Request) => Promise<Response>;
 let ready: Promise<BrokerHandler> | undefined;
+let disabledLogged = false;
+
+/** Carries only a fixed diagnostic code; the original error text is dropped. */
+class BrokerConfigError extends Error {
+  readonly reason: CompetencyBrokerUnavailableReason;
+  constructor(reason: CompetencyBrokerUnavailableReason) { super('Broker configuration unavailable'); this.reason = reason; }
+}
+function configStep<T>(reason: CompetencyBrokerUnavailableReason, step: () => T): T {
+  try { return step(); } catch { throw new BrokerConfigError(reason); }
+}
 
 async function construct(): Promise<BrokerHandler> {
   const origin = process.env.COMPETENCY_BROKER_ORIGIN || '';
-  const url = new URL(origin);
-  if (url.protocol !== 'https:' || url.pathname !== '/' || url.search || url.hash || url.username || url.password) {
-    throw new Error('Origin not pinned');
-  }
-  const csrfKey = key('COMPETENCY_BROKER_CSRF_KEY');
-  const sourceKey = key('COMPETENCY_BROKER_SOURCE_HMAC_KEY');
+  configStep('config_origin', () => {
+    const url = new URL(origin);
+    if (url.protocol !== 'https:' || url.pathname !== '/' || url.search || url.hash || url.username || url.password) {
+      throw new Error('Origin not pinned');
+    }
+  });
+  const csrfKey = configStep('config_keys', () => key('COMPETENCY_BROKER_CSRF_KEY'));
+  const sourceKey = configStep('config_keys', () => key('COMPETENCY_BROKER_SOURCE_HMAC_KEY'));
   const redisUrl = process.env.COMPETENCY_BROKER_LIMITER_REST_URL || '';
   const redisToken = process.env.COMPETENCY_BROKER_LIMITER_REST_TOKEN || '';
-  const dsn = databaseUrl();
+  const dsn = configStep('config_dsn', databaseUrl);
   const limiterKind=process.env.COMPETENCY_BROKER_LIMITER;
-  if(limiterKind!=='postgres'&&limiterKind!=='redis')throw new Error('Shared limiter required');
+  if(limiterKind!=='postgres'&&limiterKind!=='redis')throw new BrokerConfigError('config_limiter');
   // No pool exists on default-disabled integration/preview/production builds.
   const pg = await import('pg');
   const pool = new pg.Pool({
@@ -123,8 +142,8 @@ async function construct(): Promise<BrokerHandler> {
     allowExitOnIdle: true,
     options: '-c statement_timeout=5000 -c lock_timeout=1500 -c idle_in_transaction_session_timeout=8000'
   });
-  const limiter = limiterKind==='postgres'
-    ?createPostgresSharedLimiter(pool,new URL(dsn).username):createRedisRestLimiter(redisUrl,redisToken);
+  const limiter = configStep('config_limiter', () => limiterKind==='postgres'
+    ?createPostgresSharedLimiter(pool,new URL(dsn).username):createRedisRestLimiter(redisUrl,redisToken));
   return createCompetencyGatewayRuntime({
     expectedOrigin: origin,
     expectedUser: new URL(dsn).username,
@@ -143,13 +162,23 @@ async function construct(): Promise<BrokerHandler> {
   });
 }
 export async function competencyBrokerPost(request: Request): Promise<Response> {
-  if (process.env.COMPETENCY_BROKER_ENABLED !== 'true') return disabled();
+  if (process.env.COMPETENCY_BROKER_ENABLED !== 'true') {
+    // Intentionally off in production: log once per instance, not per request.
+    if (!disabledLogged) { disabledLogged = true; logCompetencyBrokerUnavailable('disabled'); }
+    return disabled();
+  }
+  let constructing = true;
   try {
     if (!ready) ready = construct();
-    return await (await ready)(request);
-  } catch {
-    // Never forward/print a DSN, SQL provider error, or sensitive parameter.
+    const handler = await ready;
+    constructing = false;
+    return await handler(request);
+  } catch (error) {
+    // Never forward/print a DSN, SQL provider error, or sensitive parameter:
+    // only a fixed code reaches the log, the response stays generic.
     ready = undefined;
+    logCompetencyBrokerUnavailable(!constructing ? 'internal'
+      : error instanceof BrokerConfigError ? error.reason : 'config_runtime');
     return disabled();
   }
 }
