@@ -63,7 +63,7 @@ ranking i shortlista → raport i pobranie.
 | SC-010 cz. A — zgody i usuwanie danych kandydata, bez wysyłania wiadomości | test na fikcyjnych kandydatach: zgody (kanały, godziny, historia) zapisane i respektowane; po żądaniu usunięcia danych nie ma w bazie, plikach CV, raportach i eksportach | DO ZROBIENIA | — |
 | SC-001 — aplikacja się uruchamia, strona działa, jest połączenie z bazą | punkt w końcowym teście całej aplikacji przechodzi; bez osobnego zadania | DO ZROBIENIA (w końcowym teście) | — |
 
-SC-010 cz. B (prawdziwe wysyłki wiadomości) — wstrzymane, wraca razem z prawdziwymi rozmowami R6.
+SC-010 cz. B (prawdziwe wysyłki wiadomości) — wstrzymane; termin powrotu wskaże właściciel (każda prawdziwa wysyłka wymaga jego zgody).
 
 ### R1. Test kompetencji dla kandydata (etap 2)
 
@@ -191,14 +191,14 @@ posiadane; inaczej pytanie do właściciela). Wycena — decyzja właściciela, 
 | Krok | Gotowe, gdy | Status | Dowód |
 |---|---|---|---|
 | Test na dwóch fikcyjnych firmach na Preview: koszt każdego zlecenia, limity budżetu, ostrzeżenie, rozdzielenie budżetów, wybór modelu | test końcowy przechodzi; policzone koszty różnią się od rachunku dostawcy AI o mniej niż 5% | DO ZROBIENIA (wymaga klucza dostawcy AI na Preview — zob. „Czeka na właściciela”) | — |
-| Włączenie na produkcji przed pierwszą płatną sprzedażą WERYFIKACJI lub AC | mechanizm włączony; zmiana ustawień produkcji tylko za zgodą właściciela | DO ZROBIENIA | — |
+| Włączenie na produkcji przed pierwszą płatną sprzedażą | mechanizm włączony; zmiana ustawień produkcji tylko za zgodą właściciela | DO ZROBIENIA | — |
 
 ## Wstrzymane do pierwszej sprzedaży
 
 Nie podejmować i nie proponować (warunek powrotu w nawiasie): SC-017 Quality of Hire (rozpoczęta
 sprzedaż i realne dane z rekrutacji klientów); SC-018 talent pool (zrobione R0 SC-010 cz. A
-i działające R0–R3); SC-013 analiza treści rozmów (działający voicebot R6); SC-010 cz. B prawdziwe
-wysyłki wiadomości (prawdziwe rozmowy R6); chatbot informacyjny (SC-022).
+i działające R0–R3); SC-013 analiza treści rozmów (do pierwszej sprzedaży); SC-010 cz. B prawdziwe
+wysyłki wiadomości (termin wskaże właściciel); chatbot informacyjny (SC-022).
 
 ## Rejestr numerów SC (przegląd 26.11.2026)
 
@@ -207,9 +207,9 @@ wysyłki wiadomości (prawdziwe rozmowy R6); chatbot informacyjny (SC-022).
 | SC-000 | — | numer pusty („nieodnalezione”), bez zadań |
 | SC-001 | R0 (końcowy test) | bez osobnego zadania |
 | SC-002–SC-010 cz. A | R0 | teraz, najpierw |
-| SC-010 cz. B | Wstrzymane | po prawdziwych rozmowach R6 |
+| SC-010 cz. B | Wstrzymane | termin powrotu wskaże właściciel |
 | SC-011, SC-012 | R6 | budowa trwa |
-| SC-013 | Wstrzymane | po działającym voicebocie |
+| SC-013 | Wstrzymane | do pierwszej sprzedaży |
 | SC-014 / SC-015 / SC-016 | R1 / R2 / R3 | teraz, po R0, w tej kolejności |
 | SC-017, SC-018 | Wstrzymane | warunki wyżej |
 | SC-019 | R7 | sklep w core |

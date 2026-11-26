@@ -66,7 +66,7 @@ którą odpowiadał.
   fikcyjnych firmach, a włączyć przed pierwszą płatną sprzedażą.”
 
 **Korekta SC-011–SC-013 i SC-019 (czat pisany, 22:10).** Czat wyjaśnił, że rekomendacje z rozmowy
-głosowej opierały się na remanencie z 18.11.2026, nowszym niż który są decyzje z 18–19.11.2026
+głosowej opierały się na remanencie z 18.11.2026, starszym niż decyzje z 18–19.11.2026
 (voicebot R6, Stripe w core R7). Pytania czatu i odpowiedzi właściciela (wybór opcji):
 
 - „Voicebot (SC-011–SC-013). Rano zdecydowałeś „wstrzymać”, ale od 18.11 voicebot jest budowany
