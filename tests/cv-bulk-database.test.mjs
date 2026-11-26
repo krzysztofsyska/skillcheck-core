@@ -10,7 +10,7 @@ import { setupExecutionLedger } from './helpers/erasure-execution-fixture.mjs';
 import { retentionHarness } from './helpers/retention-scheduler-fixture.mjs';
 import { activeBoot } from './helpers/competency-active-fixture.mjs';
 import { lifecycleRules } from './helpers/erasure-lifecycle-fixture.mjs';
-import { users } from './helpers/screening-ranking-fixture.mjs';
+import { setupRankingDatabase, users } from './helpers/screening-ranking-fixture.mjs';
 
 test('single analysis grouping: v1/v2 completion, replay, manual choice, scope, erasure and rollback', async t => {
   const {db,h,seed,x} = await activeBoot(t,{fullChain:true});
@@ -1013,4 +1013,254 @@ test('SC-BULK-001: signed scheduler pumps registered CVs before batch upload clo
   const body = (await db.query("select pg_get_functiondef('public.cv_bulk_worker_pump(uuid,bigint,text,jsonb,jsonb)'::regprocedure) s")).rows[0].s;
   assert.match(body, /cv_bulk_global_capacity_v1/, 'rollback preserves global capacity safety');
   assert.doesNotMatch(body, /cv_bulk_scheduler_uploading_ready_v1/, 'rollback removes only this selector change');
+});
+
+// SC-007 (docs/ROADMAP.md R0): on the complete current migration chain, one CV for one position is
+// charged once however many starts, pumps and retries race for it, and a change of the CV or of
+// the position requirements marks the existing result as stale ("Wynik nieaktualny").
+test('SC-007: parallel starts, bulk pumps and retries charge one CV analysis once; CV or requirement changes mark the result stale', async t => {
+  const env = await bootMigrationDatabase(t);
+  const { db } = env;
+  const h = await setupRankingDatabase(db, { throughMigration: null });
+  env.h = h;
+  await seedSyntheticPolicy(db);
+  const b = bulkHarness(env);
+  const pool = env.pool();
+  const raceCodes = new Set(['23505', '40P01', '40001']);
+  // One independent transaction per call, as separate browser/server requests would issue them.
+  const asTx = async (role, userId, sql, params) => {
+    const c = await pool.connect();
+    try {
+      await c.query('begin');
+      await c.query(`set local role ${role}`);
+      await c.query("select set_config('request.jwt.claim.sub',$1,true)", [userId ?? '']);
+      await c.query("set local statement_timeout='30s'");
+      const rows = (await c.query(sql, params)).rows;
+      await c.query('commit');
+      return { ok: true, rows, row: rows[0] ?? null };
+    } catch (error) {
+      await c.query('rollback').catch(() => {});
+      return { ok: false, code: error.code ?? '', message: error.message };
+    } finally { c.release(); }
+  };
+  const noRawRace = (outcomes, label) => {
+    for (const o of outcomes) if (!o.ok && raceCodes.has(o.code)) assert.fail(`${label} exposed ${o.code}: ${o.message}`);
+  };
+  const fingerprint = async applicationId => {
+    await h.asAdmin();
+    return (await db.query("select private.screening_material($1,false)->>'input_fingerprint' v", [applicationId])).rows[0].v;
+  };
+  const startSql = 'select * from public.start_screening_analysis($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)';
+  const startArgs = (applicationId, fp, force = false, key = randomUUID()) => [applicationId, fp,
+    contract.payload_schema_version, contract.result_schema_version, contract.prompt_version, contract.provider,
+    contract.model, contract.model_revision, key, force];
+  const pumpSql = 'select public.cv_bulk_pump($1,$2::jsonb,$3::jsonb) r';
+  const pumpArgs = batchId => [batchId, JSON.stringify(contract), JSON.stringify(pricing)];
+  // Every credit movement of this CV, except the synthetic paid grant used to fund the tenant.
+  const charges = async (companyId, applicationId) => {
+    await h.asAdmin();
+    return (await db.query(`select j.reason, j.delta from private.sc19_credit_journal j
+      where j.company_id=$1 and j.reason <> 'paid_grant'
+        and (j.analysis_id is null or j.analysis_id in (select id from public.screening_analysis_versions where application_id=$2))
+      order by j.created_at, j.id`, [companyId, applicationId])).rows.map(r => [r.reason, Number(r.delta)]);
+  };
+  const net = rows => rows.reduce((sum, [, delta]) => sum + delta, 0);
+  const analyses = async applicationId => {
+    await h.asAdmin();
+    return (await db.query(`select id, execution_status, stale_at is not null as stale, stale_reason
+      from public.screening_analysis_versions where application_id=$1 order by analysis_version`, [applicationId])).rows;
+  };
+  const complete = attemptId => b.finishAnalysis(attemptId, Array(5).fill('meets'));
+  // A concurrent caller that finds the candidate row locked is refused before anything is written
+  // (FOR UPDATE NOWAIT). The screen shows "Nie udało się rozpocząć analizy... odśwież stronę"; nothing is charged.
+  const refusedBusy = o => !o.ok && o.code === 'PT409' && o.message === 'Candidate workflow busy';
+  // One company (owners have a company-creation limit); every subtest gets its own position, recruitment
+  // and CV, so a requirement change in one subtest cannot touch another, and a reset balance.
+  let company;
+  const subject = async credits => {
+    if (!company) company = await b.tenant(users.owner, credits);
+    await h.asUser(company.owner);
+    const position = await h.insert('positions', { company_id: company.companyId, title: 'Analyst', tasks: ['SQL'], kpis: ['Reports'],
+      required_competencies: ['Skill 0', 'Skill 1', 'Skill 2'], status: 'active' });
+    const recruitment = await h.insert('recruitments', { company_id: company.companyId, position_id: position.id,
+      name: `SC-007 ${randomUUID()}`, status: 'open' });
+    const f = await h.candidate({ ...company, position, recruitment });
+    await h.asAdmin();
+    await db.query('update private.sc19_balances set available=$2 where company_id=$1', [f.companyId, credits]);
+    await h.asUser(f.owner);
+    return f;
+  };
+
+  await t.test('eight parallel single-CV starts (new keys, some forced) open one analysis and charge one credit', async () => {
+    const f = await subject(5);
+    const fp = await fingerprint(f.application.id);
+    const outcomes = await Promise.all(Array.from({ length: 8 }, (_, i) =>
+      asTx('authenticated', f.owner, startSql, startArgs(f.application.id, fp, i % 2 === 1))));
+    noRawRace(outcomes, 'parallel start');
+    for (const o of outcomes) assert.ok(o.ok || refusedBusy(o), o.message);
+    const started = outcomes.filter(o => o.ok);
+    assert.ok(started.length >= 1, 'at least one start goes through');
+    assert.equal(new Set(started.map(o => o.row.analysis_id)).size, 1, 'all callers see one analysis');
+    assert.equal(new Set(started.map(o => o.row.attempt_id)).size, 1, 'all callers see one attempt');
+    assert.equal(started.filter(o => o.row.reused === false).length, 1, 'exactly one start created it');
+    assert.equal((await analyses(f.application.id)).length, 1);
+    assert.equal(await b.balance(f.companyId), 4, 'one credit for one CV');
+    assert.deepEqual(await charges(f.companyId, f.application.id), [['analysis_reserve', -1]]);
+    // A late duplicate after commit (new key) is still free.
+    const again = await asTx('authenticated', f.owner, startSql, startArgs(f.application.id, fp));
+    assert.equal(again.ok, true, again.message);
+    assert.equal(again.row.analysis_id, started[0].row.analysis_id);
+    assert.equal(await b.balance(f.companyId), 4);
+    await complete(started[0].row.attempt_id);
+    assert.equal(await b.balance(f.companyId), 4, 'completion settles the reserved credit, no second charge');
+    assert.equal(net(await charges(f.companyId, f.application.id)), -1);
+  });
+
+  await t.test('bulk path: parallel pumps of one batch plus manual starts of the same CV charge once', async () => {
+    await h.asAdmin();
+    await db.query('update private.cv_bulk_settings set max_parallel_company=4, max_analysis_retries=2, pricing=$1::jsonb',
+      [JSON.stringify(pricing)]);
+    const f = await subject(3);
+    const batch = await b.create(f, 1);
+    const [item] = await b.items(batch.batch_id);
+    const reg = await b.register(f, item.id);
+    assert.equal(reg.status, 'queued');
+    assert.equal(await b.balance(f.companyId), 2, 'the upload holds one slot');
+    const fp = await fingerprint(reg.application_id);
+    const outcomes = await Promise.all(Array.from({ length: 6 }, (_, i) => i % 2 === 0
+      ? asTx('authenticated', f.owner, pumpSql, pumpArgs(batch.batch_id))
+      : asTx('authenticated', f.owner, startSql, startArgs(reg.application_id, fp))));
+    noRawRace(outcomes, 'pump/start race');
+    outcomes.forEach((o, i) => assert.ok(o.ok || (i % 2 === 1 && refusedBusy(o)), o.message));
+    // A pump that lost a transient lock leaves the file queued with its slot held; the next pump takes it.
+    const settled = await asTx('authenticated', f.owner, pumpSql, pumpArgs(batch.batch_id));
+    assert.equal(settled.ok, true, settled.message);
+    let [row] = await b.items(batch.batch_id);
+    assert.deepEqual([row.phase, row.slot_state], ['analyzing', 'transferred']);
+    const versions = await analyses(reg.application_id);
+    assert.equal(versions.length, 1, 'one analysis for one CV');
+    assert.equal(row.analysis_id, versions[0].id);
+    assert.equal(await b.balance(f.companyId), 2, 'held slot handed over or returned, never charged twice');
+    await h.asAdmin();
+    const attempt = (await db.query("select id from public.screening_analysis_attempts where analysis_id=$1 and status='pending'", [row.analysis_id])).rows[0].id;
+    await complete(attempt);
+    assert.equal((await asTx('authenticated', f.owner, pumpSql, pumpArgs(batch.batch_id))).ok, true);
+    [row] = await b.items(batch.batch_id);
+    assert.equal(row.phase, 'done');
+    assert.equal(await b.balance(f.companyId), 2);
+    const rows = await charges(f.companyId, reg.application_id);
+    assert.equal(net(rows), -1, `one credit in total: ${JSON.stringify(rows)}`);
+    assert.equal(rows.filter(([reason]) => reason === 'analysis_reserve').length, 1);
+  });
+
+  await t.test('parallel retries of a failed (timed-out) analysis open one new attempt and do not charge again', async () => {
+    const f = await subject(5);
+    const started = await h.start(f);
+    const claimed = await h.claim(started);
+    await h.asWorker();
+    await db.query("select public.fail_screening_attempt($1,$2,$3,$4,'provider_timeout','Synthetic timeout')",
+      [started.attempt_id, claimed.lease_token, claimed.input_fingerprint, claimed.analysis_contract_hash]);
+    assert.equal(await b.balance(f.companyId), 5, 'a failed attempt returns its credit');
+    const retrySql = 'select * from public.retry_screening_analysis($1,$2)';
+    const outcomes = await Promise.all(Array.from({ length: 6 }, () =>
+      asTx('authenticated', f.owner, retrySql, [started.analysis_id, randomUUID()])));
+    noRawRace(outcomes, 'parallel retry');
+    const ok = outcomes.filter(o => o.ok);
+    assert.ok(ok.length >= 1, 'one retry goes through');
+    for (const o of outcomes.filter(o => !o.ok)) assert.ok(['55000', 'PT409'].includes(o.code), o.message);
+    assert.equal(new Set(ok.map(o => o.row.attempt_id)).size, 1, 'one new attempt');
+    await h.asAdmin();
+    assert.deepEqual((await db.query('select attempt_no, status from public.screening_analysis_attempts where analysis_id=$1 order by attempt_no',
+      [started.analysis_id])).rows, [{ attempt_no: 1, status: 'failed' }, { attempt_no: 2, status: 'pending' }]);
+    assert.equal(await b.balance(f.companyId), 4, 'the retry holds exactly one credit');
+    // The retried attempt times out on the worker: its lease expires and several workers race to take it over.
+    const retryAttempt = ok[0].row.attempt_id;
+    await h.asWorker();
+    const first = (await db.query('select * from public.claim_screening_attempt($1)', [retryAttempt])).rows[0];
+    await h.asAdmin();
+    await db.query("update public.screening_analysis_attempts set lease_expires_at=clock_timestamp()-interval '1 second' where id=$1", [retryAttempt]);
+    const claims = await Promise.all(Array.from({ length: 4 }, () =>
+      asTx('screening_worker', null, 'select * from public.claim_screening_attempt($1)', [retryAttempt])));
+    noRawRace(claims, 'parallel re-claim');
+    const leases = claims.filter(o => o.ok && o.row);
+    assert.equal(leases.length, 1, 'one worker takes over the expired lease');
+    assert.notEqual(leases[0].row.lease_token, first.lease_token);
+    assert.equal(await b.balance(f.companyId), 4, 're-claiming a timed-out attempt is free');
+    const lease = leases[0].row;
+    await h.asWorker();
+    await db.query('select public.complete_screening_analysis($1,$2,$3,$4,$5::jsonb)', [retryAttempt, lease.lease_token,
+      lease.input_fingerprint, lease.analysis_contract_hash, JSON.stringify(h.findings(lease, Array(5).fill('meets')))]);
+    assert.equal(await b.balance(f.companyId), 4);
+    const late = await asTx('authenticated', f.owner, retrySql, [started.analysis_id, randomUUID()]);
+    assert.equal(late.ok, false, 'a completed analysis is not retried');
+    assert.equal(await b.balance(f.companyId), 4);
+    const rows = await charges(f.companyId, f.application.id);
+    assert.equal(net(rows), -1, `one credit in total: ${JSON.stringify(rows)}`);
+  });
+
+  await t.test('bulk path: parallel pumps after a failed analysis retry it once and charge once', async () => {
+    const f = await subject(2);
+    const batch = await b.create(f, 1);
+    const [item] = await b.items(batch.batch_id);
+    const reg = await b.register(f, item.id);
+    const started = await b.pump(f, batch.batch_id);
+    assert.equal(started.dispatch.length, 1);
+    await b.failAnalysis(started.dispatch[0]);
+    const outcomes = await Promise.all(Array.from({ length: 5 }, () => asTx('authenticated', f.owner, pumpSql, pumpArgs(batch.batch_id))));
+    noRawRace(outcomes, 'parallel retry pump');
+    for (const o of outcomes) assert.equal(o.ok, true, o.message);
+    const dispatched = outcomes.flatMap(o => o.row.r.dispatch);
+    assert.equal(dispatched.length, 1, 'exactly one pump re-dispatches the retry');
+    let [row] = await b.items(batch.batch_id);
+    assert.deepEqual([row.phase, row.analysis_retries], ['analyzing', 1]);
+    assert.equal(await b.balance(f.companyId), 1, 'the retry holds the single credit of this CV');
+    await complete(dispatched[0]);
+    await b.pump(f, batch.batch_id);
+    [row] = await b.items(batch.batch_id);
+    assert.equal(row.phase, 'done');
+    assert.equal(await b.balance(f.companyId), 1);
+    assert.equal(net(await charges(f.companyId, reg.application_id)), -1);
+  });
+
+  await t.test('a requirement change or a new CV marks the result stale ("Wynik nieaktualny") without charging', async () => {
+    const changes = [
+      { label: 'requirements', reason: /^position_changed$/, apply: async f => {
+        await h.asUser(f.owner);
+        await db.query("update public.positions set tasks=array['SQL','Raporty miesięczne'] where id=$1", [f.position.id]);
+      } },
+      { label: 'new CV', reason: /^candidate_document_/, apply: async f => {
+        await h.asUser(f.owner);
+        const doc = await h.insert('candidate_documents', { company_id: f.companyId, candidate_id: f.candidate.id,
+          source_text: 'PRIVATE updated CV', redacted_text: 'SQL expertise in reports and Python.' });
+        await db.query('select public.review_candidate_document($1,$2)', [doc.id, doc.version]);
+      } },
+    ];
+    for (const change of changes) {
+      const f = await subject(3);
+      const done = await h.completedApplication(f, Array(5).fill('meets'));
+      await h.asUser(f.owner);
+      assert.equal((await h.row(f)).eligibility_reason, 'eligible', `${change.label}: fresh result is current`);
+      const before = await b.balance(f.companyId);
+      await change.apply(f);
+      const [stored] = await analyses(f.application.id);
+      assert.equal(stored.stale, true, `${change.label}: analysis is stale`);
+      assert.match(stored.stale_reason, change.reason);
+      await h.asUser(f.owner);
+      assert.equal((await h.row(f)).eligibility_reason, 'stale', `${change.label}: ranking and report show the result as stale`);
+      const review = await asTx('authenticated', f.owner, "select public.review_screening_result($1,1,'approved',null,'[]'::jsonb)",
+        [done.analysis_id]);
+      assert.equal(review.ok, false, `${change.label}: a stale result cannot be approved again as current`);
+      assert.equal(await b.balance(f.companyId), before, `${change.label}: marking stale costs nothing`);
+      // A fresh analysis of the changed input is one new charge, however many starts race for it.
+      const fp = await fingerprint(f.application.id);
+      const restarts = await Promise.all(Array.from({ length: 3 }, () =>
+        asTx('authenticated', f.owner, startSql, startArgs(f.application.id, fp))));
+      for (const o of restarts) assert.ok(o.ok || refusedBusy(o), o.message);
+      const fresh = restarts.filter(o => o.ok);
+      assert.ok(fresh.length >= 1);
+      assert.equal(new Set(fresh.map(o => o.row.analysis_id)).size, 1);
+      assert.notEqual(fresh[0].row.analysis_id, done.analysis_id);
+      assert.equal(await b.balance(f.companyId), before - 1, `${change.label}: reanalysis charges once`);
+    }
+  });
 });
