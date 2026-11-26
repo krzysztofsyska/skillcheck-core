@@ -6,6 +6,7 @@ import {competencyGatewayTls} from '../lib/competency-broker-tls.ts';
 import {createCompetencyBroker, B3_ENDPOINT, B3_MAX_BODY,
   B3_SESSION_COOKIE, B3_INIT_COOKIE} from '../lib/competency-attempt-broker.ts';
 import {POST, GET, OPTIONS} from '../app/api/competency/attempt/route.ts';
+import {competencyGatewayConnection} from '../lib/competency-attempt-broker-runtime.ts';
 
 const origin='https://candidate.test';
 const endpoint=origin+B3_ENDPOINT;
@@ -21,6 +22,42 @@ test('direct hosted gateway pins the official database roots and preserves peer 
   '5F:9B:77:95:1A:7A:A1:30:3F:9B:58:EE:A9:BF:A8:9E:35:8C:FD:C1:5F:97:86:FF:10:D4:93:0A:72:2C:9A:E2'
  ]);
  for(const host of ['sc014-broker-db.test','db.orbyscrupgnupifzlqxp.supabase.co.evil.invalid','evil.supabase.co']){
+  assert.deepEqual(competencyGatewayTls('postgresql://fixture:synthetic@'+host+'/postgres'),{rejectUnauthorized:true});
+ }
+});
+test('pooler route: unset keeps the DSN, valid host rewrites to the session pooler, everything else fails closed',()=>{
+ const direct='postgresql://competency_gateway_fixture:Synthetic9@db.orbyscrupgnupifzlqxp.supabase.co:5432/postgres';
+ for(const unset of [undefined,'']){
+  assert.deepEqual(competencyGatewayConnection(direct,unset),{connectionString:direct,expectedUser:'competency_gateway_fixture'});
+  const other='postgresql://competency_gateway_fixture:Synthetic9@sc014-broker-db.test:5432/postgres';
+  assert.deepEqual(competencyGatewayConnection(other,unset),{connectionString:other,expectedUser:'competency_gateway_fixture'});
+ }
+ for(const pooler of ['aws-0-eu-west-1.pooler.supabase.com','aws-1-eu-west-1.pooler.supabase.com']){
+  for(const source of [direct,direct.replace(':5432/','/')]){
+   const route=competencyGatewayConnection(source,pooler);
+   const url=new URL(route.connectionString);
+   assert.equal(url.hostname,pooler);assert.equal(url.port,'5432','session pooler, never 6543');
+   assert.equal(url.username,'competency_gateway_fixture.orbyscrupgnupifzlqxp');
+   assert.equal(url.password,'Synthetic9');assert.equal(url.pathname,'/postgres');assert.equal(url.search,'');
+   assert.equal(route.expectedUser,'competency_gateway_fixture','role checks keep the bare LOGIN role');
+   const tls=competencyGatewayTls(route.connectionString);
+   assert.equal(tls.rejectUnauthorized,true);assert.equal(tls.ca,competencyGatewayTls(direct).ca,'pooler pins the same Supabase roots');
+   assert.doesNotThrow(()=>createSecureContext(tls));
+  }
+ }
+ for(const pooler of ['aws-0-eu-west-1.pooler.supabase.com.evil.invalid','evil.pooler.supabase.com','db.orbyscrupgnupifzlqxp.supabase.co',
+  'aws-0-eu-west-1.pooler.supabase.com:6543','AWS-0-eu-west-1.pooler.supabase.com','sentinel-db.invalid','aws-0-eu-west-1.pooler.supabase.co']){
+  assert.throws(()=>competencyGatewayConnection(direct,pooler),pooler);
+ }
+ for(const source of ['postgresql://competency_gateway_fixture:Synthetic9@sc014-broker-db.test:5432/postgres',
+  'postgresql://competency_gateway_fixture:Synthetic9@db.orbyscrupgnupifzlqxp.supabase.co.evil.invalid:5432/postgres',
+  'postgresql://competency_gateway_fixture:Synthetic9@db.short.supabase.co:5432/postgres',
+  'postgresql://competency_gateway_fixture:Synthetic9@db.orbyscrupgnupifzlqxp.supabase.co:6543/postgres',
+  'postgresql://competency_gateway_fixture.orbyscrupgnupifzlqxp:Synthetic9@db.orbyscrupgnupifzlqxp.supabase.co:5432/postgres',
+  'postgresql://competency_gateway_fixture:Synthetic9@db.orbyscrupgnupifzlqxp.supabase.co:5432/postgres?sslmode=disable']){
+  assert.throws(()=>competencyGatewayConnection(source,'aws-0-eu-west-1.pooler.supabase.com'),source);
+ }
+ for(const host of ['aws-0-eu-west-1.pooler.supabase.com.evil.invalid','evil.pooler.supabase.com']){
   assert.deepEqual(competencyGatewayTls('postgresql://fixture:synthetic@'+host+'/postgres'),{rejectUnauthorized:true});
  }
 });
@@ -281,7 +318,8 @@ test('R1 diagnostics: broker 503 paths report a fixed reason, response stays gen
 
 test('R1 diagnostics: runtime logs config reasons without any env value',async()=>{
  const names=['COMPETENCY_BROKER_ENABLED','COMPETENCY_BROKER_ORIGIN','COMPETENCY_BROKER_CSRF_KEY',
-  'COMPETENCY_BROKER_SOURCE_HMAC_KEY','COMPETENCY_BROKER_GATEWAY_DATABASE_URL','COMPETENCY_BROKER_LIMITER','VERCEL'];
+  'COMPETENCY_BROKER_SOURCE_HMAC_KEY','COMPETENCY_BROKER_GATEWAY_DATABASE_URL','COMPETENCY_BROKER_GATEWAY_POOLER_HOST',
+  'COMPETENCY_BROKER_LIMITER','VERCEL'];
  const saved=Object.fromEntries(names.map(n=>[n,process.env[n]]));
  const key='ab'.repeat(32);
  const set=env=>{for(const n of names){if(env[n]===undefined)delete process.env[n];else process.env[n]=env[n];}};
@@ -298,6 +336,9 @@ test('R1 diagnostics: runtime logs config reasons without any env value',async()
    ['config_dsn',{...base,COMPETENCY_BROKER_GATEWAY_DATABASE_URL:undefined}],
    ['config_dsn',{...base,COMPETENCY_BROKER_GATEWAY_DATABASE_URL:'postgresql://competency_gateway_sentinel:SentinelPassword9@localhost/postgres'}],
    ['config_dsn',{...base,COMPETENCY_BROKER_GATEWAY_DATABASE_URL:'postgresql://sentinel_user:SentinelPassword9@sentinel-db.invalid/postgres'}],
+   ['config_dsn',{...base,COMPETENCY_BROKER_GATEWAY_POOLER_HOST:'aws-0-eu-west-1.pooler.supabase.com'}],
+   ['config_dsn',{...base,COMPETENCY_BROKER_GATEWAY_DATABASE_URL:'postgresql://competency_gateway_sentinel:SentinelPassword9@db.sentinelsentinelsent.supabase.co:5432/postgres',
+    COMPETENCY_BROKER_GATEWAY_POOLER_HOST:'sentinel-pooler.invalid'}],
    ['config_limiter',{...base,COMPETENCY_BROKER_LIMITER:undefined}],
    ['config_limiter',{...base,COMPETENCY_BROKER_LIMITER:'sentinel-memory'}]
   ];
