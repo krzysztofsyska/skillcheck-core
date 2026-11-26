@@ -86,16 +86,33 @@ test('SC-004 tenant isolation: two companies, three roles each, RLS as authentic
   };
   /** The call must either fail (permission/RLS/validation) or touch nothing: scalar/row results are empty. */
   const blocked = async (label, sql, params, denial = null) => {
+    let result;
     try {
-      const { rows, rowCount } = await db.query(sql, params);
-      const empty = rows.length === 0 || rows.every(row => Object.values(row).every(v => v === null || v === false || (Array.isArray(v) && v.length === 0)));
-      assert.ok(empty, `${label}: cross-tenant call returned data ${JSON.stringify(rows).slice(0, 200)} (rowCount ${rowCount})`);
+      result = await db.query(sql, params);
     } catch (error) {
-      assert.ok(error.code, `${label}: failed without a SQLSTATE: ${error.message}`);
+      // Only database errors count as a denial; an assertion/programming error must never be swallowed here.
+      assert.ok(typeof error.code === 'string' && !error.code.startsWith('ERR_'), `${label}: not a database error: ${error.message}`);
       assert.ok(!/^(XX|58)/.test(error.code), `${label}: internal error ${error.code} ${error.message}`);
       if (denial) assert.ok(denial.includes(error.code), `${label}: expected a denial (${denial}), got ${error.code} ${error.message}`);
+      return;
     }
+    // The call succeeded: it must have returned nothing. (UPDATE/DELETE use `returning 1`, so a leak shows up as a row.)
+    const { rows, rowCount } = result;
+    const empty = rows.length === 0 || rows.every(row => Object.values(row).every(v => v === null || v === false || (Array.isArray(v) && v.length === 0)));
+    assert.ok(empty, `${label}: cross-tenant call returned data ${JSON.stringify(rows).slice(0, 200)} (rowCount ${rowCount})`);
   };
+
+  await t.test('negative proof: the blocked() helper really fails when a call reaches data (own company)', async () => {
+    await h.asUser(people.A.owner);
+    const own = tenant.A;
+    for (const [sql, params] of [
+      ['update public.positions set title=title where company_id=$1 returning 1', [own.companyId]],
+      ['update public.candidates set last_name=last_name where company_id=$1 returning 1', [own.companyId]],
+      ['select * from public.get_screening_ranking($1,null)', [own.recruitment.id]],
+    ]) {
+      await assert.rejects(blocked('negative proof', sql, params), e => e.code === 'ERR_ASSERTION' && /returned data/.test(e.message), `helper must flag: ${sql}`);
+    }
+  });
 
   await t.test('every API-facing table: RLS enabled, no grant to anon, tables without company_id are closed to authenticated', async () => {
     await h.asAdmin();
@@ -201,7 +218,9 @@ test('SC-004 tenant isolation: two companies, three roles each, RLS as authentic
           const fields = Object.keys(row);
           await assert.rejects(
             db.query(`insert into ${ident(table)}(${fields.join(',')}) values(${fields.map((_, i) => `$${i + 1}`).join(',')})`, Object.values(row)),
-            e => ['42501', '23503', '23514', 'P0001', '22023', '23505'].includes(e.code) || /^PT/.test(e.code),
+            // 42501 = RLS/permission, 23503 = foreign key, P0001 = trigger/validation raise,
+            // PT404 = RPC-style 'Resource unavailable' (observed for applications). Nothing else is accepted.
+            e => ['42501', '23503', 'P0001', 'PT404'].includes(e.code),
             `${key}/${role} insert into ${table} (${label.length - table.length ? 'foreign reference' : 'foreign company'}) must be refused`,
           );
         }
