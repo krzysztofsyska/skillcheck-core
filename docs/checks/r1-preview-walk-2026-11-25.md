@@ -4,7 +4,7 @@ Zadanie z `docs/ROADMAP.md`, sekcja R1, wiersz „Włączenie testu kompetencji 
 całej ścieżki”. Powtórzone kroki 1, 3a i 8b z `docs/checks/r1-preview-walk-2026-11-18.md`. Tylko dane
 testowe, nikomu nic nie wysłano.
 
-**Wynik: nadal częściowo.** Strona kandydata jest już włączona na Preview (nie ma 404), ale jej
+**Wynik: nadal częściowo** (uzupełnione 26.11.2026 o przyczynę 503, zob. blokery). Strona kandydata jest już włączona na Preview (nie ma 404), ale jej
 „pośrednik” odpowiada błędem 503, więc kandydat nie dojdzie do zadania. Kroków 3a i 8b nie dało się
 wykonać: wymagają zalogowania rekrutera, a agent nie ma hasła do konta testowego.
 
@@ -73,16 +73,18 @@ bo jego sprawdzenie odbywa się dopiero przy żądaniu.
 
 ## Blokery
 
-1. **503 pośrednika na Preview `integration` — przyczyna nieustalona, diagnozuje agent.** Następne kroki po
-   stronie agenta, bez udziału właściciela:
-   (i) zmiana kodu, która zapisuje w logu bezpieczny kod przyczyny dla każdej ścieżki 503 (bez wartości
-   zmiennych i sekretów) — robione w osobnym PR R1 (kod przyczyny 503), branch
-   `claude/sweet-shannon-vnp948`;
-   (ii) sprawdzenie tylko do odczytu przez agenta: nazwy, cele i gałąź zmiennych `COMPETENCY_BROKER_*`
-   w Vercel (bez wartości) oraz to, czy w bazie Preview (`orbyscrupgnupifzlqxp`) istnieją funkcja
-   limitera i jej uprawnienia.
-   Właściciel zostanie zapytany tylko wtedy, gdy okaże się potrzebny NOWY sekret. Wtedy dostanie
-   bezpośredni link i dokładnie, co kliknąć.
+1. **503 pośrednika na Preview `integration` — przyczyna ustalona 26.11.2026, naprawia agent.**
+   Kod przyczyny w logu jest na `integration` od PR #601. Agent otworzył stronę kandydata raz na nowym
+   Preview (`dpl_qfTQY1ZWFvisLHw7eG1SLKhD891B`, commit `682a1ba`); bootstrap znów dał 503, a log serwera
+   pokazał: `{"event":"competency_broker_unavailable","reason":"limiter_unavailable","detail":"connect"}`.
+   Czyli pośrednik uruchomił się poprawnie (ścieżka A wykluczona), a nie udało się nawiązać połączenia
+   z bazą Preview (ścieżka B, limiter).
+   Prawdopodobna przyczyna: bezpośredni adres bazy `db.orbyscrupgnupifzlqxp.supabase.co` ma tylko adres
+   IPv6 (DNS: rekord AAAA jest, rekordu A nie ma), a funkcje Vercel łączą się wyłącznie po IPv4. To ryzyko
+   było opisane w `docs/checks/r1-preview-setup-2026-11-18.md`.
+   Naprawa po stronie agenta, bez nowego sekretu i bez kosztów: osobny PR R1 pozwala pośrednikowi łączyć
+   się przez darmowy pooler Supabase (tryb sesji, adres IPv4), z hostem poolera w jawnej zmiennej tylko dla
+   Preview; hasło zostaje w obecnym sekrecie. Płatny dodatek IPv4 Supabase nie jest potrzebny.
 2. **Hasło do konta rekrutera testowego (kroki 3a i 8b).** Propozycja agenta: ustawić hasło wyłącznie dla
    konta testowego w `example.com` w bazie Preview, bez zmian na produkcji i bez prawdziwych danych.
    **TAK/NIE?** Rekomendacja: TAK. Powód: zmienia to dane logowania, więc potrzebna jest Twoja zgoda.

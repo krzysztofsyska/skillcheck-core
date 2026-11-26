@@ -221,3 +221,124 @@ test('uncertain replacement COMMIT never publishes or clears the existing cookie
  assert.equal(state.released.at(-1).destroy,true);
  fail=false;assert.equal((await broker(json('inspect',first.csrf,{},first.cookie))).status,200);
 });
+
+// R1: every 503 path logs ONE fixed-code line; nothing else, response unchanged.
+async function captureWarn(fn){
+ const lines=[],original=console.warn,originalError=console.error,originalLog=console.log;
+ console.warn=(...a)=>lines.push(a.map(String).join(' '));
+ console.error=(...a)=>lines.push('ERROR '+a.map(String).join(' '));
+ console.log=(...a)=>lines.push('LOG '+a.map(String).join(' '));
+ try{await fn();}finally{console.warn=original;console.error=originalError;console.log=originalLog;}
+ return lines;
+}
+async function expectGeneric503(reply){
+ assert.equal(reply.status,503);noStore(reply);assert.equal(reply.headers.get('set-cookie'),null);
+ assert.equal(await reply.text(),'{"error":"unavailable"}');
+}
+const diag=(reason,detail)=>JSON.stringify(detail?{event:'competency_broker_unavailable',reason,detail}:{event:'competency_broker_unavailable',reason});
+
+test('R1 diagnostics: broker 503 paths report a fixed reason, response stays generic',async()=>{
+ const bootstrap=(headers={})=>json('bootstrap',null,{},'',{'x-sc014-intent':'bootstrap',...headers});
+ const run=async(overrides,request=bootstrap())=>{
+  const seen=[];
+  const broker=createCompetencyBroker({enabled:true,expectedOrigin:origin,csrfKey:Buffer.alloc(32,17),
+   sourceKey:Buffer.alloc(32,19),trustedSource:()=> '203.0.113.10',limiter:{consume:async()=>true},
+   acquire:async()=>{throw Error('unused');},onUnavailable:(...a)=>seen.push(a),...overrides});
+  await expectGeneric503(await broker(request));
+  return seen;
+ };
+ assert.deepEqual(await run({enabled:false}),[['disabled',undefined]]);
+ assert.deepEqual(await run({maxInFlight:0}),[['backpressure',undefined]]);
+ for(const source of [null,'not-an-ip','203.0.113.1, 198.51.100.2'])
+  assert.deepEqual(await run({trustedSource:()=>source}),[['source_untrusted',undefined]]);
+ assert.deepEqual(await run({limiter:{consume:async()=>{throw Error('redis lost 203.0.113.10');}}}),[['limiter_unavailable',undefined]]);
+ const {tagCompetencyDiagnostic}=await import('../lib/competency-broker-diagnostics.ts');
+ assert.deepEqual(await run({limiter:{consume:async()=>{throw tagCompetencyDiagnostic(Error('x'),'verify_logging');}}}),
+  [['limiter_unavailable','verify_logging']]);
+ // Gateway acquire failure and an unknown operation failure after a lease.
+ const viaSession=async(overrides)=>{
+  const seen=[];
+  const {broker}=setup();const s=await establish(broker);
+  const failing=createCompetencyBroker({enabled:true,expectedOrigin:origin,csrfKey:Buffer.alloc(32,17),
+   sourceKey:Buffer.alloc(32,19),trustedSource:()=> '203.0.113.10',limiter:{consume:async()=>true},
+   onUnavailable:(...a)=>seen.push(a),...overrides});
+  await expectGeneric503(await failing(json('inspect',s.csrf,{},s.cookie)));
+  return seen;
+ };
+ assert.deepEqual(await viaSession({acquire:async()=>{throw tagCompetencyDiagnostic(Error('connect ECONNREFUSED 10.0.0.1'),'connect');}}),
+  [['gateway_unavailable','connect']]);
+ assert.deepEqual(await viaSession({acquire:async()=>({query:async()=>{throw Error('syntax');},release(){}})}),
+  [['operation_failed',undefined]]);
+ // Known PT codes are not 503 and are not logged.
+ const seen=[];const {broker}=setup();const s=await establish(broker);
+ const missing=createCompetencyBroker({enabled:true,expectedOrigin:origin,csrfKey:Buffer.alloc(32,17),
+  sourceKey:Buffer.alloc(32,19),trustedSource:()=> '203.0.113.10',limiter:{consume:async()=>true},onUnavailable:(...a)=>seen.push(a),
+  acquire:async()=>({query:async()=>{throw Object.assign(Error('x'),{code:'PT404'});},release(){}})});
+ assert.equal((await missing(json('inspect',s.csrf,{},s.cookie))).status,404);assert.deepEqual(seen,[]);
+ // A throwing diagnostic hook never changes the response.
+ await run({maxInFlight:0,onUnavailable:()=>{throw Error('hook');}});
+});
+
+test('R1 diagnostics: runtime logs config reasons without any env value',async()=>{
+ const names=['COMPETENCY_BROKER_ENABLED','COMPETENCY_BROKER_ORIGIN','COMPETENCY_BROKER_CSRF_KEY',
+  'COMPETENCY_BROKER_SOURCE_HMAC_KEY','COMPETENCY_BROKER_GATEWAY_DATABASE_URL','COMPETENCY_BROKER_LIMITER','VERCEL'];
+ const saved=Object.fromEntries(names.map(n=>[n,process.env[n]]));
+ const key='ab'.repeat(32);
+ const set=env=>{for(const n of names){if(env[n]===undefined)delete process.env[n];else process.env[n]=env[n];}};
+ const base={COMPETENCY_BROKER_ENABLED:'true',COMPETENCY_BROKER_ORIGIN:'https://sentinel-origin.invalid/',
+  COMPETENCY_BROKER_CSRF_KEY:key,COMPETENCY_BROKER_SOURCE_HMAC_KEY:key,
+  COMPETENCY_BROKER_GATEWAY_DATABASE_URL:'postgresql://competency_gateway_sentinel:SentinelPassword9@sentinel-db.invalid:5432/postgres',
+  COMPETENCY_BROKER_LIMITER:'postgres',VERCEL:'1'};
+ try{
+  const cases=[
+   ['config_origin',{...base,COMPETENCY_BROKER_ORIGIN:'http://sentinel-origin.invalid/'}],
+   ['config_origin',{...base,COMPETENCY_BROKER_ORIGIN:undefined}],
+   ['config_keys',{...base,COMPETENCY_BROKER_CSRF_KEY:'sentinel-not-hex'}],
+   ['config_keys',{...base,COMPETENCY_BROKER_SOURCE_HMAC_KEY:undefined}],
+   ['config_dsn',{...base,COMPETENCY_BROKER_GATEWAY_DATABASE_URL:undefined}],
+   ['config_dsn',{...base,COMPETENCY_BROKER_GATEWAY_DATABASE_URL:'postgresql://competency_gateway_sentinel:SentinelPassword9@localhost/postgres'}],
+   ['config_dsn',{...base,COMPETENCY_BROKER_GATEWAY_DATABASE_URL:'postgresql://sentinel_user:SentinelPassword9@sentinel-db.invalid/postgres'}],
+   ['config_limiter',{...base,COMPETENCY_BROKER_LIMITER:undefined}],
+   ['config_limiter',{...base,COMPETENCY_BROKER_LIMITER:'sentinel-memory'}]
+  ];
+  for(const [reason,env] of cases){
+   set(env);
+   const lines=await captureWarn(async()=>expectGeneric503(await POST(json('bootstrap',null,{},'',{'x-sc014-intent':'bootstrap','x-forwarded-for':'198.51.100.77'}))));
+   assert.deepEqual(lines,[diag(reason)],reason);
+   assert.doesNotMatch(lines.join('\n'),/sentinel|Sentinel|abab|198\.51|localhost|postgres|https?:|Error|at /,'no env value, host, IP or stack');
+  }
+  // Disabled: at most one line per instance (production keeps the broker off).
+  set({...base,COMPETENCY_BROKER_ENABLED:undefined});
+  const lines=await captureWarn(async()=>{for(let i=0;i<3;i++)await expectGeneric503(await POST(json('bootstrap',null,{},'',{'x-sc014-intent':'bootstrap'})));});
+  assert.ok(lines.length<=1);for(const line of lines)assert.equal(line,diag('disabled'));
+ }finally{set(saved);}
+});
+
+test('R1 diagnostics: Postgres limiter and gateway failures carry only a fixed detail',async()=>{
+ const {createPostgresSharedLimiter}=await import('../lib/competency-postgres-limiter.ts');
+ const {createCompetencyGatewayRuntime}=await import('../lib/competency-attempt-broker-runtime.ts');
+ const runtime=pool=>createCompetencyGatewayRuntime({expectedOrigin:origin,expectedUser:'competency_gateway_sentinel',
+  csrfKey:Buffer.alloc(32,17),sourceKey:Buffer.alloc(32,19),pool,postgresLimiter:true,
+  limiter:createPostgresSharedLimiter(pool,'competency_gateway_sentinel'),trustedSource:()=> '203.0.113.10'});
+ const client=rows=>({query:async sql=>{if(rows instanceof Error)throw rows;return {rows:sql.includes('log_statement')?[]:rows};},release(){}});
+ const pools=[
+  ['pool_backpressure',{waitingCount:4,connect:async()=>{throw Error('unused');},on(){}}],
+  ['connect',{waitingCount:0,connect:async()=>{throw Error('password authentication failed for user competency_gateway_sentinel');},on(){}}],
+  ['verify_query',{waitingCount:0,connect:async()=>client(Error('permission denied for schema private')),on(){}}],
+  ['verify_identity',{waitingCount:0,connect:async()=>client([]),on(){}}]
+ ];
+ for(const [detail,pool] of pools){
+  const lines=await captureWarn(async()=>expectGeneric503(await runtime(pool)(json('bootstrap',null,{},'',{'x-sc014-intent':'bootstrap'}))));
+  assert.deepEqual(lines,[diag('limiter_unavailable',detail)],detail);
+  assert.doesNotMatch(lines.join('\n'),/sentinel|password|permission|203\.0|private/);
+ }
+ const {verifyCompetencyGateway}=await import('../lib/competency-broker-role.ts');
+ const {competencyDiagnosticDetail}=await import('../lib/competency-broker-diagnostics.ts');
+ for(const [user,c,detail] of [['bad',client([]),'verify_login'],['competency_gateway_x',client([]),'verify_identity'],
+  ['competency_gateway_x',client(Error('boom')),'verify_query']]){
+  const error=await verifyCompetencyGateway(c,user).then(()=>null,e=>e);
+  assert.equal(competencyDiagnosticDetail(error),detail);
+  assert.equal(JSON.stringify(error),JSON.stringify(Object.assign({},error)),'tag is never serialized');
+  assert.ok(!Object.keys(error).length||!JSON.stringify(error).includes('verify_'));
+ }
+});
