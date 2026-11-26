@@ -8,6 +8,7 @@
  * No cache: grants can be changed while a Node pool remains alive.
  */
 import type { CompetencyConnection } from './competency-attempt-transport.ts';
+import { competencyDiagnosticDetail, tagCompetencyDiagnostic } from './competency-broker-diagnostics.ts';
 
 // These six B2 entry points are required after SET LOCAL ROLE. Match
 // exact overloads, not function names, owner, or SECURITY DEFINER alone.
@@ -110,14 +111,28 @@ export async function verifyCompetencyGateway(
   expectedUser: string,
   options: {postgresLimiter?:boolean} = {}
 ): Promise<void> {
+  try {
+    await auditCompetencyGateway(client, expectedUser, options);
+  } catch (error) {
+    // Fixed diagnostic code only (which check failed); the error is rethrown as is.
+    if (!competencyDiagnosticDetail(error)) tagCompetencyDiagnostic(error, 'verify_query');
+    throw error;
+  }
+}
+
+async function auditCompetencyGateway(
+  client: CompetencyConnection,
+  expectedUser: string,
+  options: {postgresLimiter?:boolean}
+): Promise<void> {
   if (!/^competency_gateway_[a-z0-9_]{1,40}$/.test(expectedUser)) {
-    throw new Error('Gateway login not approved');
+    throw tagCompetencyDiagnostic(new Error('Gateway login not approved'), 'verify_login');
   }
   // C2 installs this one exact capability regardless of the runtime's limiter
   // selection. Redis remains valid on that schema; it cannot allow any other
   // overload/function, and all six core capabilities must still be present.
   const identities = (await client.query(PRIVILEGE_AUDIT, [[...GATEWAY_FUNCTIONS,POSTGRES_LIMITER_FUNCTION],POSTGRES_LIMITER_FUNCTION])).rows;
-  if (identities.length !== 2) throw new Error('Unsafe gateway identity');
+  if (identities.length !== 2) throw tagCompetencyDiagnostic(new Error('Unsafe gateway identity'), 'verify_identity');
   for (const identity of identities) {
     const login = identity.is_login === true;
     if (identity.role_name !== (login ? expectedUser : 'competency_test_gateway') ||
@@ -133,7 +148,7 @@ export async function verifyCompetencyGateway(
         (options.postgresLimiter && identity.installed_limiter_functions !== 1) ||
         identity.allowed_functions !== (login ? 0 : GATEWAY_FUNCTIONS.length + Number(identity.installed_limiter_functions)) ||
         identity.private_usage !== !login || identity.database_create) {
-      throw new Error('Unsafe gateway privileges');
+      throw tagCompetencyDiagnostic(new Error('Unsafe gateway privileges'), 'verify_privileges');
     }
   }
 
@@ -150,6 +165,6 @@ export async function verifyCompetencyGateway(
       logging.error_parameters !== '0' ||
       (logging.pgaudit_parameters != null && logging.pgaudit_parameters !== 'off') ||
       (logging.auto_explain_duration != null && logging.auto_explain_duration !== '-1')) {
-    throw new Error('Unsafe database parameter logging');
+    throw tagCompetencyDiagnostic(new Error('Unsafe database parameter logging'), 'verify_logging');
   }
 }

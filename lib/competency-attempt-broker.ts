@@ -7,6 +7,8 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
 import { executeCompetencyOperation, type CompetencyConnection, type CompetencyOperation } from './competency-attempt-transport.ts';
 import { LIMIT_WINDOW_SECONDS, type SharedRateLimiter } from './competency-broker-limiter.ts';
+import { competencyDiagnosticDetail, type CompetencyBrokerUnavailableDetail,
+  type CompetencyBrokerUnavailableReason } from './competency-broker-diagnostics.ts';
 
 export const B3_ENDPOINT = '/api/competency/attempt';
 export const B3_SESSION_COOKIE = '__Secure-sc014_b3_session';
@@ -31,6 +33,8 @@ export interface CompetencyBrokerDependencies {
   trustedSource(request: Request): string | null;
   now?(): number;
   maxInFlight?: number;
+  /** Fixed-code 503 diagnostic; never receives request data or error text. */
+  onUnavailable?(reason: CompetencyBrokerUnavailableReason, detail?: CompetencyBrokerUnavailableDetail): void;
 }
 
 const SECURITY_HEADERS: Record<string, string> = {
@@ -233,19 +237,23 @@ export function createCompetencyBroker(deps: CompetencyBrokerDependencies): (req
   let admitting = 0; // also covers streaming request bodies, before any DB work
   const now = deps.now || Date.now;
   const maxInFlight = deps.maxInFlight ?? 8;
+  const unavailable = (reason: CompetencyBrokerUnavailableReason, detail?: CompetencyBrokerUnavailableDetail): Response => {
+    try { deps.onUnavailable?.(reason, detail); } catch { /* never change the response */ }
+    return response(503, { error: 'unavailable' });
+  };
   return async (request: Request) => {
-    if (!deps.enabled) return response(503, { error: 'unavailable' });
+    if (!deps.enabled) return unavailable('disabled');
     if (request.method !== 'POST') return competencyBrokerMethodDenied();
     if (!sameOrigin(request, deps.expectedOrigin)) return response(403, { error: 'unavailable' });
     if (!allowedHeaders(request)) return response(413, { error: 'invalid_request' });
     // Rate limit before reading any request bytes. A slow stream must consume
     // global/source budget and a bounded per-instance slot before allocation.
-    if (admitting >= maxInFlight) return response(503, { error: 'unavailable' });
+    if (admitting >= maxInFlight) return unavailable('backpressure');
     admitting += 1;
     let input: Parsed | null = null;
     try {
       const source = deps.trustedSource(request);
-      if (!source || !isIP(source)) return response(503, { error: 'unavailable' });
+      if (!source || !isIP(source)) return unavailable('source_untrusted');
       const minute = Math.floor(now() / (LIMIT_WINDOW_SECONDS * 1000));
       const hour = Math.floor(now() / 3600000);
       const sourceHmac = hmac(deps.sourceKey, 'b3-source-hour-' + String(hour), source);
@@ -253,9 +261,9 @@ export function createCompetencyBroker(deps: CompetencyBrokerDependencies): (req
         if (!await deps.limiter.consume(sourceHmac, minute)) {
           return response(429, { error: 'rate_limited' });
         }
-      } catch {
+      } catch (error) {
         // Shared limiter must accept the request before ANY body is read.
-        return response(503, { error: 'unavailable' });
+        return unavailable('limiter_unavailable', competencyDiagnosticDetail(error));
       }
       try { input = parse(await boundedJson(request)); }
       catch (error) {
@@ -294,7 +302,7 @@ export function createCompetencyBroker(deps: CompetencyBrokerDependencies): (req
     } else if (!cookie || !equalSecret(supplied, hmac(deps.csrfKey, 'session', cookie))) {
       return response(403, { error: 'unavailable' });
     }
-    if (inFlight >= maxInFlight) return response(503, { error: 'unavailable' });
+    if (inFlight >= maxInFlight) return unavailable('backpressure');
     inFlight += 1;
     let lease: GatewayLease | null = null;
     let clean = false;
@@ -332,7 +340,12 @@ export function createCompetencyBroker(deps: CompetencyBrokerDependencies): (req
     } catch (error) {
       // No raw SQL, body, cookie, secret, candidate response, or provider error
       // in logs/trace. All unknown failures map to a generic response.
-      return response(statusFor(error), { error: 'unavailable' });
+      const status = statusFor(error);
+      if (status === 503) {
+        return lease ? unavailable('operation_failed')
+          : unavailable('gateway_unavailable', competencyDiagnosticDetail(error));
+      }
+      return response(status, { error: 'unavailable' });
     } finally {
       if (lease) {
         // A failing COMMIT, failed ROLLBACK, timeout, or driver error may leave

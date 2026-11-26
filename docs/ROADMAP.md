@@ -53,7 +53,7 @@ automatycznie. W obu trybach test dostaje tylko kandydat z shortlisty (reguła R
 | Tryb automatyczny w bazie (`auto_release`) | ZROBIONE | PR #291 |
 | Przełącznik rekrutera „zatwierdzam sam” / „automatycznie” na ekranie | ZROBIONE | PR #497 |
 | Automatyczne wysłanie testu kandydatowi w trybie automatycznym | W TOKU (dostęp bez kliknięcia rekrutera; realna wysyłka do kandydata nadal zamknięta) | PR #510, PR #517, PR #545 |
-| Włączenie testu kompetencji w Preview i przejście całej ścieżki | W TOKU (klucze wpisane przez właściciela 25.11.2026; jawne zmienne ustawione przez agenta tylko dla Preview `integration` 25.11.2026; działają od pierwszego wdrożenia Preview po scaleniu PR #599; zostaje przejście ścieżki na stronie Preview — kroki 1, 3a, 8b z `docs/checks/r1-preview-walk-2026-11-18.md`) | ścieżka ręczna przeszła w bazie Preview; zmienne: PR #599 |
+| Włączenie testu kompetencji w Preview i przejście całej ścieżki | W TOKU (klucze wpisane przez właściciela 25.11.2026; jawne zmienne ustawione przez agenta tylko dla Preview `integration` 25.11.2026; działają od pierwszego wdrożenia Preview po scaleniu PR #599; zostaje przejście ścieżki na stronie Preview — kroki 1, 3a, 8b z `docs/checks/r1-preview-walk-2026-11-18.md`) | ścieżka ręczna przeszła w bazie Preview; zmienne: PR #599; kod przyczyny 503 w logu: PR #601 |
 
 ### R2. Rozszerzony raport kandydata, bez części głosowej (etap 2)
 
