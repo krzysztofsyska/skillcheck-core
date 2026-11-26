@@ -49,3 +49,37 @@ Hasło loginu i dwa klucze generuje baza, a wartości widzi tylko właściciel. 
 Ryzyko do sprawdzenia przy pierwszym uruchomieniu: połączenie Vercel → bezpośredni host bazy
 (`db.…supabase.co:5432`). Gdy nie zadziała (odpowiedź 503), agent opisze to jako blokadę z propozycją —
 bez płatnych dodatków bez zgody właściciela.
+
+## Wykonanie (25.11.2026)
+
+- Właściciel wpisał trzy klucze (Preview, gałąź `integration`, Sensitive) — potwierdzone w Vercel
+  tylko po metadanych, bez odczytu wartości.
+- Baza Preview: login `competency_gateway_preview` ma `LOGIN`, bez `SUPERUSER` i `BYPASSRLS`;
+  funkcja ogranicznika `consume_competency_rate_limit` jest w bazie.
+- Agent ustawił jawne zmienne tylko dla Preview `integration`: `COMPETENCY_BROKER_LIMITER=postgres`,
+  `COMPETENCY_BROKER_ORIGIN=https://skillcheck-core-git-integration-krzysztofs-projects-b7ce87b5.vercel.app`,
+  `EXERCISE_AI_ENABLED=true`, `COMPETENCY_BROKER_ENABLED=true`, `COMPETENCY_CANDIDATE_PREVIEW=true`.
+  Produkcja bez zmian.
+- Zmienne zaczynają działać od następnego wdrożenia Preview `integration` (po scaleniu PR z tą notatką).
+- Połączenie Vercel → `db.orbyscrupgnupifzlqxp.supabase.co:5432` i przejście ścieżki na stronie: NOT RUN
+  (wymaga nowego wdrożenia). Odpowiedź 503 z `/zadanie-kompetencyjne` = blokada sieciowa, do opisania
+  z propozycją bez płatnych dodatków.
+
+## Połączenie przez pooler sesyjny (26.11.2026)
+
+- Przyczyna 503 (`limiter_unavailable`, `connect`): host `db.orbyscrupgnupifzlqxp.supabase.co` ma tylko adres
+  IPv6, a funkcje Vercel łączą się tylko po IPv4.
+- Rozwiązanie bez nowego sekretu i bez kosztów: jawna (niesekretna) zmienna
+  `COMPETENCY_BROKER_GATEWAY_POOLER_HOST` = host darmowego poolera sesyjnego Supabase
+  (`aws-<n>-<region>.pooler.supabase.com`). Gdy jest ustawiona, aplikacja sama zamienia w adresie z sekretu:
+  host na pooler, port na 5432 (tryb sesyjny; port 6543, tryb transakcyjny, jest niedozwolony),
+  użytkownika na `<rola>.<ref projektu>`. Hasło, rola i baza pochodzą nadal tylko z sekretu właściciela.
+- Bezpieczeństwo: host poolera musi pasować do `^aws-[0-9]+-[a-z]{2}-[a-z]+-[0-9]+\.pooler\.supabase\.com$`,
+  a host w sekrecie do `^db\.[a-z0-9]{20}\.supabase\.co$` (z niego bierzemy ref); inaczej `config_dsn` i 503.
+  Kontrola roli (`session_user`) dalej oczekuje gołej nazwy roli. TLS: pełna weryfikacja certyfikatu
+  i nazwy hosta, przypięty ten sam główny certyfikat Supabase co dla hosta bezpośredniego (Supabase
+  dokumentuje `sslmode=verify-full` z tym certyfikatem dla hostów poolera).
+- Pusta lub brak zmiennej = zachowanie jak dotąd.
+- Po scaleniu (osobny przebieg agenta): ustawić zmienną tylko dla Preview `integration` (najpierw
+  `aws-0-eu-west-1.pooler.supabase.com`; jeśli w logu pojawi się `connect` lub `verify_*`, spróbować
+  `aws-1-eu-west-1.pooler.supabase.com`), wdrożyć ponownie i przejść ścieżkę. Produkcja bez zmian.
