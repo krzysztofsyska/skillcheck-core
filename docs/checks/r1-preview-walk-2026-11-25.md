@@ -93,7 +93,7 @@ bo jego sprawdzenie odbywa się dopiero przy żądaniu.
    które Supabase domyślnie udostępnia do odczytu wszystkim (PUBLIC). Role nie mają dostępu do schematu
    `extensions`, więc tych widoków i tak nie mogą użyć. Kontrola logowania parametrów przechodzi
    (ustawienia na roli). Poprawka: kontrola liczy tylko relacje w schematach, do których rola ma dostęp
-   (tak jak kontrola funkcji) — PR #603. Następny krok (agent): po scaleniu PR #603 powtórzyć krok 1.
+   (tak jak kontrola funkcji) — PR #603. Następny krok (agent): po scaleniu PR #603 powtórzyć krok 1. **Zrobione 26.11.2026: krok 1 PASS** — `docs/checks/r1-preview-walk-2026-11-26.md`.
 2. **Hasło do konta rekrutera testowego (kroki 3a i 8b).** Propozycja agenta: ustawić hasło wyłącznie dla
    konta testowego w `example.com` w bazie Preview, bez zmian na produkcji i bez prawdziwych danych.
    **TAK/NIE?** Rekomendacja: TAK. Powód: zmienia to dane logowania, więc potrzebna jest Twoja zgoda.
