@@ -183,7 +183,7 @@ posiadane; inaczej pytanie do właściciela). Wycena — decyzja właściciela, 
 
 | Krok | Gotowe, gdy | Status | Dowód |
 |---|---|---|---|
-| Dwie fikcyjne firmy z własnym logo, kolorami, raportem i adresem strony na Preview | test końcowy dwóch marek przechodzi: każda firma widzi tylko swoją markę i swoje dane | DO ZROBIENIA | — |
+| Dwie fikcyjne firmy z własnym logo, kolorami, raportem i adresem strony na Preview | test końcowy dwóch marek przechodzi: każda firma widzi tylko swoją markę i swoje dane | W TOKU (automatyczny test dwóch fikcyjnych marek gotowy i zielony na PostgreSQL 16 — baza i prawdziwy serwer aplikacji: każda firma na swoim adresie widzi tylko swoje logo, kolory, raport i dane, w tym dowód negatywny, że kontrola wykrywa wyciek; wycieku nie wykryto; przejście na samym Preview NOT RUN — adres strony klienta wymaga prawdziwej domeny ustawionej w DNS, a darmowej lub posiadanej domeny testowej nie ma) | issue #627, PR #629: `tests/white-label-two-brands-database.test.mjs` w `npm run test:white-label-db`, `tests/white-label-two-brands-http.test.mjs` w `npm run test:white-label-http` (CI) |
 | Instrukcja uruchomienia dla nowego klienta (co klient ustawia w swojej domenie) | plik w `docs/` | DO ZROBIENIA | — |
 
 ### R9. Kontrola kosztów AI i wybór modelu (SC-021, issue #81; równolegle, niższy priorytet)
