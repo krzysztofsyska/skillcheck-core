@@ -9,8 +9,10 @@ Wycena white-label to decyzja właściciela i nie jest tu opisana.
 
 ## 1. Co to jest i co jest włączone
 
-Klient (firma) może mieć panel rekrutera i panel kandydata w swojej marce (nazwa, logo, kolory,
-favicon) i pod własnym adresem, np. `kariera.twojafirma.pl`. Dwie niezależne części:
+Klient (firma) może mieć panel rekrutera w swojej marce (nazwa, logo, kolory, favicon) i pod własnym
+adresem, np. `kariera.twojafirma.pl`. Nagłówek i wstęp panelu kandydata są w kodzie tylko **podglądem
+konfiguracji** na stronie marki; opublikowana marka nie zmienia tego, co widzi kandydat (patrz 6).
+Dwie niezależne części:
 
 - marka: strona „Wygląd panelu” (`/dashboard/<firma>/marka`),
 - domena: strona „Domeny” (`/dashboard/<firma>/domeny`),
@@ -145,10 +147,11 @@ Strona „Wygląd panelu” (`/dashboard/<firma>/marka`), tylko właściciel kon
 2. **Szkic.** Nazwa marki (do 80 znaków, bez `<` i `>`), wybór logo i favicona, pięć kolorów
    (główny, tekst na kolorze głównym, tło, tekst, akcent; zapis `#RRGGBB`), styl nagłówka panelu
    rekrutera (w kolorze głównym albo jasny), nagłówek panelu kandydata (do 120 znaków) i opcjonalny
-   wstęp (do 600 znaków).
+   wstęp (do 600 znaków). Pola nagłówka i wstępu kandydata służą tylko do podglądu (punkt 4).
 3. **Kontrast.** Szkic jest odrzucany, gdy kontrast jest za słaby (WCAG: tekst co najmniej 4,5:1,
    akcent co najmniej 3:1). Kontrasty widać na bieżąco w formularzu.
-4. **Podgląd i publikacja.** Podgląd panelu rekrutera i kandydata, potem „Opublikuj tę wersję”. Jeśli
+4. **Podgląd i publikacja.** Podgląd panelu rekrutera i podgląd konfiguracji panelu kandydata (ten
+   drugi nie jest jeszcze podłączony do ścieżki kandydata, patrz 6), potem „Opublikuj tę wersję”. Jeśli
    szkic zmienił się po wyświetleniu podglądu, trzeba obejrzeć podgląd ponownie.
 5. **Historia i cofanie.** Każda publikacja to numerowana wersja; wcześniejszą można przywrócić jako
    nową wersję. Dziennik zmian pokazuje, kto co zmienił.
@@ -173,13 +176,17 @@ Tych kroków klient nie wykona sam i nie wykonuje ich agent:
 | Login bazy dla weryfikatora (`tenant_domain_verifier`) i adres `TENANT_DOMAIN_VERIFIER_DATABASE_URL` | operator | bez tego przycisk „Sprawdź” odpowiada „Sprawdzanie domen nie jest dostępne w tym środowisku” (domyślnie bezpieczne wyłączenie) |
 | Opcjonalnie: automatyczne ponawianie DNS (rola `tenant_domain_reverifier`, `TENANT_DOMAIN_REVERIFY_DATABASE_URL`, `TENANT_DOMAIN_REVERIFY_ENABLED=true`, harmonogram, np. raz dziennie) | operator | nieuruchomione; sekrety i harmonogram to decyzja operatora/właściciela |
 | Ustawienia domen (`subdomain_base`, `reverify_days`, `pending_days`, `max_domains_per_company`) | operator | wartości domyślne opisano w punkcie 3 |
-| Wgranie migracji SC-020 na produkcję | właściciel (zatwierdzenie `production-approval`) | stan migracji na produkcji sprawdź w git i w `docs/ROADMAP.md`, nie w tym dokumencie |
+| Wgranie migracji SC-020 na produkcję | właściciel (zatwierdzenie `production-approval`) | stan produkcji sprawdź w git (SHA wydania na `main`), w PR i w wyniku workflow `db-migrate-production` dla tego SHA; obecność pliku migracji w repozytorium nie dowodzi jej wykonania; ten dokument nie podaje stanu produkcji |
 | Dopuszczenie adresu domeny klienta w ustawieniach logowania Supabase (lista dozwolonych adresów zwrotnych) | właściciel/operator | do potwierdzenia: kod buduje adresy zwrotne logowania z hosta domeny klienta (`tenantOriginFromHeader`), a `lib/auth-url.ts` opisuje, że adresy spoza listy są podmieniane na adres główny. Dopóki nie sprawdzono tego na Preview, traktuj logowanie na domenie klienta jako niepotwierdzone |
 
 ## 6. Co nie jest zaimplementowane lub nie jest potwierdzone
 
 - Brak automatycznego dodawania domeny w Vercel i brak sprawdzania rekordu CNAME/A; kod sprawdza
   tylko TXT i certyfikat TLS.
+- Panel kandydata w marce klienta nie jest podłączony do realnej ścieżki kandydata: nagłówek i wstęp
+  (`candidatePanel`) renderuje tylko podgląd na stronie marki. Opublikowana ramka marki
+  (`BrandFrame`) jest w layoucie panelu rekrutera, a nie w widoku kandydata. Do czasu wdrożenia tej
+  części kandydat nie zobaczy marki klienta w panelu zadania.
 - Wysyłka wiadomości do kandydatów w marce klienta jest wyłączona: istnieją szablony i podgląd
   (zaproszenie do zadania, potwierdzenie zgłoszenia, zakończenie procesu), ale jedyny transport
   w kodzie odmawia wysyłki. Nadawca z domeny klienta (SPF/DKIM) nie istnieje. Realna wysyłka do
@@ -193,8 +200,8 @@ Tych kroków klient nie wykona sam i nie wykonuje ich agent:
 
 ## 7. Lista kontrolna dla nowego klienta
 
-1. Właściciel podpisuje umowę i wycenę (poza repozytorium). Operator potwierdza, że flaga
-   `WHITE_LABEL_ENABLED` i migracje są włączone w docelowym środowisku.
+1. Właściciel podpisuje umowę i wycenę (poza repozytorium). Operator potwierdza w docelowym środowisku
+   stan flagi `WHITE_LABEL_ENABLED` oraz wykonanie migracji SC-020 (sprawdzenie według punktu 5).
 2. Właściciel firmy w SkillCheck ustawia markę (punkt 4) i publikuje ją.
 3. Właściciel firmy dodaje domenę na stronie „Domeny” i przekazuje IT rekord TXT (punkt 2.1).
 4. Operator dodaje domenę w Vercel i podaje IT adres docelowy CNAME/A (punkty 2.2 i 5).
