@@ -6,12 +6,14 @@
 // Sprawdza: raport zawiera właściwych kandydatów (i żadnego z obcej firmy), oceny z
 // uzasadnieniem i cytatem, wyraźne oznaczenie oceny niepełnej, nieaktualnej i
 // niezatwierdzonej, brak danych osobowych i surowego CV w pliku; pobranie raportu
-// kandydata zapisuje wpis w rejestrze (report_audit); obca firma, osoba spoza firmy i
-// osoba niezalogowana nie pobiorą pliku i nie zostawią wpisu.
+// kandydata i pobranie raportu preselekcji (SC-009a) zapisują wpis w rejestrze
+// (report_audit); obca firma, osoba spoza firmy i osoba niezalogowana nie pobiorą pliku,
+// nie zostawią wpisu i nie odczytają cudzego wpisu.
 // Dane wyłącznie fikcyjne. Analiza AI na Preview (klucz dostawcy) NOT RUN w tym teście:
 // oceny wpisuje fikstura przez te same funkcje bazy, których używa pracownik analizy.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { bootMigrationDatabase, seedSyntheticPolicy } from './helpers/sc19-migration-fixture.mjs';
 import { setupRankingDatabase, users } from './helpers/screening-ranking-fixture.mjs';
 import { loadScreeningReport } from '../lib/screening-report-source.ts';
@@ -24,11 +26,11 @@ const identifier = value => {
   return value === '*' ? '*' : `"${value}"`;
 };
 // Funkcje zwracające jedną wartość: PostgREST oddaje samą wartość, nie wiersze.
-const scalarFunctions = new Set(['get_preselection_groups', 'record_candidate_report_export']);
+const scalarFunctions = new Set(['get_preselection_groups', 'record_candidate_report_export', 'record_screening_report_export']);
 const tables = new Set(['companies', 'recruitments', 'positions', 'applications', 'candidates', 'candidate_documents',
   'screening_analysis_versions', 'screening_result_reviews', 'screening_criterion_results', 'screening_criterion_review_overrides']);
 const functions = new Set(['get_screening_ranking', 'get_recruitment_shortlist', 'get_preselection_groups',
-  'position_requirement_flags', 'record_candidate_report_export']);
+  'position_requirement_flags', 'record_candidate_report_export', 'record_screening_report_export']);
 
 function dataApiClient(db, getUser) {
   const reads = [];
@@ -88,6 +90,10 @@ test('SC-009: raport z preselekcji i pobranie pliku na pełnym łańcuchu migrac
   const audit = async () => {
     await h.asAdmin();
     return (await db.query('select company_id,recruitment_id,application_id,actor_id,export_kind,analysis_version from report_audit.candidate_report_exports order by created_at,id')).rows;
+  };
+  const screeningAudit = async () => {
+    await h.asAdmin();
+    return (await db.query('select id,company_id,recruitment_id,actor_id,actor_role,export_kind,target_size from report_audit.screening_report_exports order by created_at,id')).rows;
   };
 
   // Firma A: pięć zgłoszeń o różnym stanie. Firma B: jedno zgłoszenie, które nie może trafić do raportu A.
@@ -231,13 +237,120 @@ test('SC-009: raport z preselekcji i pobranie pliku na pełnym łańcuchu migrac
     assert.equal((await audit()).length, before, 'odmowa nie zapisuje wpisu');
   });
 
-  // Luka znaleziona przez ten test: plik CSV raportu preselekcji (całej rekrutacji) nie zapisuje wpisu w rejestrze,
-  // w przeciwieństwie do raportu kandydata. Naprawa wymaga nowej funkcji i migracji (L3), więc jest osobnym krokiem.
-  await t.test('pobranie raportu preselekcji zapisuje wpis w rejestrze', { todo: 'luka: eksport CSV preselekcji nie ma wpisu w rejestrze; osobny krok L3' }, async () => {
-    const before = (await audit()).length;
+  // R0 SC-009a: luka znaleziona przez ten test (PR #623) — plik CSV raportu preselekcji nie zapisywał
+  // wpisu w rejestrze — jest naprawiona migracją 20261127140000_sc009a_screening_report_export_audit.sql.
+  await t.test('pobranie raportu preselekcji zapisuje wpis w rejestrze (właściciel i czytelnik), same identyfikatory', async () => {
+    const before = (await screeningAudit()).length;
+    const candidateBefore = (await audit()).length;
     await as(users.owner);
     const response = await exportScreeningReport(client, alpha.companyId, alpha.recruitment.id, '5');
     assert.equal(response.status, 200);
-    assert.equal((await audit()).length, before + 1);
+    await as(users.viewer);
+    const viewer = await exportScreeningReport(client, alpha.companyId, alpha.recruitment.id, '7');
+    assert.equal(viewer.status, 200);
+    const rows = (await screeningAudit()).slice(before);
+    assert.deepEqual(rows.map(row => [row.actor_id, row.actor_role, row.target_size]), [[users.owner, 'owner', 5], [users.viewer, 'viewer', 7]]);
+    for (const row of rows) {
+      assert.equal(row.company_id, alpha.companyId);
+      assert.equal(row.recruitment_id, alpha.recruitment.id);
+      assert.equal(row.export_kind, 'screening_report_csv');
+    }
+    // Raport preselekcji nie dopisuje się do dziennika raportów kandydata.
+    assert.equal((await audit()).length, candidateBefore);
+    // Rejestr trzyma tylko identyfikatory firmy, rekrutacji i osoby, rolę, rodzaj i rozmiar:
+    // brak kolumn z tekstem, nazwiskiem ani identyfikatorem zgłoszenia lub kandydata.
+    await h.asAdmin();
+    const columns = (await db.query("select column_name from information_schema.columns where table_schema='report_audit' and table_name='screening_report_exports' order by ordinal_position")).rows.map(row => row.column_name);
+    assert.deepEqual(columns, ['id', 'company_id', 'recruitment_id', 'actor_id', 'actor_role', 'export_kind', 'target_size', 'created_at']);
+  });
+
+  await t.test('obca firma, osoba spoza firmy i niezalogowany: brak pliku preselekcji i brak wpisu; obca rekrutacja = ta sama odmowa', async () => {
+    const before = (await screeningAudit()).length;
+    for (const [who, status] of [[users.otherOwner, 404], [users.outsider, 404], [null, 401]]) {
+      await as(who, who ? 'authenticated' : 'anon');
+      const response = await exportScreeningReport(client, alpha.companyId, alpha.recruitment.id, '5');
+      assert.equal(response.status, status, `raport preselekcji: ${who}`);
+      assert.equal(response.headers.get('content-disposition'), null);
+    }
+    const record = (company, recruitment, kind = 'screening_report_csv', size = 5) =>
+      db.query('select public.record_screening_report_export($1,$2,$3,$4) as id', [company, recruitment, kind, size]);
+    const forbidden = error => error.code === '42501';
+    // Firma B wprost przez funkcję: cudza firma, własna firma z cudzą rekrutacją, nieistniejąca rekrutacja.
+    await as(users.otherOwner);
+    await assert.rejects(record(alpha.companyId, alpha.recruitment.id), forbidden);
+    await assert.rejects(record(foreign.companyId, alpha.recruitment.id), forbidden);
+    await assert.rejects(record(foreign.companyId, '00000000-0000-4000-8000-000000000999'), forbidden);
+    await as(users.outsider);
+    await assert.rejects(record(alpha.companyId, alpha.recruitment.id), forbidden);
+    await as(null, 'anon');
+    await assert.rejects(record(alpha.companyId, alpha.recruitment.id), forbidden);
+    // Zły rodzaj albo rozmiar spoza 5–10 nie zapisuje wpisu.
+    await as(users.owner);
+    for (const [kind, size] of [['candidate_report_csv', 5], ['screening_report_csv', 4], ['screening_report_csv', 11], ['screening_report_csv', null]]) {
+      await assert.rejects(record(alpha.companyId, alpha.recruitment.id, kind, size), error => error.code === '22023', `${kind}/${size}`);
+    }
+    assert.equal((await screeningAudit()).length, before, 'odmowa nie zapisuje wpisu');
+  });
+
+  await t.test('obca firma nie odczyta wpisu firmy A; dziennik zamknięty dla ról API i niezmienny', async () => {
+    const entries = await screeningAudit();
+    assert.ok(entries.some(row => row.company_id === alpha.companyId), 'firma A ma wpisy');
+    // Firma B ma własny wpis, żeby odczyt nie był pusty z braku danych.
+    await as(users.otherOwner);
+    const own = await exportScreeningReport(client, foreign.companyId, foreign.recruitment.id, '5');
+    assert.equal(own.status, 200);
+    for (const [who, role] of [[users.otherOwner, 'authenticated'], [users.outsider, 'authenticated'], [users.viewer, 'authenticated'], [users.owner, 'authenticated'], [null, 'anon']]) {
+      await as(who, role);
+      await assert.rejects(db.query('select company_id, recruitment_id from report_audit.screening_report_exports'), error => error.code === '42501', `${who}`);
+      await assert.rejects(db.query('select company_id from report_audit.screening_report_exports where company_id=$1', [alpha.companyId]), error => error.code === '42501');
+    }
+    // Przegląd firmy (SC-015-D3) też nie wydaje wpisów firmy A obcej firmie.
+    await as(users.otherOwner);
+    await assert.rejects(db.query('select * from public.list_company_report_exports($1)', [alpha.companyId]), error => error.code === '42501');
+    await h.asAdmin();
+    for (const role of ['anon', 'authenticated', 'service_role']) {
+      const exists = (await db.query('select 1 from pg_roles where rolname=$1', [role])).rows.length;
+      if (!exists) continue;
+      assert.equal((await db.query("select has_schema_privilege($1,'report_audit','USAGE') v", [role])).rows[0].v, false, role);
+      assert.equal((await db.query("select has_table_privilege($1,'report_audit.screening_report_exports','SELECT') v", [role])).rows[0].v, false, role);
+    }
+    const grants = (await db.query(`select r.rolname, has_function_privilege(r.oid,'public.record_screening_report_export(uuid,uuid,text,integer)','EXECUTE') v
+      from pg_roles r where r.rolname in ('anon','authenticated','screening_worker','service_role') order by 1`)).rows;
+    for (const { rolname, v } of grants) assert.equal(v, rolname === 'authenticated', rolname);
+    const fn = (await db.query("select prosecdef, proconfig from pg_proc where oid='public.record_screening_report_export(uuid,uuid,text,integer)'::regprocedure")).rows[0];
+    assert.equal(fn.prosecdef, true);
+    assert.deepEqual(fn.proconfig, ['search_path=""']);
+    assert.equal((await db.query("select relrowsecurity v from pg_class where oid='report_audit.screening_report_exports'::regclass")).rows[0].v, true);
+    await assert.rejects(db.query('update report_audit.screening_report_exports set target_size=6'), error => error.code === '42501');
+    await assert.rejects(db.query('delete from report_audit.screening_report_exports'), error => error.code === '42501');
+    await assert.rejects(db.query('truncate report_audit.screening_report_exports'), error => error.code === '42501');
+    assert.equal((await screeningAudit()).length, entries.length + 1);
+  });
+
+  await t.test('rollback SC-009a: odmowa przy wpisach, potem czysto, bez zmiany sygnatury SC-010; migracja nakłada się ponownie', async () => {
+    const migration = '20261127140000_sc009a_screening_report_export_audit';
+    const file = name => readFile(new URL(`../supabase/${name}`, import.meta.url), 'utf8');
+    const signature = async () => { await h.asAdmin(); return (await db.query('select private.erasure_schema_signature() v')).rows[0].v; };
+    const installed = await signature();
+    await assert.rejects(db.query(await file(`rollbacks/${migration}_down.sql`)), error => /sc009a_rollback_not_empty/.test(error.message));
+    await db.query('rollback').catch(() => {});
+    assert.notEqual((await db.query("select to_regprocedure('public.record_screening_report_export(uuid,uuid,text,integer)') v")).rows[0].v, null, 'odmowa nie usuwa funkcji');
+    // Jedyna droga usunięcia wpisów: procedura usuwania firmy (report_audit.purge_company).
+    for (const company of [alpha.companyId, foreign.companyId]) {
+      await db.query('begin');
+      await db.query("select set_config('report_audit.purge_company',$1,true)", [company]);
+      await db.query('delete from report_audit.screening_report_exports where company_id=$1', [company]);
+      await db.query('commit');
+    }
+    await db.query(await file(`rollbacks/${migration}_down.sql`));
+    assert.equal(await signature(), installed);
+    assert.equal((await db.query("select to_regclass('report_audit.screening_report_exports') v")).rows[0].v, null);
+    assert.notEqual((await db.query("select to_regclass('report_audit.candidate_report_exports') v")).rows[0].v, null, 'dziennik SC-015-D zostaje');
+    await db.query(await file(`rollbacks/${migration}_down.sql`));
+    await db.query(await file(`migrations/${migration}.sql`));
+    assert.equal(await signature(), installed);
+    await as(users.owner);
+    assert.equal((await exportScreeningReport(client, alpha.companyId, alpha.recruitment.id, '5')).status, 200);
+    assert.equal((await screeningAudit()).length, 1);
   });
 });
