@@ -44,7 +44,7 @@ ogranicza budżet w panelu OpenAI.
 | exercise_observation_entries | Niezmienna historia obserwacji wykonania zadań |
 | screening_analysis_versions | Wersjonowany snapshot wejścia i stan logicznej analizy |
 | screening_analysis_attempts | Próby wykonania, idempotency oraz worker lease |
-| screening_criterion_results | Niezmienny wynik AI per kryterium |
+| screening_criterion_results | Wynik AI per kryterium (niezmienny po zapisie) oraz ostatnia poprawka człowieka w kolumnach `human_*` (bez historii, zob. `docs/checks/sc003-assessment-storage-2026-11-27.md`) |
 | screening_result_reviews | Wersjonowana historia review człowieka |
 | screening_criterion_review_overrides | Niezmienne korekty człowieka bez nadpisywania AI |
 
