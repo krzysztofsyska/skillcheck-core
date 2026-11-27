@@ -146,3 +146,5 @@
 20261127130000_sc010a1_erase_report_exports.sql
 # R0 SC-009a: the preselection report CSV export writes an entry in a new append-only log report_audit.screening_report_exports (company, recruitment, actor, role, kind, shortlist size; no application or candidate id) through one security-definer function for authenticated members. Erasure signature unchanged, report_audit stays closed to API roles, nothing sent.
 20261127140000_sc009a_screening_report_export_audit.sql
+# R7 SC-019b (#638): a NEW competency test access (manual create_competency_test_grant and automatic issue_exercise_ai_auto_access, both through sc19_commerce.consume_skill_test) needs a paid WERYFIKACJA or ASSESSMENT CENTER package (PT402); existing grants and attempts unchanged, no test limit. Function body only, owner-only grants kept, erasure signature unchanged, no order, grant, price or payment change, nothing sent, test data only.
+20261127170000_r7_competency_test_package_gate.sql

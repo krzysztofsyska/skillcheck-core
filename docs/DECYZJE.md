@@ -13,6 +13,13 @@
 4. Decyzje sprzed 16.11.2026 są w historii git plików `AGENTS.md` i `CLAUDE.md` (stan sprzed
    17.11.2026) oraz w `docs/BACKLOG.md` (archiwum).
 
+## 27.11.2026
+
+**Test kompetencji tylko z płatnym pakietem (R7 SC-019b, issue #638).** Czat pisany, 07:12. Pytanie
+czatu: „Czy test kompetencji ma być dostępny tylko dla firm z pakietem WERYFIKACJA? Dziś może go
+wysłać też firma z FREE lub PRESELEKCJĄ. Rekomendacja: TAK, bo test należy do płatnego pakietu.”
+— właściciel: **„Tak”**.
+
 ## 26.11.2026
 
 **Przegląd SC-000–SC-021 (remanent dla właściciela z 18.11.2026).** Rozmowa głosowa z czatem
