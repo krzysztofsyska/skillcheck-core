@@ -2,7 +2,7 @@ import Link from 'next/link';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Database } from '../../../../../lib/supabase/database.types';
 import { ExerciseAiAutoReleaseSwitch } from './exercise-ai-auto-release';
-import { exerciseAiAutoAccessEnabled, parseExerciseAiAutoAccess } from '../../../../../lib/exercise-ai-auto-access';
+import { COMPETENCY_PACKAGE_MISSING_TEXT, exerciseAiAutoAccessEnabled, parseExerciseAiAutoAccess } from '../../../../../lib/exercise-ai-auto-access';
 import type { ExerciseAiAutoAccess as AutoAccess } from '../../../../../lib/exercise-ai-auto-access';
 
 type Props = { client: SupabaseClient<Database>; companyId: string; recruitmentId: string; canEdit: boolean; editable: boolean };
@@ -14,10 +14,11 @@ export async function ExerciseAiAutoReleaseSection({ client, companyId, recruitm
   const current = read.error || typeof read.data !== 'boolean' ? null : read.data;
   // R1-AUTO-ACCESS: w trybie automatycznym baza wydaje dostęp do zwolnionego testu AI kandydatom
   // z krótkiej listy (bez kliknięcia, idempotentnie) i zwraca listę. Niczego nie wysyła kandydatom.
-  let access: AutoAccess | null | undefined;
+  let access: AutoAccess | 'package_required' | null | undefined;
   if (current === true && exerciseAiAutoAccessEnabled()) {
     const result = await client.rpc('issue_exercise_ai_auto_access', { target_company: companyId, target_recruitment: recruitmentId });
-    access = result.error ? null : parseExerciseAiAutoAccess(result.data);
+    // R7 SC-019b: bez pakietu WERYFIKACJA / ASSESSMENT CENTER baza nie wydaje nowego dostępu (PT402).
+    access = result.error?.code === 'PT402' ? 'package_required' : result.error ? null : parseExerciseAiAutoAccess(result.data);
   }
   return <>
     <ExerciseAiAutoReleaseSwitch companyId={companyId} recruitmentId={recruitmentId} current={current} editable={editable}/>
@@ -25,11 +26,11 @@ export async function ExerciseAiAutoReleaseSection({ client, companyId, recruitm
   </>;
 }
 
-export function ExerciseAiAutoAccessList({ value, companyId, recruitmentId }: { value: AutoAccess | null; companyId: string; recruitmentId: string }) {
+export function ExerciseAiAutoAccessList({ value, companyId, recruitmentId }: { value: AutoAccess | 'package_required' | null; companyId: string; recruitmentId: string }) {
   const base = `/dashboard/${companyId}/recruitments/${recruitmentId}/applications`;
   return <section>
     <h2>Dostęp do testu kompetencji wydany automatycznie</h2>
-    {!value ? <p role="alert">Nie udało się sprawdzić ani wydać dostępu automatycznie. Odśwież stronę za chwilę.</p> : <>
+    {value === 'package_required' ? <p role="alert">{COMPETENCY_PACKAGE_MISSING_TEXT}</p> : !value ? <p role="alert">Nie udało się sprawdzić ani wydać dostępu automatycznie. Odśwież stronę za chwilę.</p> : <>
       <p>W trybie „Automatycznie” kandydaci z krótkiej listy dostają dostęp do zatwierdzonego testu bez Twojego kliknięcia.
         Nic nie jest wysyłane kandydatom: link przekazujesz sam. Na stronie zadań kandydata wybierz „Rotuj link”, aby otrzymać link do przekazania.</p>
       {value.issued > 0 && <p role="status">Wydano teraz: {value.issued}.</p>}

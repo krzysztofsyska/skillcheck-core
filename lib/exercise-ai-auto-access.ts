@@ -1,6 +1,9 @@
 // R1-AUTO-ACCESS: wynik public.issue_exercise_ai_auto_access (20261117220000_r1_auto_competency_access.sql).
 // Baza wydaje dostęp tylko w trybie automatycznym i tylko krótkiej liście (R1); tu jedynie
 // sprawdzamy kształt odpowiedzi. Nic nie jest wysyłane kandydatom, sekret linku nie przychodzi.
+// R7 SC-019b: tekst pokazywany, gdy baza odmawia nowego dostępu bez pakietu (PT402).
+export { COMPETENCY_PACKAGE_MISSING_TEXT } from './competency-package.ts';
+
 const uuid = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
 export type ExerciseAiAutoAccessRow = {

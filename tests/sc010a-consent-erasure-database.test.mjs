@@ -132,6 +132,15 @@ test('SC-010 A: after an erasure request no candidate data remains in the databa
   await c.permission(f, 'revoked', 0, undefined, f.recruitment.id, 'sms');
   const exported = (await db.query("select public.record_candidate_report_export($1,$2,$3,'candidate_report_csv',1) id",
     [f.companyId, f.recruitment.id, f.application.id])).rows[0].id;
+  // A second candidate of the same company and recruitment, and a candidate of another company,
+  // each with their own export log entry: erasure must leave both untouched.
+  const neighbour = await h.candidate(f, 'sc010a-neighbour');
+  await h.asUser(f.owner);
+  const neighbourExport = (await db.query("select public.record_candidate_report_export($1,$2,$3,'candidate_report_csv',null) id",
+    [f.companyId, f.recruitment.id, neighbour.application.id])).rows[0].id;
+  await h.asUser(bystander.owner);
+  const bystanderExport = (await db.query("select public.record_candidate_report_export($1,$2,$3,'candidate_report_csv',null) id",
+    [bystander.companyId, bystander.recruitment.id, bystander.application.id])).rows[0].id;
   await h.asAdmin();
   const doc = (await db.query('select id from public.candidate_documents where candidate_id=$1', [f.candidate.id])).rows;
   const ids = [f.candidate.id, f.application.id, ...doc.map(d => d.id), f.communicationId, f.receiptId, exported];
@@ -156,22 +165,26 @@ test('SC-010 A: after an erasure request no candidate data remains in the databa
     assert.deepEqual(after[table], [f.candidate.id], `${table} keeps only the retired candidate id`);
     delete after[table];
   }
-  // KNOWN GAP (finding, see PR): the append-only report export audit is outside the erasure inventory
-  // (schema report_audit, not public/private) and its purge path is company-level only, so the
-  // erased application's audit rows survive. They hold ids only (company, recruitment, application,
-  // actor, kind, version), no name or text. When a follow-up migration purges them, this block must
-  // be replaced by the plain empty assertion below.
-  assert.deepEqual(Object.keys(after), ['report_audit.candidate_report_exports'], `unexpected data left behind: ${JSON.stringify(after)}`);
-  await h.asAdmin();
-  assert.deepEqual((await db.query("select column_name from information_schema.columns where table_schema='report_audit' and table_name='candidate_report_exports' order by ordinal_position")).rows.map(r => r.column_name),
-    ['id', 'company_id', 'recruitment_id', 'application_id', 'actor_id', 'export_kind', 'analysis_version', 'created_at'], 'audit rows are id-only');
-  assert.equal((await db.query('select count(*)::int n from report_audit.candidate_report_exports where application_id=$1', [f.application.id])).rows[0].n, 1, 'KNOWN GAP: export audit row survives');
-  delete after['report_audit.candidate_report_exports'];
+  // SC-010a-1 (issue #619, migration 20261127130000): the report export log rows of the erased
+  // application are deleted in the same purge transaction; nothing of the candidate is left.
   assert.deepEqual(after, {});
 
   await h.asAdmin();
   assert.equal((await db.query('select count(*)::int n from public.candidate_documents where candidate_id=$1', [f.candidate.id])).rows[0].n, 0, 'CV text is gone');
   assert.equal((await db.query('select count(*)::int n from public.candidates where id=$1', [bystander.candidate.id])).rows[0].n, 1, 'other tenant untouched');
+  assert.equal((await db.query('select count(*)::int n from report_audit.candidate_report_exports where application_id=$1', [f.application.id])).rows[0].n, 0, 'export log rows of the erased application are gone');
+  assert.deepEqual((await db.query('select id from report_audit.candidate_report_exports where id = any($1::uuid[]) order by id', [[neighbourExport, bystanderExport]])).rows.map(r => r.id).sort(),
+    [neighbourExport, bystanderExport].sort(), 'export log of another candidate of the same company and of another company is untouched');
+  assert.equal((await db.query("select current_setting('report_audit.purge_company', true) v")).rows[0].v || '', '', 'the company purge exception is not left open');
+  // The AC session export log (SC-AC-EXPORT-AUDIT) has no candidate or application column: an AC
+  // session is a group event, so there is no per-candidate row to erase there.
+  assert.deepEqual((await db.query("select column_name from information_schema.columns where table_schema='report_audit' and table_name='assessment_center_session_exports' order by ordinal_position")).rows.map(r => r.column_name),
+    ['id', 'company_id', 'recruitment_id', 'session_id', 'actor_id', 'actor_role', 'export_kind', 'created_at'], 'AC session export log holds no candidate id');
+  // Direct use of the helper is closed to every API and worker role.
+  for (const role of ['anon', 'authenticated', 'service_role', 'screening_worker', 'erasure_worker']) {
+    if (!(await db.query('select to_regrole($1) is not null v', [role])).rows[0].v) continue;
+    assert.equal((await db.query("select has_function_privilege($1,'private.sc010a1_erase_report_exports(uuid,uuid[])','execute') v", [role])).rows[0].v, false, role);
+  }
   await h.asUser(f.owner);
   await assert.rejects(db.query("select public.record_candidate_report_export($1,$2,$3,'candidate_report_csv',1)", [f.companyId, f.recruitment.id, f.application.id]), code('42501'), 'no report or export can be produced for an erased application');
 });
