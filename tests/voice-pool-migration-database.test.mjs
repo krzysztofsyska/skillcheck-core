@@ -17,8 +17,8 @@ import { reconstructTrustedVoiceSource } from '../lib/voice/trusted-source-verif
 import { prepareOfflineVoiceDraft, cancelOfflineVoicePreparation } from '../lib/voice/offline-preparation.ts';
 import { syntheticRetellProof } from './helpers/voice-preparation-provider-fixture.mjs';
 
-// Full current chain: R23 since R6-1c part 7 (voice transcripts) builds on this step.
-const signature = '4dab3fae234c8233104d691381b62710570324bee0db8bd5df4be28f3d6702f7';
+// Full current chain: R24 (SC-003a criterion review history) on top of R23 (R6-1c part 7 voice transcripts), which builds on this step.
+const signature = 'bc5fe11ba2c0cd33015c00b2283403532f338630f3e9661b91847d6979726235';
 const candidateTables = ['private.voice_interview_permission_receipts', 'private.voice_interview_permission_revocations',
   'private.sc010c_voice_preparations', 'private.sc010c_voice_preparation_requests'];
 const sharedTables = ['private.voice_interview_permission_policies', 'private.voice_interview_permission_issuers',

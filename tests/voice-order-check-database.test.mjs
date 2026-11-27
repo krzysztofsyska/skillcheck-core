@@ -15,7 +15,7 @@ import { setupRankingDatabase, users } from './helpers/screening-ranking-fixture
 import { parseVoiceOrderCheck } from '../lib/voice/order-check.ts';
 
 // Same full-chain signature as tests/voice-pool-package-database.test.mjs: a function only.
-const signature = '4dab3fae234c8233104d691381b62710570324bee0db8bd5df4be28f3d6702f7';
+const signature = 'bc5fe11ba2c0cd33015c00b2283403532f338630f3e9661b91847d6979726235';
 const fn = 'public.voice_interview_order_check(uuid,uuid,uuid)';
 const migration = '20261121170000_r6_voice_order_check.sql';
 const code = (...codes) => e => codes.includes(e.code);

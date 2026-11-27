@@ -8,8 +8,8 @@ import { bootMigrationDatabase } from './helpers/sc19-migration-fixture.mjs';
 import { setupRankingDatabase, users } from './helpers/screening-ranking-fixture.mjs';
 
 const migration = '20261109200000_sc020_customer_domains.sql';
-// Full current chain: R23 since R6-1c part 7 voice transcripts (R22: part 6 voice dispatch resolution). SC-020 itself stays outside the inventory.
-const signature = '4dab3fae234c8233104d691381b62710570324bee0db8bd5df4be28f3d6702f7';
+// Full current chain: R24 since SC-003a criterion review history (R23: R6-1c part 7 voice transcripts). SC-020 itself stays outside the inventory.
+const signature = 'bc5fe11ba2c0cd33015c00b2283403532f338630f3e9661b91847d6979726235';
 const code = (...codes) => error => codes.includes(error.code);
 const forbidden = code('42501');
 

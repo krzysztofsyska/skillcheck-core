@@ -20,6 +20,8 @@ const rpcOnly = ['sales_leads', 'platform_operators'];
 const competencyRpcOnly=['competency_test_attempts','competency_test_review_entries'];
 // R6-1c: voice plan history is reachable only through owner-executed RPCs; no API role gets anything.
 const voicePlanRpcOnly=['voice_plan_versions'];
+// SC-003a (#621): append-only history of human corrections; members read it through RLS, only the review RPC writes.
+const reviewHistoryReadOnly=['screening_criterion_review_history'];
 const views = ['latest_behavior_assessments', 'latest_exercise_definitions', 'latest_exercise_observations'];
 const tables = [...crud, ...readOnly, ...rpcOnly, 'companies', 'candidate_documents'].sort();
 const relations = [...tables, ...views].sort();
@@ -84,7 +86,8 @@ async function assertApiContract(db) {
   const step4Present = catalog.some(row => row.relname === 'application_stage_events');
   const competencyPresent=catalog.some(row=>row.relname==='competency_test_attempts');
   const voicePlanPresent=catalog.some(row=>row.relname==='voice_plan_versions');
-  const expectedRelations=[...relations,...(step4Present?step4Audit:[]),...(competencyPresent?competencyRpcOnly:[]),...(voicePlanPresent?voicePlanRpcOnly:[])].sort();
+  const reviewHistoryPresent=catalog.some(row=>row.relname==='screening_criterion_review_history');
+  const expectedRelations=[...relations,...(step4Present?step4Audit:[]),...(competencyPresent?competencyRpcOnly:[]),...(voicePlanPresent?voicePlanRpcOnly:[]),...(reviewHistoryPresent?reviewHistoryReadOnly:[])].sort();
   assert.deepEqual(catalog.map(r => r.relname), expectedRelations, 'new tables require a reviewed API contract');
   for (const row of catalog) {
     if (row.relkind === 'v') assert.ok(row.reloptions.includes('security_invoker=true'), row.relname);
