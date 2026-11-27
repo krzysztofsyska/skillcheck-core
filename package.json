@@ -8,7 +8,7 @@
     "start": "next start",
     "typecheck": "next typegen && tsc --noEmit",
     "test:db": "node --test --test-concurrency=1 tests/database.test.mjs tests/database-types.test.mjs tests/data-api-grants.test.mjs tests/company-creation-limit-database.test.mjs tests/tenant-isolation-database.test.mjs tests/sc003a-criterion-review-history-database.test.mjs",
-    "test:exercise-ai-auto-access-db": "node --test --test-concurrency=1 tests/exercise-ai-auto-access-database.test.mjs",
+    "test:exercise-ai-auto-access-db": "node --test --test-concurrency=1 tests/exercise-ai-auto-access-database.test.mjs tests/competency-package-gate-database.test.mjs",
     "test:company-limit-concurrency": "node --test tests/company-creation-limit-concurrency.test.mjs",
     "test:auth": "node --test tests/auth.test.mjs tests/onboarding-redirect.test.mjs tests/page-access-guard.test.mjs tests/position.test.mjs tests/candidate.test.mjs tests/auth-url.test.mjs",
     "test:tenant-domains": "node --test tests/tenant-domains.test.mjs && node --experimental-strip-types --test tests/white-label-isolation.test.mjs",

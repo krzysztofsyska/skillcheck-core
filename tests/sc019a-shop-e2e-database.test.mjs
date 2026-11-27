@@ -259,11 +259,19 @@ test('SC-019a: purchase in Stripe test mode → signed webhook → the right pac
       });
     }
 
-    // Gap found by SC-019a (issue #634): the WERYFIKACJA layer itself (competency test) is not
-    // tied to a WERYFIKACJA purchase. Migration 20261121150000 grants no skill-test units and
-    // sc19_commerce.settings.skill_test_metering stays off, so a company with PRESELEKCJA only
-    // (or a FREE trial) can still send a competency test. Product decision, not fixed here.
-    await t.test('WERYFIKACJA: a competency test needs a paid WERYFIKACJA package', { todo: 'issue #634: competency test not tied to the WERYFIKACJA purchase' }, () => {});
+    // Gap found by SC-019a (issue #634), closed by SC-019b (issue #638, migration
+    // 20261127170000): a new competency test (WERYFIKACJA layer) needs a paid WERYFIKACJA or
+    // ASSESSMENT CENTER package. Both issuers (manual and automatic) pass through
+    // sc19_commerce.consume_skill_test, checked here on the entitlements the purchases above
+    // really granted; the full issuance paths are in tests/competency-package-gate-database.test.mjs.
+    await t.test('WERYFIKACJA / ASSESSMENT CENTER: a competency test needs a paid package; PRESELEKCJA or no purchase is refused', async () => {
+      await h.asAdmin();
+      const testGate = key => db.query('select sc19_commerce.consume_skill_test($1)', [firm[key].companyId]);
+      for (const key of ['P', 'N']) await assert.rejects(testGate(key), e => e.code === 'PT402' && e.message === 'Competency test package required', key);
+      for (const key of ['W', 'A']) await testGate(key);
+      // The package is not used up by a test (no test count in the price list).
+      assert.deepEqual(await state('W'), { balance: 59, packages: ['package:WERYFIKACJA'] });
+    });
 
     await t.test('one company\'s purchase never opens anything for another; the company without a purchase still has no access', async () => {
       assert.deepEqual(await state('N'), { balance: 0, packages: [] });

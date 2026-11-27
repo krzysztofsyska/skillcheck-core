@@ -305,6 +305,13 @@ test('R1-AUTO-ACCESS fails closed: database errors and unexpected shapes show an
  assert.equal(autoAccessHelpers.exerciseAiAutoAccessEnabled({EXERCISE_AI_ENABLED:'false',COMPETENCY_CANDIDATE_PREVIEW:'true',VERCEL_ENV:'preview'}),false);
  assert.equal(autoAccessHelpers.exerciseAiAutoAccessEnabled({EXERCISE_AI_ENABLED:'true',COMPETENCY_CANDIDATE_PREVIEW:'true',VERCEL_ENV:'preview'}),true);
 });
+test('R7 SC-019b: without the WERYFIKACJA / ASSESSMENT CENTER package (PT402) the auto section says so and shows no list',async()=>{
+ const r=await withPreview(()=>renderSwitch({issueResult:{data:null,error:{code:'PT402',message:'Competency test package required'}}}));
+ const html=renderToStaticMarkup(r.element);
+ assert.match(html,/Test kompetencji jest dostępny w pakiecie WERYFIKACJA lub ASSESSMENT CENTER\./);
+ assert.doesNotMatch(html,/Wydano teraz|Competency test package required|Nie udało się sprawdzić/);
+ assert.equal(autoAccessHelpers.COMPETENCY_PACKAGE_MISSING_TEXT,'Test kompetencji jest dostępny w pakiecie WERYFIKACJA lub ASSESSMENT CENTER.');
+});
 test('R1-AUTO-ACCESS code uses the user RLS client only and imports no mail, send or service-role code',()=>{
  for(const file of ['lib/exercise-ai-auto-access.ts',basePath+'exercise-ai-auto-release-section.tsx']) {
   const source=readFileSync(fileURLToPath(new URL('../'+file,import.meta.url)),'utf8');
