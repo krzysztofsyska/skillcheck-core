@@ -34,6 +34,8 @@ function clientFor(data, options = {}) {
             assert.equal(args.target_recruitment, recruitment); assert.ok(!('company_id' in args));
             if (table === 'get_recruitment_shortlist') assert.equal(args.include_removed, false);
           }
+          // R0 SC-009a: the export log RPC returns the new entry id (a scalar uuid).
+          if (table === 'record_screening_report_export') return { data: options.auditData ?? uuid(777), error: null };
           let rows = (data[table] ?? []).filter(row => q.eqs.every(([k, v]) => row[k] === v) && q.ins.every(([k, v]) => v.includes(row[k])));
           if (q.sort) rows = [...rows].sort((a,b) => String(a[q.sort]).localeCompare(String(b[q.sort])));
           rows = rows.slice(q.from, Math.min(q.to + 1, q.from + (options.cap ?? 200)));
@@ -289,6 +291,38 @@ test('export uses safe errors and no-store; anonymous, cross-tenant and missing 
   assert.equal(response.status,200); assert.equal(response.headers.get('x-content-type-options'),'nosniff');
   assert.equal(response.headers.get('referrer-policy'),'no-referrer'); assert.match(response.headers.get('content-disposition'),/attachment; filename="skillcheck-preselekcja-/);
   const bytes = new Uint8Array(await response.arrayBuffer()); assert.deepEqual([...bytes.slice(0,3)],[239,187,191]);
+});
+
+test('SC-009a: CSV is released only after the export log entry; log failures and revoked access give no file', async () => {
+  const client = clientFor(fixture());
+  const response = await exportScreeningReport(client, company, recruitment, '5');
+  assert.equal(response.status, 200);
+  const audits = client.calls.filter(q => q.table === 'record_screening_report_export');
+  assert.equal(audits.length, 1);
+  assert.deepEqual(audits[0].args, { target_company: company, target_recruitment: recruitment, export_kind: 'screening_report_csv', target_size: 5 });
+  // The log write is the last call: every report read happened before it.
+  assert.equal(client.calls.at(-1).table, 'record_screening_report_export');
+  for (const [options, status, code] of [
+    [{ error: { record_screening_report_export: 'XX000' } }, 503, 'audit_failed'],
+    [{ error: { record_screening_report_export: 'PGRST202' } }, 503, 'audit_failed'],
+    [{ error: { record_screening_report_export: '42501' } }, 404, 'not_found'],
+    [{ auditData: 'not-a-uuid' }, 503, 'audit_failed'],
+    [{ auditData: [] }, 503, 'audit_failed'],
+  ]) {
+    const failed = await exportScreeningReport(clientFor(fixture(), options), company, recruitment, '5');
+    assert.equal(failed.status, status, JSON.stringify(options));
+    assert.equal(failed.headers.get('content-disposition'), null);
+    assert.match(failed.headers.get('cache-control'), /no-store/);
+    const body = await failed.json();
+    assert.equal(body.error, code);
+    assert.doesNotMatch(JSON.stringify(body), /SECRET_INTERNAL_DETAILS|Raportowanie/);
+  }
+  // Rejected before any read: no log entry is attempted.
+  for (const [args, options] of [[[company, recruitment, '4'], {}], [[company, recruitment, '5'], { anonymous: true }]]) {
+    const rejected = clientFor(fixture(), options);
+    await exportScreeningReport(rejected, ...args);
+    assert.ok(!rejected.calls.some(q => q.table === 'record_screening_report_export'));
+  }
 });
 
 test('CSV preserves quotes/newlines/Polish text and neutralizes formulas and control prefixes', () => {

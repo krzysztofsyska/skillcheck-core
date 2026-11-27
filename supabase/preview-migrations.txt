@@ -140,3 +140,5 @@
 20261122090000_r7_stripe_live_invoices.sql
 # R7 Codex P2 on promotion #594: two nullable attempt-time columns on sc19_stripe.invoices and invoice_corrections (and column UPDATE grants for the payment adapter roles), so a lost Fakturownia document is searched only around its attempt days. Additive, erasure signature unchanged, nothing for anon/authenticated, nothing sent.
 20261122110000_r7_invoice_attempt_window.sql
+# R0 SC-009a: the preselection report CSV export writes an entry in a new append-only log report_audit.screening_report_exports (company, recruitment, actor, role, kind, shortlist size; no application or candidate id) through one security-definer function for authenticated members. Erasure signature unchanged, report_audit stays closed to API roles, nothing sent.
+20261127140000_sc009a_screening_report_export_audit.sql
