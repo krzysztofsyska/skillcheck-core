@@ -39,11 +39,17 @@ export async function activeBoot(t, { install = true,fullChain=false,throughMigr
  };
  const asGateway = async (client=db) => {await client.exec('reset role;set role competency_test_gateway');await client.query("select set_config('request.jwt.claim.sub','',false)");};
  const tenants=new Map();let policySeeded=false;
- const seed = async ({tenant,owner=tenant?.owner??users.owner,shortlist=true}={}) => {
+ // R7 SC-019b (20261127170000): a new competency test needs a paid WERYFIKACJA or
+ // ASSESSMENT CENTER package. A new company gets `package` (default WERYFIKACJA, null =
+ // none) as the entitlement row a paid order adds, wherever that table exists.
+ const seed = async ({tenant,owner=tenant?.owner??users.owner,shortlist=true,package:pkg='WERYFIKACJA'}={}) => {
   tenant??=tenants.get(owner);
+  const fresh=!tenant;
   const f = tenant?await h.candidate(tenant):await h.seed(owner);tenants.set(owner,f);
   await h.asAdmin();if(!policySeeded){await seedSyntheticPolicy(db);policySeeded=true;}
   await db.query('select private.sc19_grant_paid($1,$2)',[f.companyId,`synthetic-c1-${randomUUID()}`]);
+  if(fresh&&pkg&&(await db.query("select to_regclass('sc19_commerce.entitlements') is not null ok")).rows[0].ok)
+   await db.query("insert into sc19_commerce.entitlements(company_id,code,available) values($1,'package:'||$2,1) on conflict (company_id,code) do nothing",[f.companyId,pkg]);
   await h.asUser(owner);
   if (shortlist) {
    await h.completedApplication(f,['meets','meets','meets','meets','meets']);
