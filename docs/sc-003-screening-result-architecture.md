@@ -5,6 +5,13 @@ Level: L3
 Depends on: SC-002  
 Blocks: SC-004, SC-005, SC-007, SC-008
 
+> **Stan wdrożenia (27.11.2026):** zapis jest w większości zgodny z tym projektem. Dwie różnice
+> wprowadzone później („macierz dowodów”, migracje `20261026220100` i `20261026220200`): ocena
+> kryterium dla nowych analiz to `verdict` (`supported|partial|missing|contradicted`), a `rating`
+> ma zawsze wartość `insufficient_data`; poprawki człowieka per kryterium są w kolumnach `human_*`
+> wiersza wyniku i nie mają historii. Pełna lista:
+> [`docs/checks/sc003-assessment-storage-2026-11-27.md`](checks/sc003-assessment-storage-2026-11-27.md).
+
 ## 1. Cel i granice
 
 Celem SC-003 jest zamrożenie kontraktu danych dla trwałego, audytowalnego wyniku analizy CV przypisanego do konkretnego `application` w konkretnej rekrutacji. Dokument definiuje model danych, relacje, lifecycle, versioning, stale detection, idempotency, concurrency, human review, RLS, transakcje i wymagania privacy/ranking.
