@@ -9,8 +9,8 @@ import { readFile } from 'node:fs/promises';
 import { bootMigrationDatabase } from './helpers/sc19-migration-fixture.mjs';
 import { setupRankingDatabase, users } from './helpers/screening-ranking-fixture.mjs';
 
-// Full current chain: R23 since R6-1c part 7 (voice transcripts) builds on this step.
-const signature = '4dab3fae234c8233104d691381b62710570324bee0db8bd5df4be28f3d6702f7';
+// Full current chain: R24 (SC-003a criterion review history) on top of R23 (R6-1c part 7 voice transcripts), which builds on this step.
+const signature = 'bc5fe11ba2c0cd33015c00b2283403532f338630f3e9661b91847d6979726235';
 const grantFn = 'private.sc19_voice_grant_interviews(uuid,text,integer,uuid,timestamptz,uuid,timestamptz)';
 const functions = [grantFn, 'private.sc19_voice_interview_balance(uuid)', 'private.sc19_voice_trial_reference(uuid)'];
 const migration = '20261119150000_r6_voice_pool_operator_grant.sql';

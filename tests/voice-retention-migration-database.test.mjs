@@ -13,7 +13,7 @@ import { activeBoot, users } from './helpers/competency-active-fixture.mjs';
 import { lifecycleHarness } from './helpers/erasure-lifecycle-fixture.mjs';
 import { seedSyntheticPolicy } from './helpers/sc19-migration-fixture.mjs';
 
-const signature = '4dab3fae234c8233104d691381b62710570324bee0db8bd5df4be28f3d6702f7';
+const signature = 'bc5fe11ba2c0cd33015c00b2283403532f338630f3e9661b91847d6979726235';
 const migration = new URL('../supabase/migrations/20261120150000_r6_voice_retention.sql', import.meta.url);
 const isolated = new URL('../db/isolated/sc010-r4-voice-retention.sql', import.meta.url);
 const fns = ['private.erasure_check_purge_scope(uuid)', 'private.retention_observe_candidate()'];
