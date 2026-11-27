@@ -142,5 +142,7 @@
 20261122110000_r7_invoice_attempt_window.sql
 # R0 SC-003a (#621): immutable history of human corrections per criterion in the evidence matrix: new append-only table public.screening_criterion_review_history (previous and new value of every human field, actor, time, analysis review number), written only by review_screening_evidence_row in the same transaction (same signature, grants, security definer and search_path); RLS read for company members, no API writes; the AI result is untouched and nothing is migrated. SC-010 erasure inventory R24 lists, previews and purges the history with the candidate, before its criterion result. Test data only, nothing sent.
 20261127120000_sc003a_criterion_review_history.sql
+# R0 SC-010a-1 (#619): a candidate erasure also deletes that candidate's report export log rows (report_audit.candidate_report_exports). Replaces only the two thin erasure wrappers (same owner, grants and signatures) and adds one helper executable only by erasure_purge_owner; the purge engine and the erasure signature are unchanged, nothing for anon/authenticated, nothing sent.
+20261127130000_sc010a1_erase_report_exports.sql
 # R0 SC-009a: the preselection report CSV export writes an entry in a new append-only log report_audit.screening_report_exports (company, recruitment, actor, role, kind, shortlist size; no application or candidate id) through one security-definer function for authenticated members. Erasure signature unchanged, report_audit stays closed to API roles, nothing sent.
 20261127140000_sc009a_screening_report_export_audit.sql
