@@ -10,7 +10,7 @@ test('SC-009: real Next routes with synthetic authenticated PostgREST boundary',
   const cookieValue = 'base64-' + Buffer.from(JSON.stringify({ access_token: token, refresh_token: 'synthetic', expires_at: Math.floor(Date.now()/1000)+3600, expires_in: 3600, token_type: 'bearer', user: { id: userId } })).toString('base64url');
   const cookie = 'sb-127-auth-token=' + cookieValue;
   let unavailable = false, revoked = false, auditFails = false, auditWithdrawn = false, historyFails = false;
-  const requests = [], audits = [];
+  const requests = [], audits = [], screeningAudits = [];
   const stub = createServer(async (req,res) => {
     const url = new URL(req.url,'http://stub');
     const chunks = []; for await (const chunk of req) chunks.push(chunk);
@@ -25,6 +25,12 @@ test('SC-009: real Next routes with synthetic authenticated PostgREST boundary',
       if (auditWithdrawn) { res.statusCode=400; return res.end(JSON.stringify({code:'55000',message:'SECRET_SQL_DETAILS'})); }
       if (auditFails) { res.statusCode=500; return res.end(JSON.stringify({code:'XX000',message:'SECRET_SQL_DETAILS'})); }
       return res.end(JSON.stringify(uuid(777)));
+    }
+    // R0 SC-009a: zapis w rejestrze pobrań CSV raportu preselekcji (funkcja zwraca uuid wpisu).
+    if (table === 'record_screening_report_export') {
+      screeningAudits.push({ auth: req.headers.authorization, body: JSON.parse(Buffer.concat(chunks).toString() || '{}') });
+      if (auditFails) { res.statusCode=500; return res.end(JSON.stringify({code:'XX000',message:'SECRET_SQL_DETAILS'})); }
+      return res.end(JSON.stringify(uuid(778)));
     }
     // SC-015-D2: historia eksportu odczytywana z dziennika (tu: z zapisanych wywołań audytu).
     if (table === 'list_candidate_report_exports') {
@@ -69,6 +75,11 @@ test('SC-009: real Next routes with synthetic authenticated PostgREST boundary',
     assert.doesNotMatch(html,/DO_NOT_EXPORT|SECRET_SQL_DETAILS/);assert.match(page.headers.get('cache-control'),/no-store/);
     const csv=await read('/export?size=5');assert.equal(csv.status,200);assert.match(csv.headers.get('content-type'),/text\/csv/);
     assert.match(await csv.text(),/Tworzy raporty/);
+    assert.deepEqual(screeningAudits.at(-1).body,{target_company:company,target_recruitment:recruitment,export_kind:'screening_report_csv',target_size:5});
+    assert.equal(screeningAudits.at(-1).auth,'Bearer '+token);
+    auditFails=true;const blocked=await read('/export?size=5');auditFails=false;
+    assert.equal(blocked.status,503);assert.equal(blocked.headers.get('content-disposition'),null);
+    assert.doesNotMatch(await blocked.text(),/SECRET_SQL_DETAILS|Tworzy raporty/);
     assert.ok(requests.every(r=>r.auth==='Bearer '+token));
     assert.ok(requests.filter(r=>r.table==='get_screening_ranking').every(r=>JSON.parse(r.body).target_size===5));
   });
