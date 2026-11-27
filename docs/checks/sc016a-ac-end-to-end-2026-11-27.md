@@ -50,6 +50,8 @@ Czego ten test nie powtarza (jest w istniejących testach): wyścigi dwóch ases
 
 ## Luka (osobny krok, nie naprawiana w tym PR)
 
+Aktualizacja 27.11.2026: luka zamykana w kroku SC-016b (issue #636, PR #637) — tam brama pakietu przy `ac_assign_pair`. Do scalenia #637 opis niżej pozostaje aktualny.
+
 Brama pakietu obejmuje tylko `ac_session_create` i otwarcie sesji. Surowe funkcje par z R13
 (`ac_assign_pair`, `ac_submit_sheet`, `ac_read_pair`, `ac_find_pair`) nie sprawdzają pakietu.
 Sprawdzone lokalnie na fikcyjnych danych: właściciel firmy BEZ pakietu AC, mając rekrutera w firmie,
