@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto';
 import { setupRankingDatabase, users } from './helpers/screening-ranking-fixture.mjs';
+import { bootMigrationDatabase, seedSyntheticPolicy } from './helpers/sc19-migration-fixture.mjs';
 import { reasonLabels } from '../lib/screening-report.ts';
 
 const codes = (code) => error => error.code === code;
@@ -282,9 +283,15 @@ test('a future immutable policy migration rejects a selection displayed under th
 });
 
 test('SC-008 from assessed CVs to an approved shortlist, with incomplete and stale assessments flagged', async t => {
-  const db = new PGlite({extensions:{pgcrypto}}); t.after(() => db.close());
-  const h = await setupRankingDatabase(db);
+  // Full checked-in chain (incl. the stale-input columns migration) needs real PostgreSQL 16/17:
+  // the SC-019 migrations refuse other majors, so PGlite cannot run it. Needs SC19_TEST_DATABASE_URL + SC19_TEST_PG_MAJOR.
+  const { db } = await bootMigrationDatabase(t);
+  const h = await setupRankingDatabase(db, { throughMigration: null });
   const tenant = await h.seed(), fixtures = {top:tenant};
+  // The full chain meters every analysis: grant the synthetic test company paid credits (no commercial offer is installed).
+  await h.asAdmin(); await seedSyntheticPolicy(db);
+  await db.query('select private.sc19_grant_paid($1,$2)', [tenant.companyId, `synthetic-sc008-${randomUUID()}`]);
+  await h.asUser();
   for (const key of ['mid','partial','unreviewed','stale']) fixtures[key] = await h.candidate(tenant);
   await h.completedApplication(fixtures.top, Array(5).fill('above'));
   await h.completedApplication(fixtures.mid, Array(5).fill('meets'));
