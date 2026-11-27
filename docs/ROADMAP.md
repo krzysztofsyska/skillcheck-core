@@ -184,7 +184,7 @@ posiadane; inaczej pytanie do właściciela). Wycena — decyzja właściciela, 
 | Krok | Gotowe, gdy | Status | Dowód |
 |---|---|---|---|
 | Dwie fikcyjne firmy z własnym logo, kolorami, raportem i adresem strony na Preview | test końcowy dwóch marek przechodzi: każda firma widzi tylko swoją markę i swoje dane | DO ZROBIENIA | — |
-| Instrukcja uruchomienia dla nowego klienta (co klient ustawia w swojej domenie) | plik w `docs/` | W TOKU (plik `docs/white-label-uruchomienie.md` gotowy w PR do przeglądu: rekord TXT, weryfikacja, marka, kroki operatora; niezaimplementowane i niepotwierdzone punkty opisane w pliku, m.in. CNAME/A i dodanie domeny w Vercel po stronie operatora, wysyłka z domeny klienta) | PR #620 |
+| Instrukcja uruchomienia dla nowego klienta (co klient ustawia w swojej domenie) | plik w `docs/` | W TOKU (plik `docs/white-label-uruchomienie.md` gotowy w PR do przeglądu: rekord TXT, weryfikacja, marka, kroki operatora; niezaimplementowane i niepotwierdzone punkty opisane w pliku, m.in. CNAME/A i dodanie domeny w Vercel po stronie właściciela (produkcja) / operatora (Preview), wysyłka z domeny klienta) | PR #620 |
 
 ### R9. Kontrola kosztów AI i wybór modelu (SC-021, issue #81; równolegle, niższy priorytet)
 

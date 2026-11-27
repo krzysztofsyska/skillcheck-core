@@ -148,7 +148,7 @@ Strona „Wygląd panelu” (`/dashboard/<firma>/marka`), tylko właściciel kon
 2. **Szkic.** Nazwa marki (do 80 znaków, bez `<` i `>`), wybór logo i favicona, pięć kolorów
    (główny, tekst na kolorze głównym, tło, tekst, akcent; zapis `#RRGGBB`), styl nagłówka panelu
    rekrutera (w kolorze głównym albo jasny), nagłówek panelu kandydata (do 120 znaków) i opcjonalny
-   wstęp (do 600 znaków). Pola nagłówka i wstępu kandydata służą tylko do podglądu (punkt 4).
+   wstęp (do 600 znaków). Pola nagłówka i wstępu kandydata służą tylko do podglądu (punkt 6).
 3. **Kontrast.** Szkic jest odrzucany, gdy kontrast jest za słaby (WCAG: tekst co najmniej 4,5:1,
    akcent co najmniej 3:1). Kontrasty widać na bieżąco w formularzu.
 4. **Podgląd i publikacja.** Podgląd panelu rekrutera i podgląd konfiguracji panelu kandydata (ten
@@ -181,7 +181,7 @@ zmienia wyłącznie właściciel albo zatwierdzony pipeline:
 | Opcjonalnie: automatyczne ponawianie DNS (rola `tenant_domain_reverifier`, `TENANT_DOMAIN_REVERIFY_DATABASE_URL`, `TENANT_DOMAIN_REVERIFY_ENABLED=true`, harmonogram, np. raz dziennie) | Preview: operator. Produkcja: właściciel (lub zatwierdzony pipeline) | nieuruchomione; sekrety i harmonogram na produkcji to decyzja właściciela |
 | Ustawienia domen (`subdomain_base`, `reverify_days`, `pending_days`, `max_domains_per_company`) | Preview: operator. Produkcja: właściciel (lub zatwierdzony pipeline) | wartości domyślne opisano w punkcie 3; zmiana danych na produkcji nie należy do operatora |
 | Wgranie migracji SC-020 na produkcję | właściciel (zatwierdzenie `production-approval`) | stan produkcji sprawdź w git (SHA wydania na `main`), w PR i w wyniku workflow `db-migrate-production` dla tego SHA; obecność pliku migracji w repozytorium nie dowodzi jej wykonania; ten dokument nie podaje stanu produkcji |
-| Dopuszczenie adresu domeny klienta w ustawieniach logowania Supabase (lista dozwolonych adresów zwrotnych) | właściciel/operator | do potwierdzenia: kod buduje adresy zwrotne logowania z hosta domeny klienta (`tenantOriginFromHeader`), a `lib/auth-url.ts` opisuje, że adresy spoza listy są podmieniane na adres główny. Dopóki nie sprawdzono tego na Preview, traktuj logowanie na domenie klienta jako niepotwierdzone |
+| Dopuszczenie adresu domeny klienta w ustawieniach logowania Supabase (lista dozwolonych adresów zwrotnych) | Preview: operator; produkcja: właściciel lub zatwierdzony pipeline | do potwierdzenia: kod buduje adresy zwrotne logowania z hosta domeny klienta (`tenantOriginFromHeader`), a `lib/auth-url.ts` opisuje, że adresy spoza listy są podmieniane na adres główny. Dopóki nie sprawdzono tego na Preview, traktuj logowanie na domenie klienta jako niepotwierdzone |
 
 ## 6. Co nie jest zaimplementowane lub nie jest potwierdzone
 
