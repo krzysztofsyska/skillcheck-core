@@ -1,5 +1,6 @@
 import { evaluateCompetencyTest } from './competency-test.ts';
 import { staffWorkSample } from './competency-staff-response.ts';
+import { COMPETENCY_PACKAGE_MISSING_TEXT } from './competency-package.ts';
 import type { BehaviorRoute } from './behavior-context';
 import type { ExerciseDefinition } from './exercise-definition';
 
@@ -45,7 +46,8 @@ export function competencyReport(value:unknown,scope:BehaviorRoute,attemptId:str
   missing:review?review.criterionResults.filter(r=>r.rating==='insufficient_data').map(r=>r.competency):definition.criteria.map(r=>r.competency)};
 }
 export function competencyActionError(code?:string) {
- return code==='PT409'?'Stan zmienił się. Odśwież stronę i sprawdź status przed ponowieniem.':
+ return code==='PT402'?COMPETENCY_PACKAGE_MISSING_TEXT:
+  code==='PT409'?'Stan zmienił się. Odśwież stronę i sprawdź status przed ponowieniem.':
   code==='PT422'?'Sprawdź termin i wymagane pola.':
   'Dostęp do testu jest niedostępny. Sprawdź uprawnienia, shortlistę i stan zgłoszenia.';
 }
