@@ -26,7 +26,7 @@
     "test:screening-concurrency": "node --test tests/screening-concurrency.test.mjs",
     "test:screening-report": "node --test tests/screening-report.test.mjs",
     "test:candidate-report": "node --experimental-strip-types --test tests/candidate-report.test.mjs tests/candidate-report-exercises.test.mjs tests/candidate-report-export.test.mjs tests/company-report-export-history.test.mjs tests/position-requirement-flags-database.test.mjs tests/candidate-report-print.test.mjs",
-    "test:candidate-report-db": "node --experimental-strip-types --test --test-concurrency=1 tests/candidate-report-export-database.test.mjs tests/candidate-report-export-history-database.test.mjs tests/company-report-export-history-database.test.mjs",
+    "test:candidate-report-db": "node --experimental-strip-types --test --test-concurrency=1 tests/candidate-report-export-database.test.mjs tests/candidate-report-export-history-database.test.mjs tests/company-report-export-history-database.test.mjs tests/sc010a-consent-erasure-database.test.mjs",
     "test:screening-report-http": "node --test tests/screening-report-http.test.mjs",
     "test:ac-report-http": "node --test tests/assessment-center-report-http.test.mjs",
     "test:ac-session-db": "node --experimental-strip-types --test --test-concurrency=1 tests/ac-session-database.test.mjs tests/ac-session-concurrency.test.mjs tests/ac-session-export-audit-database.test.mjs tests/ac-assessor-names-database.test.mjs tests/ac-package-gate-database.test.mjs",
