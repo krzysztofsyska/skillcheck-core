@@ -114,7 +114,7 @@ AC nie ma dostępu (konto z pakietem ma).
 | Asesorzy pokazani z nazwy (etykieta, potem e-mail konta z tej samej firmy) | ZROBIONE | PR #500, #513 |
 | Jawne braki dowodów w raporcie i CSV sesji | ZROBIONE | PR #508 |
 | Testy równoczesnej pracy asesorów | ZROBIONE | PR #512 |
-| Powiązanie z kontami firm, uprawnieniami i kupionym pakietem | W TOKU (konta i uprawnienia zrobione; sesję tworzy i otwiera tylko firma z opłaconym pakietem ASSESSMENT CENTER — pilnowane w bazie; SC-016b: brama pakietu także przy przypisaniu pary asesorów poza sesją, PR #637, migracja wymaga zgody właściciela na produkcji; zakup pakietu AC przez Stripe działa w trybie testowym; zostaje uruchomienie płatności na żywo w R7) | PR #503, #554, #563, #637; issue #338, #274, #283, #636 |
+| Powiązanie z kontami firm, uprawnieniami i kupionym pakietem | W TOKU (konta i uprawnienia zrobione; sesję tworzy i otwiera tylko firma z opłaconym pakietem ASSESSMENT CENTER — pilnowane w bazie; SC-016b: brama pakietu także przy przypisaniu pary asesorów poza sesją, PR #637, migracja wymaga zgody właściciela na produkcji; zakup pakietu AC przez Stripe działa w trybie testowym; zostaje uruchomienie płatności na żywo w R7) | PR #503, #554, #563, #637; issue #338, #274, #283, #636; test końcowy SC-016a (dwóch asesorów, fikcyjni uczestnicy, dostęp tylko z pakietem; luka: pary R13 poza sesją bez bramy pakietu — zamyka SC-016b): PR #633, issue #632, `docs/checks/sc016a-ac-end-to-end-2026-11-27.md` |
 
 ### R4. Oferta na stronie (etap 2)
 
@@ -184,7 +184,7 @@ posiadane; inaczej pytanie do właściciela). Wycena — decyzja właściciela, 
 | Krok | Gotowe, gdy | Status | Dowód |
 |---|---|---|---|
 | Dwie fikcyjne firmy z własnym logo, kolorami, raportem i adresem strony na Preview | test końcowy dwóch marek przechodzi: każda firma widzi tylko swoją markę i swoje dane | W TOKU (automatyczny test dwóch fikcyjnych marek gotowy i zielony na PostgreSQL 16 — baza i prawdziwy serwer aplikacji: każda firma na swoim adresie widzi tylko swoje logo, kolory, raport i dane, w tym dowód negatywny, że kontrola wykrywa wyciek; wycieku nie wykryto; przejście na samym Preview NOT RUN — adres strony klienta wymaga prawdziwej domeny ustawionej w DNS, a darmowej lub posiadanej domeny testowej nie ma) | issue #627, PR #629: `tests/white-label-two-brands-database.test.mjs` w `npm run test:white-label-db`, `tests/white-label-two-brands-http.test.mjs` w `npm run test:white-label-http` (CI) |
-| Instrukcja uruchomienia dla nowego klienta (co klient ustawia w swojej domenie) | plik w `docs/` | DO ZROBIENIA | — |
+| Instrukcja uruchomienia dla nowego klienta (co klient ustawia w swojej domenie) | plik w `docs/` | W TOKU (plik `docs/white-label-uruchomienie.md` gotowy w PR do przeglądu: rekord TXT, weryfikacja, marka, kroki operatora; niezaimplementowane i niepotwierdzone punkty opisane w pliku, m.in. CNAME/A i dodanie domeny w Vercel po stronie właściciela (produkcja) / operatora (Preview), wysyłka z domeny klienta) | PR #620 |
 
 ### R9. Kontrola kosztów AI i wybór modelu (SC-021, issue #81; równolegle, niższy priorytet)
 
