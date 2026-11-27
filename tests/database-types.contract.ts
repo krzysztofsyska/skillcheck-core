@@ -225,6 +225,7 @@ type ExpectedFunctions =
   | "list_candidate_report_exports"
   | "list_company_report_exports"
   | "record_assessment_center_session_export"
+  | "record_screening_report_export"
   | "read_voice_interview_transcripts"
   | "read_exercise_ai_settings"
   | "set_exercise_ai_auto_release"
@@ -605,6 +606,9 @@ type _CompanyReportExportArgs = Expect<Equal<Database["public"]["Functions"]["li
 }>>;
 type _AcSessionExportArgs = Expect<Equal<Database["public"]["Functions"]["record_assessment_center_session_export"]["Args"], {
   target_company: string; target_recruitment: string; target_session: string; export_kind: 'ac_session_csv';
+}>>;
+type _ScreeningReportExportArgs = Expect<Equal<Database["public"]["Functions"]["record_screening_report_export"]["Args"], {
+  target_company: string; target_recruitment: string; export_kind: 'screening_report_csv'; target_size: number;
 }>>;
 type _ExerciseAiSettingsArgs = Expect<Equal<Database["public"]["Functions"]["read_exercise_ai_settings"]["Args"], {
   target_company: string; target_recruitment: string;

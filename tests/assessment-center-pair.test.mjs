@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseAssessmentCenterPair, parseAssessmentCenterSheetForm } from '../lib/assessment-center-pair.ts';
+import { assessmentCenterPairAssignError, parseAssessmentCenterPair, parseAssessmentCenterSheetForm } from '../lib/assessment-center-pair.ts';
+import { AC_PAIR_PACKAGE_MISSING_TEXT } from '../lib/assessment-center-session.ts';
 const definition = {kind:'assessment_center',title:'Rozmowa',instructions:'Pomóż klientowi',expectedOutput:'Rozwiązanie',durationMinutes:20,
   criteria:[{competency:'Komunikacja',below:'Przerywa',meets:'Słucha',above:'Podsumowuje'}]};
 const observation = {criterionIndex:0,rating:'meets',evidence:'Zadał pytanie otwarte.',context:'Rozmowa z klientem.'};
@@ -31,4 +32,11 @@ test('form parser keeps criterion order, trims evidence and rejects missing, dup
   form.delete('rating');form.append('rating','meets');form.set('context',new Blob(['hidden']),'hidden.txt');
   assert.throws(()=>parseAssessmentCenterSheetForm(definition,form));
   form.delete('context');assert.throws(()=>parseAssessmentCenterSheetForm(definition,form));
+});
+test('pair assignment maps PT402 to the package text, PT409 to the conflict text and everything else to the generic text', () => {
+  assert.equal(assessmentCenterPairAssignError('PT402'), AC_PAIR_PACKAGE_MISSING_TEXT);
+  assert.match(AC_PAIR_PACKAGE_MISSING_TEXT, /^Przypisanie asesorów/);
+  assert.equal(assessmentCenterPairAssignError('PT409'), 'Asesorzy zostali już przypisani. Odśwież stronę.');
+  assert.equal(assessmentCenterPairAssignError('42501'), 'Nie przypisano asesorów. Sprawdź skład zespołu i stan rekrutacji.');
+  assert.equal(assessmentCenterPairAssignError(undefined), 'Nie przypisano asesorów. Sprawdź skład zespołu i stan rekrutacji.');
 });
