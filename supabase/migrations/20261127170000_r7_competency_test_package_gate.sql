@@ -67,11 +67,13 @@ begin
   or not exists(select 1 from pg_proc where oid='public.issue_exercise_ai_auto_access(uuid,uuid)'::regprocedure
    and encode(sha256(convert_to(prosrc,'UTF8')),'hex')='deca0878a969d68ed958832eed59cb9017836baf2bd4b95cce7a7cede0508b87') then
   raise exception 'r7_competency_package_gate_issuer_unreviewed' using errcode='55000';end if;
- -- No other function may create competency test access around this boundary.
- select coalesce(array_agg(p.oid::regprocedure::text order by p.oid::regprocedure::text),'{}') into callers
-  from pg_proc p where p.prosrc ~* 'insert\s+into\s+private\.competency_test_grants';
- if callers is distinct from array['create_competency_test_grant(uuid,uuid,timestamp with time zone,uuid)',
-   'issue_exercise_ai_auto_access(uuid,uuid)'] then
+ -- No other function may create competency test access around this boundary
+ -- (compared by OID, independent of the session search_path).
+ select array_agg(p.oid::regprocedure::text order by p.oid) into callers
+  from pg_proc p where p.prosrc ~* 'insert\s+into\s+private\.competency_test_grants'
+   and p.oid not in ('public.create_competency_test_grant(uuid,uuid,timestamptz,uuid)'::regprocedure,
+    'public.issue_exercise_ai_auto_access(uuid,uuid)'::regprocedure);
+ if callers is not null then
   raise exception 'r7_competency_package_gate_unknown_issuer:%',callers using errcode='55000';end if;
  perform set_config('r7_competency_package_gate.signature_before', private.erasure_schema_signature(), true);
 end $preflight$;
