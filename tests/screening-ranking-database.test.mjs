@@ -4,6 +4,8 @@ import { randomUUID } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto';
 import { setupRankingDatabase, users } from './helpers/screening-ranking-fixture.mjs';
+import { bootMigrationDatabase, seedSyntheticPolicy } from './helpers/sc19-migration-fixture.mjs';
+import { reasonLabels } from '../lib/screening-report.ts';
 
 const codes = (code) => error => error.code === code;
 const highId = 'ffffffff-ffff-ffff-ffff-ffffffffffff';
@@ -278,4 +280,65 @@ test('a future immutable policy migration rejects a selection displayed under th
   const current=await h.row(g);assert.equal(current.ranking_policy_version,'screening-ranking-v2');assert.equal(Number(current.raw_score),60);
   await h.add(g,'manual',current);
   assert.equal((await h.shortlist(g)).find(entry=>entry.application_id===g.application.id).policy_current,true);
+});
+
+test('SC-008 from assessed CVs to an approved shortlist, with incomplete and stale assessments flagged', async t => {
+  // Full checked-in chain (incl. the stale-input columns migration) needs real PostgreSQL 16/17:
+  // the SC-019 migrations refuse other majors, so PGlite cannot run it. Needs SC19_TEST_DATABASE_URL + SC19_TEST_PG_MAJOR.
+  const { db } = await bootMigrationDatabase(t);
+  const h = await setupRankingDatabase(db, { throughMigration: null });
+  const tenant = await h.seed(), fixtures = {top:tenant};
+  // The full chain meters every analysis: grant the synthetic test company paid credits (no commercial offer is installed).
+  await h.asAdmin(); await seedSyntheticPolicy(db);
+  await db.query('select private.sc19_grant_paid($1,$2)', [tenant.companyId, `synthetic-sc008-${randomUUID()}`]);
+  await h.asUser();
+  for (const key of ['mid','partial','unreviewed','stale']) fixtures[key] = await h.candidate(tenant);
+  await h.completedApplication(fixtures.top, Array(5).fill('above'));
+  await h.completedApplication(fixtures.mid, Array(5).fill('meets'));
+  await h.completedApplication(fixtures.partial, ['above','meets','insufficient_data','insufficient_data','insufficient_data']);
+  await h.completedApplication(fixtures.unreviewed, Array(5).fill('above'), null);
+  await h.completedApplication(fixtures.stale, Array(5).fill('above'));
+  await h.asUser();
+  await db.query("update public.candidate_documents set redacted_text=redacted_text||' changed' where id=$1", [fixtures.stale.document.id]);
+
+  const byApp = rows => Object.fromEntries(Object.entries(fixtures).map(([k, f]) => [k, rows.find(r => r.application_id === f.application.id)]));
+  const rows = byApp(await h.ranking(tenant));
+  await t.test('complete assessments are ranked by score; incomplete and stale are flagged and never ranked', () => {
+    assert.deepEqual([rows.top.rank, rows.mid.rank], [1, 2]);
+    assert.deepEqual([rows.top.eligibility_reason, rows.mid.eligibility_reason], ['eligible', 'eligible']);
+    assert.deepEqual([rows.top.suggested_shortlist, rows.mid.suggested_shortlist], [true, true]);
+    for (const [key, reason] of [['partial', 'insufficient_evidence'], ['unreviewed', 'no_human_review'], ['stale', 'stale']]) {
+      assert.equal(rows[key].eligibility_reason, reason, key);
+      assert.equal(rows[key].rank, null, key); assert.equal(rows[key].suggested_shortlist, false, key);
+    }
+    assert.equal(rows.stale.analysis_id, null); assert.equal(rows.stale.raw_score, null);
+  });
+  await t.test('every flag has a Polish label shown to the user', () => {
+    for (const key of ['partial', 'unreviewed', 'stale']) assert.ok(reasonLabels[rows[key].eligibility_reason], key);
+    assert.equal(reasonLabels.stale, 'Wynik nieaktualny');
+    assert.equal(reasonLabels.insufficient_evidence, 'Za mało ocenionych kryteriów');
+    assert.equal(reasonLabels.no_human_review, 'Oczekuje na sprawdzenie przez człowieka');
+  });
+  await t.test('a human approves the shortlist; stale and unreviewed results cannot be added', async () => {
+    await h.add(fixtures.top, 'suggested', rows.top, 'Strong');
+    await h.add(fixtures.mid, 'suggested', rows.mid);
+    await assert.rejects(h.add(fixtures.stale, 'manual', rows.stale));
+    await assert.rejects(h.add(fixtures.unreviewed, 'manual', rows.unreviewed));
+    await h.add(fixtures.partial, 'manual', rows.partial, 'Human decision despite incomplete assessment');
+    const list = await h.shortlist(tenant);
+    assert.equal(list.length, 3);
+    assert.deepEqual(list.map(e => e.source).sort(), ['manual', 'suggested', 'suggested']);
+    assert.ok(list.every(e => e.snapshot_current === true && e.selected_by === users.owner));
+    const partialEntry = list.find(e => e.application_id === fixtures.partial.application.id);
+    assert.equal(Number(partialEntry.coverage_snapshot), .4);
+  });
+  await t.test('a shortlist entry turns non-current when its assessment becomes stale; ratings stay untouched', async () => {
+    await h.asUser();
+    await db.query("update public.candidate_documents set redacted_text=redacted_text||' changed' where id=$1", [fixtures.mid.document.id]);
+    const list = await h.shortlist(tenant);
+    assert.equal(list.find(e => e.application_id === fixtures.mid.application.id).snapshot_current, false);
+    assert.equal(list.find(e => e.application_id === fixtures.top.application.id).snapshot_current, true);
+    assert.equal((await h.row(fixtures.mid)).eligibility_reason, 'stale');
+    assert.equal((await db.query("select count(*)::int n from public.applications where status in ('rejected','hired') and recruitment_id=$1", [tenant.recruitment.id])).rows[0].n, 0);
+  });
 });
