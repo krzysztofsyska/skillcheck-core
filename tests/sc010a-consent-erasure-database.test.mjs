@@ -11,19 +11,43 @@ import { communicationHarness } from './helpers/candidate-communication-fixture.
 const code = (...codes) => error => codes.includes(error.code);
 const SCHEMAS = ['public', 'private', 'report_audit'];
 
-// Every table of the schemas that can hold candidate data, as JSON text.
+// Production access rule 6 (AGENTS.md): an agent-run query never reads a secret column. The scan
+// therefore never runs to_jsonb(t) over a whole row. It reads information_schema.columns first and
+// projects only columns that cannot hold a key, secret, token or password; tables that are settings
+// or key stores are skipped entirely. The erasure proof is unaffected: candidate data lives in
+// ordinary tables (candidates, applications, documents, contact_audit, ...), not in those.
+const SECRET_COLUMN = /secret|token|key|passw|credential|salt|hmac|signature|bearer|auth/i;
+const SECRET_TABLE = /settings|pseudonym_key|secret|credential|api_key/i;
+const isSecretColumn = name => SECRET_COLUMN.test(name);
+const isSecretTable = name => SECRET_TABLE.test(name);
+
+// Every non-secret column of the schemas that can hold candidate data, as JSON text.
 async function scan(db, h, needles) {
   await h.asAdmin();
   const tables = (await db.query(
     `select schemaname, tablename from pg_tables where schemaname = any($1) order by 1, 2`, [SCHEMAS])).rows;
   const hits = {};
   for (const { schemaname, tablename } of tables) {
+    if (isSecretTable(tablename)) continue;
+    const cols = (await db.query(
+      `select column_name from information_schema.columns where table_schema=$1 and table_name=$2 order by ordinal_position`,
+      [schemaname, tablename])).rows.map(r => r.column_name).filter(c => !isSecretColumn(c));
+    if (!cols.length) continue;
+    const projection = cols.map(c => `'${c.replaceAll("'", "''")}', t."${c.replaceAll('"', '""')}"`).join(', ');
     const rows = (await db.query(
-      `select coalesce(jsonb_agg(to_jsonb(t)),'[]')::text v from ${schemaname}.${tablename} t`)).rows[0].v;
+      `select coalesce(jsonb_agg(jsonb_build_object(${projection})),'[]')::text v from "${schemaname}"."${tablename}" t`)).rows[0].v;
     for (const needle of needles) if (rows.includes(needle)) (hits[`${schemaname}.${tablename}`] ??= []).push(needle);
   }
   return hits;
 }
+
+test('SC-010 A: the scan helper never projects secret columns', () => {
+  for (const c of ['request_secret', 'request_secret_current', 'request_secret_previous', 'worker_secret', 'secret', 'api_token', 'password_hash'])
+    assert.ok(isSecretColumn(c), c);
+  for (const tb of ['sales_lead_settings', 'sales_mail_settings', 'cv_bulk_settings', 'sc19_trial_auto_settings', 'pseudonym_key'])
+    assert.ok(isSecretTable(tb), tb);
+  for (const c of ['id', 'candidate_id', 'application_id']) assert.ok(!isSecretColumn(c), c);
+});
 
 test('SC-010 A: consents (channels, hours, history) are stored and respected', async t => {
   const { db, h, seed } = await activeBoot(t, { fullChain: true });
