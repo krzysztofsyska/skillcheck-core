@@ -144,3 +144,5 @@
 20261127120000_sc003a_criterion_review_history.sql
 # R0 SC-009a: the preselection report CSV export writes an entry in a new append-only log report_audit.screening_report_exports (company, recruitment, actor, role, kind, shortlist size; no application or candidate id) through one security-definer function for authenticated members. Erasure signature unchanged, report_audit stays closed to API roles, nothing sent.
 20261127140000_sc009a_screening_report_export_audit.sql
+# R3 SC-016b: the paid ASSESSMENT CENTER package also gates a NEW pair of assessors assigned outside a session (public.ac_assign_pair, PT402 via private.ac_package_required); pairs on a session stage keep the session rules, reading and submitting sheets of existing pairs unchanged. Function only, existing grants kept, erasure signature unchanged, no order, grant, price or payment change, nothing sent, test data only.
+20261127160000_r3_ac_pair_package_gate.sql

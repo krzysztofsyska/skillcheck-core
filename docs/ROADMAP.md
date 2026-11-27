@@ -114,7 +114,7 @@ AC nie ma dostępu (konto z pakietem ma).
 | Asesorzy pokazani z nazwy (etykieta, potem e-mail konta z tej samej firmy) | ZROBIONE | PR #500, #513 |
 | Jawne braki dowodów w raporcie i CSV sesji | ZROBIONE | PR #508 |
 | Testy równoczesnej pracy asesorów | ZROBIONE | PR #512 |
-| Powiązanie z kontami firm, uprawnieniami i kupionym pakietem | W TOKU (konta i uprawnienia zrobione; sesję tworzy i otwiera tylko firma z opłaconym pakietem ASSESSMENT CENTER — pilnowane w bazie; zakup pakietu AC przez Stripe działa w trybie testowym; zostaje uruchomienie płatności na żywo w R7) | PR #503, #554, #563; issue #338, #274, #283 |
+| Powiązanie z kontami firm, uprawnieniami i kupionym pakietem | W TOKU (konta i uprawnienia zrobione; sesję tworzy i otwiera tylko firma z opłaconym pakietem ASSESSMENT CENTER — pilnowane w bazie; SC-016b: brama pakietu także przy przypisaniu pary asesorów poza sesją, PR #<PR>, migracja wymaga zgody właściciela na produkcji; zakup pakietu AC przez Stripe działa w trybie testowym; zostaje uruchomienie płatności na żywo w R7) | PR #503, #554, #563, #<PR>; issue #338, #274, #283, #636 |
 
 ### R4. Oferta na stronie (etap 2)
 
