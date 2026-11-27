@@ -13,6 +13,7 @@ import { activeBoot, users } from './helpers/competency-active-fixture.mjs';
 import { lifecycleHarness } from './helpers/erasure-lifecycle-fixture.mjs';
 import { seedSyntheticPolicy } from './helpers/sc19-migration-fixture.mjs';
 
+// Pinned to the chain before SC-003a: R24 (20261127120000) adds the criterion review history on top.
 const signature = '4dab3fae234c8233104d691381b62710570324bee0db8bd5df4be28f3d6702f7';
 const migration = new URL('../supabase/migrations/20261120150000_r6_voice_retention.sql', import.meta.url);
 const isolated = new URL('../db/isolated/sc010-r4-voice-retention.sql', import.meta.url);
@@ -25,7 +26,7 @@ const bodyOf = (source, name) => {
 };
 
 test('R6-1c part 8: voice request keys fail the purge scope closed and no-op updates keep the retention clock', async t => {
-  const { db, h, x } = await activeBoot(t, { fullChain: true });
+  const { db, h, x } = await activeBoot(t, { fullChain: true, throughMigration: '20261122110000_r7_invoice_attempt_window.sql' });
   const one = async (sql, args) => (await db.query(sql, args)).rows[0].v;
   const source = await readFile(isolated, 'utf8');
 
