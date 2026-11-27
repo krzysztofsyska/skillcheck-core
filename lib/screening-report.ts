@@ -18,13 +18,14 @@ export const ratingLabels: Record<ScreeningRating, string> = {
   insufficient_data: 'Brak wystarczających danych',
 };
 export const kindLabels = { task: 'Zadanie', kpi: 'KPI', competency: 'Kompetencja' };
-export type ReportErrorCode = 'invalid' | 'unauthenticated' | 'not_found' | 'changed' | 'too_large' | 'unavailable' | 'failed';
+export type ReportErrorCode = 'invalid' | 'unauthenticated' | 'not_found' | 'changed' | 'too_large' | 'unavailable' | 'audit_failed' | 'failed';
 const errors: Record<ReportErrorCode, [number, string]> = {
   invalid: [400, 'Nieprawidłowe parametry raportu.'], unauthenticated: [401, 'Zaloguj się, aby otworzyć raport.'],
   not_found: [404, 'Nie znaleziono rekrutacji lub nie masz do niej dostępu.'],
   changed: [409, 'Dane raportu zmieniły się lub są niespójne. Odśwież raport i spróbuj ponownie.'],
   too_large: [413, 'Raport przekracza limit 500 zgłoszeń lub dopuszczalny rozmiar danych.'],
   unavailable: [503, 'Raport będzie dostępny po uruchomieniu rankingu i shortlisty dla tej rekrutacji.'],
+  audit_failed: [503, 'Nie udało się zapisać wpisu o pobraniu raportu, więc plik nie został wydany. Spróbuj ponownie.'],
   failed: [500, 'Nie udało się przygotować raportu. Spróbuj ponownie.'],
 };
 export class ScreeningReportError extends Error {

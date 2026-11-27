@@ -15,7 +15,15 @@ test('SC-006 → SC-008 → SC-009: actual review, ranking and shortlist SQL fee
   const f = await h.completedApplication(await h.seed(users.owner,'joint-flow',5),['above','meets','below','insufficient_data','insufficient_data'],null);
   await h.asUser(users.owner);
   let signedIn = {id:users.owner};
-  const client = reportDatabaseClient(db,()=>signedIn);
+  // This suite stops at the historical SC-008 migration, before the SC-009a export log
+  // (20261127140000) exists. The log write is exercised on the full chain in
+  // tests/sc009-preselection-report-database.test.mjs; here it is a transparent stand-in
+  // that still refuses anonymous callers, so the export path is otherwise unchanged.
+  const withExportLog = inner => ({ ...inner, rpc(name,args) {
+    if (name!=='record_screening_report_export') return inner.rpc(name,args);
+    return Promise.resolve(signedIn ? {data:'00000000-0000-4000-8000-0000000009a0',error:null} : {data:null,error:{code:'42501'}});
+  } });
+  const client = withExportLog(reportDatabaseClient(db,()=>signedIn));
   const load = () => loadScreeningReport(client,f.companyId,f.recruitment.id,'5');
   const criteria = (await db.query('select * from public.screening_criterion_results where analysis_id=$1 order by criterion_order',[f.analysis_id])).rows;
   const originals = JSON.stringify(criteria);

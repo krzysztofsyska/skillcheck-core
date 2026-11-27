@@ -476,6 +476,15 @@ export type Database = {
         Args: { target_company: string; target_recruitment: string; target_session: string; export_kind: 'ac_session_csv' };
         Returns: string;
       };
+      /** R0 SC-009a (20261127140000_sc009a_screening_report_export_audit.sql). Security definer; caller
+       * must be a member of the company (owner, recruiter or viewer) and the recruitment must belong to
+       * it (42501 otherwise, same error for foreign or missing records; 22023 for a wrong kind or a
+       * shortlist size outside 5–10). Appends one row to `report_audit.screening_report_exports`
+       * (company, recruitment, actor, role, kind, size only) and returns its id. */
+      record_screening_report_export: {
+        Args: { target_company: string; target_recruitment: string; export_kind: 'screening_report_csv'; target_size: number };
+        Returns: string;
+      };
       /** R3-AC-NAMES (20261117213000_ac_assessor_display_names.sql). Security definer; caller must be
        * the company owner or a recruiter and the recruitment must belong to the company (42501
        * otherwise, same error for foreign or missing records). Returns the account e-mail as
