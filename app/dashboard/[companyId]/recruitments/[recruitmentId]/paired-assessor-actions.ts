@@ -1,7 +1,7 @@
 'use server';
 import { revalidatePath } from 'next/cache';
 import { loadBehaviorContext, type BehaviorRoute } from '../../../../../lib/behavior-context';
-import { parseAssessmentCenterSheetForm } from '../../../../../lib/assessment-center-pair';
+import { assessmentCenterPairAssignError, parseAssessmentCenterSheetForm } from '../../../../../lib/assessment-center-pair';
 import { assessmentCenterPreviewEnabled } from '../../../../../lib/assessment-center-preview';
 
 type Route = BehaviorRoute & { definitionId: string };
@@ -20,9 +20,7 @@ export async function assignAssessmentCenterPair(route: Route, _previous: Paired
     return { error: 'Wybierz dwie różne osoby z zespołu.' };
   }
   const result = await client.rpc('ac_assign_pair', { application: route.applicationId, revision: route.definitionId, first_id: first, second_id: second });
-  if (result.error) return { error: result.error.code === 'PT409'
-    ? 'Asesorzy zostali już przypisani. Odśwież stronę.'
-    : 'Nie przypisano asesorów. Sprawdź skład zespołu i stan rekrutacji.' };
+  if (result.error) return { error: assessmentCenterPairAssignError(result.error.code) };
   revalidatePath(path(route));
   return { saved: true };
 }

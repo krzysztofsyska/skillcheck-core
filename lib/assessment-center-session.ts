@@ -3,6 +3,8 @@ import { parseExerciseDefinition, type ExerciseDefinition } from './exercise-def
 
 /** ROADMAP R3: shown when the database refuses a session without the paid package (PT402). */
 export const AC_PACKAGE_MISSING_TEXT = 'Sesja Assessment Center jest dostępna dla firm z opłaconym pakietem ASSESSMENT CENTER. Twoja firma nie ma jeszcze tego pakietu.';
+/** SC-016c: pair assignment (ac_assign_pair) returns PT402 without the paid package. */
+export const AC_PAIR_PACKAGE_MISSING_TEXT = 'Przypisanie asesorów jest dostępne dla firm z opłaconym pakietem ASSESSMENT CENTER. Twoja firma nie ma jeszcze tego pakietu.';
 
 /**
  * SC-AC-SESSION (#276). Pure, fail-closed projection of `public.ac_session_read`.
