@@ -1,5 +1,13 @@
 import { evaluateAssessmentCenter } from './assessment-center-evaluation.ts';
 import { parseExerciseDefinition } from './exercise-definition.ts';
+import { AC_PAIR_PACKAGE_MISSING_TEXT } from './assessment-center-session.ts';
+
+/** SC-016c: user-facing text for an error returned by `ac_assign_pair`. */
+export function assessmentCenterPairAssignError(code: string | undefined): string {
+  if (code === 'PT402') return AC_PAIR_PACKAGE_MISSING_TEXT;
+  if (code === 'PT409') return 'Asesorzy zostali już przypisani. Odśwież stronę.';
+  return 'Nie przypisano asesorów. Sprawdź skład zespołu i stan rekrutacji.';
+}
 
 /** The RPC remains the authorization boundary. This parser binds its response to
  * the immutable revision already loaded for this application. */
