@@ -64,8 +64,8 @@ Uwagi do wpisu:
 Aby adres `kariera.twojafirma.pl` w ogóle otwierał SkillCheck, domena musi wskazywać na platformę
 hostingową (rekord CNAME albo A/AAAA). **Kod nie zawiera ani nie sprawdza żadnej takiej wartości**,
 więc ten dokument jej nie podaje, żeby jej nie zmyślać. Strona „Domeny” mówi tylko, że „tę część
-konfigurujemy razem z Tobą”. Adres docelowy podaje klientowi operator SkillCheck po dodaniu domeny
-w Vercel (patrz punkt 5). Kod weryfikuje wyłącznie rekord TXT z 2.1 oraz certyfikat TLS (punkt 3).
+konfigurujemy razem z Tobą”. Adres docelowy przekazuje klientowi operator SkillCheck, gdy domena
+zostanie dodana w Vercel (na produkcji robi to właściciel lub zatwierdzony pipeline, patrz punkt 5). Kod weryfikuje wyłącznie rekord TXT z 2.1 oraz certyfikat TLS (punkt 3).
 
 ### 2.3. Poczta
 
@@ -108,7 +108,7 @@ Własna domena działa tylko, gdy ostatnia udana weryfikacja DNS jest młodsza n
 na adres platformy, a po nieudanym sprawdzeniu domena wraca do „czeka na weryfikację” z nowym
 terminem na potwierdzenie. Klient odnawia przez kliknięcie „Sprawdź” (rekord TXT musi nadal
 istnieć). Wartości domyślne to ustawienia bazy (jeden wiersz `tenant_domains.settings`), nie stałe
-w kodzie; zmienia je operator.
+w kodzie; zmiana na produkcji to sprawa właściciela lub zatwierdzonego pipeline (punkt 5).
 
 Zadanie automatyczne, które samo ponawia DNS, jest napisane (`lib/tenant-domain-reverify.ts`), ale
 **nie jest uruchomione** (patrz punkt 5). Bez niego odnawia klient ręcznie.
@@ -124,7 +124,7 @@ Zadanie automatyczne, które samo ponawia DNS, jest napisane (`lib/tenant-domain
 - Jedna domena może być potwierdzona tylko dla jednej firmy. Jeśli ktoś inny już ją potwierdził,
   wynik to „potwierdzona przez inne konto” i trzeba skontaktować się z obsługą.
 - Subdomeny platformy (`<nazwa>.<baza>`) są **domyślnie wyłączone** (`subdomain_base` nie ma
-  wartości). Wymagają ustawienia przez operatora. Nie wymagają rekordu TXT od klienta.
+  wartości). Wymagają ustawienia w bazie (punkt 5). Nie wymagają rekordu TXT od klienta.
 
 ### 3.5. Zachowanie panelu pod domeną klienta
 
@@ -135,7 +135,8 @@ Zadanie automatyczne, które samo ponawia DNS, jest napisane (`lib/tenant-domain
 - Jeśli baza jest chwilowo niedostępna, domena klienta odpowiada błędem 503 (a nie zachowaniem
   platformy), żeby awaria nie zdejmowała ograniczeń tras.
 - Hosty samej platformy są rozpoznawane z konfiguracji (`NEXT_PUBLIC_SITE_URL`, zmienne `VERCEL_*`).
-  Każdy alias platformy musi tam być wpisany przed włączeniem white-label.
+  Każdy alias platformy musi tam być wpisany przed włączeniem white-label; na produkcji
+  zmienne ustawia właściciel (lub zatwierdzony pipeline).
 
 ## 4. Co ustawia właściciel firmy w panelu (marka)
 
@@ -167,7 +168,9 @@ generatora PDF z marką kod nie zawiera.
 
 ## 5. Co zostaje po stronie operatora i właściciela SkillCheck
 
-Tych kroków klient nie wykona sam i nie wykonuje ich agent:
+Tych kroków klient nie wykona sam i nie wykonuje ich agent. Zasada: na Vercel Preview i w bazie
+`skillcheck-preview` (dane testowe) działa operator; domeny, zmienne, sekrety i dane na produkcji
+zmienia wyłącznie właściciel albo zatwierdzony pipeline:
 
 | Krok | Kto | Uwagi |
 |---|---|---|
@@ -176,7 +179,7 @@ Tych kroków klient nie wykona sam i nie wykonuje ich agent:
 | Podanie klientowi adresu docelowego (CNAME/A) po dodaniu domeny | operator | adres podaje właściciel albo pipeline po dodaniu domeny na produkcji; operator przekazuje go klientowi |
 | Login bazy dla weryfikatora (`tenant_domain_verifier`) i adres `TENANT_DOMAIN_VERIFIER_DATABASE_URL` | Preview: operator (tylko `skillcheck-preview`, dane testowe). Produkcja: właściciel (lub zatwierdzony pipeline) | operator nie ustawia zmiennych ani sekretów na produkcji w Vercel. Bez tego przycisk „Sprawdź” odpowiada „Sprawdzanie domen nie jest dostępne w tym środowisku” (domyślnie bezpieczne wyłączenie) |
 | Opcjonalnie: automatyczne ponawianie DNS (rola `tenant_domain_reverifier`, `TENANT_DOMAIN_REVERIFY_DATABASE_URL`, `TENANT_DOMAIN_REVERIFY_ENABLED=true`, harmonogram, np. raz dziennie) | Preview: operator. Produkcja: właściciel (lub zatwierdzony pipeline) | nieuruchomione; sekrety i harmonogram na produkcji to decyzja właściciela |
-| Ustawienia domen (`subdomain_base`, `reverify_days`, `pending_days`, `max_domains_per_company`) | operator | wartości domyślne opisano w punkcie 3 |
+| Ustawienia domen (`subdomain_base`, `reverify_days`, `pending_days`, `max_domains_per_company`) | Preview: operator. Produkcja: właściciel (lub zatwierdzony pipeline) | wartości domyślne opisano w punkcie 3; zmiana danych na produkcji nie należy do operatora |
 | Wgranie migracji SC-020 na produkcję | właściciel (zatwierdzenie `production-approval`) | stan produkcji sprawdź w git (SHA wydania na `main`), w PR i w wyniku workflow `db-migrate-production` dla tego SHA; obecność pliku migracji w repozytorium nie dowodzi jej wykonania; ten dokument nie podaje stanu produkcji |
 | Dopuszczenie adresu domeny klienta w ustawieniach logowania Supabase (lista dozwolonych adresów zwrotnych) | właściciel/operator | do potwierdzenia: kod buduje adresy zwrotne logowania z hosta domeny klienta (`tenantOriginFromHeader`), a `lib/auth-url.ts` opisuje, że adresy spoza listy są podmieniane na adres główny. Dopóki nie sprawdzono tego na Preview, traktuj logowanie na domenie klienta jako niepotwierdzone |
 
@@ -201,11 +204,12 @@ Tych kroków klient nie wykona sam i nie wykonuje ich agent:
 
 ## 7. Lista kontrolna dla nowego klienta
 
-1. Właściciel podpisuje umowę i wycenę (poza repozytorium). Operator potwierdza w docelowym środowisku
+1. Właściciel podpisuje umowę i wycenę (poza repozytorium). Operator sprawdza w docelowym środowisku (tylko odczyt)
    stan flagi `WHITE_LABEL_ENABLED` oraz wykonanie migracji SC-020 (sprawdzenie według punktu 5).
 2. Właściciel firmy w SkillCheck ustawia markę (punkt 4) i publikuje ją.
 3. Właściciel firmy dodaje domenę na stronie „Domeny” i przekazuje IT rekord TXT (punkt 2.1).
-4. Operator dodaje domenę w Vercel i podaje IT adres docelowy CNAME/A (punkty 2.2 i 5).
+4. Domenę dodaje w Vercel właściciel SkillCheck (lub zatwierdzony pipeline); na Preview robi to
+   operator. Operator przekazuje IT adres docelowy CNAME/A podany po dodaniu domeny (punkty 2.2 i 5).
 5. IT wpisuje rekordy w DNS. Właściciel klika „Sprawdź” do skutku („Domena sprawdzona …”).
 6. Właściciel klika „Włącz”. Rekord TXT zostaje na stałe; co 30 dni „Sprawdź” (punkt 3.3).
 7. Sprawdzenie końcowe: logowanie na domenie klienta, wygląd panelu, wydruk raportu, historia zmian
